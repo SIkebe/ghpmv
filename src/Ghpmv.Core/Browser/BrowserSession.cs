@@ -58,7 +58,12 @@ public sealed class BrowserSession : IAsyncDisposable
     /// Returns the single page of this session, launching Playwright/Chromium and creating
     /// the context (with the stored sign-in state, when the state file exists) on first call.
     /// </summary>
-    public async Task<IPage> GetPageAsync(CancellationToken cancellationToken = default)
+    public Task<IPage> GetPageAsync(CancellationToken cancellationToken = default)
+        => GetPageAsync(_options.LoadStoredState, cancellationToken);
+
+    private async Task<IPage> GetPageAsync(
+        bool loadStoredState,
+        CancellationToken cancellationToken)
     {
         if (_page is not null)
         {
@@ -90,7 +95,7 @@ public sealed class BrowserSession : IAsyncDisposable
         var statePath = StatePath;
         _context = await _browser.NewContextAsync(new()
         {
-            StorageStatePath = ResolveStorageStatePath(_options.LoadStoredState, statePath),
+            StorageStatePath = ResolveStorageStatePath(loadStoredState, statePath),
             // A narrow viewport collapses the column menus (BROWSER_AUTOMATION_PLAN §1.4).
             ViewportSize = new() { Width = 1600, Height = 1000 },
         }).ConfigureAwait(false);
@@ -179,18 +184,29 @@ public sealed class BrowserSession : IAsyncDisposable
     /// Interactive sign-in (headful): navigates to <c>{base}/login</c>, waits for the user
     /// to complete the sign-in manually (2FA/SSO/passkey included) until the logged-in
     /// avatar button / <c>user-login</c> meta appears, then saves the storage state.
-    /// When <paramref name="expectedLogin"/> is set, a different account fails before the
-    /// storage state is saved. Returns the signed-in login name.
+    /// The login context never loads stored state. Returns the signed-in login name.
     /// </summary>
     public Task<string> LoginAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
         => LoginAsync(timeout, expectedLogin: null, cancellationToken);
 
+    /// <summary>
+    /// Interactive sign-in in a context that never loads stored state. When
+    /// <paramref name="expectedLogin"/> is set, a different account fails before the
+    /// storage state is saved. Returns the signed-in login name.
+    /// </summary>
     public async Task<string> LoginAsync(
         TimeSpan timeout,
         string? expectedLogin,
         CancellationToken cancellationToken = default)
     {
-        var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
+        if (_context is not null)
+        {
+            await _context.CloseAsync().ConfigureAwait(false);
+            _context = null;
+            _page = null;
+        }
+
+        var page = await GetPageAsync(loadStoredState: false, cancellationToken).ConfigureAwait(false);
         await page.GotoAsync(BaseUrl + "/login").ConfigureAwait(false);
 
         var deadline = DateTimeOffset.UtcNow + timeout;
