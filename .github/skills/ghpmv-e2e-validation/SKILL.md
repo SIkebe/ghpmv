@@ -39,6 +39,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 | source / target token environment variable | `SOURCE_TOKEN`, `TARGET_TOKEN` |
 | target user login | EMU suffixを含む実 login |
 | repository preparation mode | `GEI` または `fixture-seed` |
+| GEI source / destination role status | `owner`, `migrator-active`, `migrator-pending` |
 | validation mode | `build-only`, `read-only`, `api-only`, `browser-e2e` |
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
@@ -64,6 +65,14 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 `api-only` または `browser-e2e` では、既存 source Project を使うか fixture を作るかを一問で確認し、`fixture preparation` として記録する。`existing` の場合は Step 5 を実行せず、fixture 作成用権限を要求しない。
 
 同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
+
+`GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
+
+1. Organization owner
+2. Migrator（適用済み）
+3. Migrator にする予定（まだ適用していない）
+
+3 を選んだ場合は 2 として扱わない。必要なロール設定を済ませるよう案内し、適用済みと確認できるまで GEI token の入力、migration command、Step 7 へ進まない。適用後に改めて role status を確認し、`migrator-active` へ更新する。
 
 browser automation を選んだ場合は、source / target が同じアカウント・同じ host か、別アカウントか、GHEC data residency かを一問ずつ確認する。別アカウントなら `source` / `target` profile と token を分ける。
 
@@ -162,6 +171,8 @@ GitHub は Projects GraphQL mutation ごとの fine-grained PAT permission を�
 ### GEI 専用 token
 
 `repository preparation mode` が `GEI` の場合、GEI は fine-grained PAT を使用できないため、`SOURCE_TOKEN` / `TARGET_TOKEN` とは別に classic PAT を用意することを推奨する。
+
+source / destination の role status が `migrator-pending` の間は、次の scope を説明してもよいが PAT の入力は求めない。Migrator ロールが適用されたことを確認して `migrator-active` に更新してから進める。
 
 | GEI token | token owner の role | 必要な classic PAT scope |
 |---|---|---|
