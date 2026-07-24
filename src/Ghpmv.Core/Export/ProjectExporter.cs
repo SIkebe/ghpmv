@@ -29,10 +29,11 @@ public sealed class ProjectExporter
     public ProjectOwnerType OwnerType { get; init; } = ProjectOwnerType.Organization;
 
     /// <summary>
-    /// Optional field names to query individually when the preview API cannot enumerate
-    /// a project containing linked Issue Fields.
+    /// Optional authoritative field provider used instead of the public Projects field
+    /// connection. Browser-assisted export supplies the complete UI field catalog here.
+    /// The argument is the first Project view number.
     /// </summary>
-    public IReadOnlyCollection<string> FieldNameHints { get; set; } = [];
+    public Func<int, CancellationToken, Task<ProjectFieldCatalog>>? CompleteFieldCatalogProviderAsync { get; set; }
 
     /// <summary>Invoked with a human-readable progress message at each export stage.</summary>
     public Action<string>? OnProgress { get; set; }
@@ -64,18 +65,73 @@ public sealed class ProjectExporter
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
         OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows. Fetching items...");
 
+        ProjectFieldCatalog? completeFieldCatalog = null;
+        if (CompleteFieldCatalogProviderAsync is not null)
+        {
+            var firstView = views.OrderBy(view => view.Number).FirstOrDefault()
+                ?? throw new InvalidOperationException(
+                    "The complete browser field catalog requires at least one Project view.");
+            completeFieldCatalog = await CompleteFieldCatalogProviderAsync(
+                firstView.Number,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         var issueFieldNames = new HashSet<string>(StringComparer.Ordinal);
-        var observedFieldNames = new List<string>();
-        var observedFieldNameSet = new HashSet<string>(StringComparer.Ordinal);
-        CollectViewFieldNames(views, observedFieldNames, observedFieldNameSet);
-        AddObservedFieldNames(observedFieldNames, observedFieldNameSet, FieldNameHints);
         var items = await FetchItemsAsync(
             ownerLogin,
             projectNumber,
             issueFieldNames,
-            observedFieldNames,
-            observedFieldNameSet,
             cancellationToken).ConfigureAwait(false);
+        List<FieldSnapshot> fields;
+        if (completeFieldCatalog is not null)
+        {
+            fields = await BuildCompleteFieldsAsync(
+                ownerLogin,
+                completeFieldCatalog,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            fields = await FetchApiFieldsAsync(
+                ownerLogin,
+                projectNumber,
+                issueFieldNames,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        OnProgress?.Invoke(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Fetched {fields.Count} fields and {items.Count} items."));
+
+        var snapshot = new ProjectSnapshot
+        {
+            SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+            Project = projectInfo,
+            Fields = fields,
+            Views = views,
+            Workflows = workflows,
+            Items = items,
+            // Collaborators stay null in the API-only path: the GraphQL API has no
+            // read field for project collaborators. The browser post-export hook can
+            // populate explicit collaborators from Settings → Manage access.
+            Collaborators = null,
+            LinkedRepositories = linkedRepositories,
+        };
+
+        if (PostExportAsync is not null)
+        {
+            snapshot = await PostExportAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        }
+
+        return snapshot;
+    }
+
+    private async Task<List<FieldSnapshot>> FetchApiFieldsAsync(
+        string ownerLogin,
+        int projectNumber,
+        HashSet<string> issueFieldNames,
+        CancellationToken cancellationToken)
+    {
         List<IssueFieldDefinition> issueFields = [];
         HashSet<string> multiSelectIssueFieldNames = [];
         List<IssueFieldDefinition>? organizationIssueFields = null;
@@ -86,23 +142,16 @@ public sealed class ProjectExporter
         }
         catch (GitHubGraphQLException exception) when (IsPreviewFieldResolutionError(exception))
         {
-            if (OwnerType == ProjectOwnerType.Organization)
+            throw new GitHubGraphQLException(
+                "GitHub's Projects API could not enumerate this project's fields. " +
+                "No snapshot was written because field completeness cannot be guaranteed. " +
+                "Re-run with --enable-browser-automation to read the complete field catalog from the Projects UI.",
+                exception)
             {
-                organizationIssueFields = await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-                multiSelectIssueFieldNames = organizationIssueFields
-                    .Where(field => field.DataType == "MULTI_SELECT")
-                    .Select(field => field.Name)
-                    .ToHashSet(StringComparer.Ordinal);
-            }
-
-            OnProgress?.Invoke("The preview API cannot enumerate this project's fields; fetching observed fields by name.");
-            fieldNodes = await FetchObservedFieldNodesAsync(
-                ownerLogin,
-                projectNumber,
-                observedFieldNames,
-                multiSelectIssueFieldNames,
-                issueFieldNames,
-                cancellationToken).ConfigureAwait(false);
+                ErrorsJson = exception.ErrorsJson,
+                ErrorType = exception.ErrorType,
+                StatusCode = exception.StatusCode,
+            };
         }
 
         if (OwnerType == ProjectOwnerType.Organization
@@ -166,32 +215,7 @@ public sealed class ProjectExporter
                 .ToList();
         }
 
-        var fields = ParseFields(fieldNodes, issueFields, fieldDataTypes);
-        OnProgress?.Invoke(string.Create(
-            CultureInfo.InvariantCulture,
-            $"Fetched {fields.Count} fields and {items.Count} items."));
-
-        var snapshot = new ProjectSnapshot
-        {
-            SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = projectInfo,
-            Fields = fields,
-            Views = views,
-            Workflows = workflows,
-            Items = items,
-            // Collaborators stay null in the API-only path: the GraphQL API has no
-            // read field for project collaborators. The browser post-export hook can
-            // populate explicit collaborators from Settings → Manage access.
-            Collaborators = null,
-            LinkedRepositories = linkedRepositories,
-        };
-
-        if (PostExportAsync is not null)
-        {
-            snapshot = await PostExportAsync(snapshot, cancellationToken).ConfigureAwait(false);
-        }
-
-        return snapshot;
+        return ParseFields(fieldNodes, issueFields, fieldDataTypes);
     }
 
     /// <summary>Lists the owner's projects (number, title, closed state) for bulk export.</summary>
@@ -230,44 +254,75 @@ public sealed class ProjectExporter
             "Something went wrong while executing your query",
             StringComparison.OrdinalIgnoreCase) == true;
 
-    private static bool IsMissingProjectFieldError(GitHubGraphQLException exception) =>
-        exception.ErrorsJson?.Contains("\"type\":\"NOT_FOUND\"", StringComparison.Ordinal) == true
-        && exception.ErrorsJson.Contains("ProjectV2FieldConfiguration", StringComparison.Ordinal);
-
-    private static void CollectViewFieldNames(
-        IEnumerable<ViewSnapshot> views,
-        List<string> fieldNames,
-        HashSet<string> fieldNameSet)
+    private async Task<List<FieldSnapshot>> BuildCompleteFieldsAsync(
+        string ownerLogin,
+        ProjectFieldCatalog catalog,
+        CancellationToken cancellationToken)
     {
-        foreach (var view in views)
+        ArgumentNullException.ThrowIfNull(catalog);
+        var duplicateField = catalog.Fields
+            .GroupBy(field => field.Name, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Skip(1).Any());
+        if (duplicateField is not null)
         {
-            AddObservedFieldNames(fieldNames, fieldNameSet, view.VisibleFields ?? []);
-            AddObservedFieldNames(fieldNames, fieldNameSet, view.GroupByFields ?? []);
-            AddObservedFieldNames(fieldNames, fieldNameSet, view.VerticalGroupByFields ?? []);
-            AddObservedFieldNames(fieldNames, fieldNameSet, (view.SortByFields ?? []).Select(sort => sort.Field));
+            throw new GitHubGraphQLException(
+                $"The complete field catalog contained duplicate field name '{duplicateField.Key}'.");
         }
-    }
 
-    private static void AddObservedFieldNames(
-        List<string> fieldNames,
-        HashSet<string> fieldNameSet,
-        IEnumerable<string> candidates)
-    {
-        foreach (var candidate in candidates)
+        var catalogNames = catalog.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
+        var unknownIssueField = catalog.IssueFieldNames.FirstOrDefault(name => !catalogNames.Contains(name));
+        if (unknownIssueField is not null)
         {
-            if (fieldNameSet.Add(candidate))
+            throw new GitHubGraphQLException(
+                $"The complete field catalog marked unknown field '{unknownIssueField}' as an Issue Field.");
+        }
+
+        if (catalog.IssueFieldNames.Count == 0)
+        {
+            return [.. catalog.Fields];
+        }
+
+        if (OwnerType != ProjectOwnerType.Organization)
+        {
+            throw new GitHubGraphQLException(
+                "A user-owned Project field catalog unexpectedly contained organization Issue Fields.");
+        }
+
+        var issueFields = (await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false))
+            .Where(field => catalog.IssueFieldNames.Contains(field.Name))
+            .ToList();
+        var duplicateIssueField = issueFields
+            .GroupBy(field => field.Name, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Skip(1).Any());
+        if (duplicateIssueField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Organization Issue Field name '{duplicateIssueField.Key}' is ambiguous. Rename or remove duplicate Issue Fields before exporting.");
+        }
+
+        var issueFieldsByName = issueFields.ToDictionary(field => field.Name, StringComparer.Ordinal);
+        foreach (var issueFieldName in catalog.IssueFieldNames)
+        {
+            if (!issueFieldsByName.ContainsKey(issueFieldName))
             {
-                fieldNames.Add(candidate);
+                throw new GitHubGraphQLException(
+                    $"The Projects UI identified linked Issue Field '{issueFieldName}', but it was not present in the organization Issue Field catalog.");
             }
         }
+
+        return
+        [
+            .. catalog.Fields.Select(field =>
+                issueFieldsByName.TryGetValue(field.Name, out var issueField)
+                    ? BuildIssueFieldSnapshot(issueField)
+                    : field),
+        ];
     }
 
     private async Task<List<ItemSnapshot>> FetchItemsAsync(
         string ownerLogin,
         int projectNumber,
         HashSet<string> issueFieldNames,
-        List<string> observedFieldNames,
-        HashSet<string> observedFieldNameSet,
         CancellationToken cancellationToken)
     {
         var items = new List<ItemSnapshot>();
@@ -280,9 +335,7 @@ public sealed class ProjectExporter
             items.Add(ParseItem(
                 node,
                 position: items.Count,
-                issueFieldNames,
-                observedFieldNames,
-                observedFieldNameSet));
+                issueFieldNames));
         }
 
         return items;
@@ -313,45 +366,6 @@ public sealed class ProjectExporter
             new { login = ownerLogin, number = projectNumber },
             cancellationToken).ConfigureAwait(false);
         return [.. data.GetProperty(OwnerField).GetProperty("projectV2").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
-    }
-
-    private async Task<List<JsonElement>> FetchObservedFieldNodesAsync(
-        string ownerLogin,
-        int projectNumber,
-        IEnumerable<string> fieldNames,
-        HashSet<string> multiSelectIssueFieldNames,
-        HashSet<string> linkedIssueFieldNames,
-        CancellationToken cancellationToken)
-    {
-        var nodes = new List<JsonElement>();
-        foreach (var fieldName in fieldNames)
-        {
-            try
-            {
-                var data = await _client.QueryAsync(
-                    FieldByNameQuery,
-                    new { login = ownerLogin, number = projectNumber, name = fieldName },
-                    cancellationToken).ConfigureAwait(false);
-                var field = data.GetProperty(OwnerField).GetProperty("projectV2").GetProperty("field");
-                if (field.ValueKind == JsonValueKind.Object)
-                {
-                    nodes.Add(field);
-                }
-            }
-            catch (GitHubGraphQLException exception) when (
-                multiSelectIssueFieldNames.Contains(fieldName)
-                && IsPreviewFieldResolutionError(exception))
-            {
-                // The organization Issue Field catalog supplies this linked field's definition.
-                linkedIssueFieldNames.Add(fieldName);
-            }
-            catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))
-            {
-                // A verification hint can name a field that was deleted from the target.
-            }
-        }
-
-        return nodes;
     }
 
     private async Task<Dictionary<string, string>> FetchFieldDataTypesAsync(
@@ -671,9 +685,7 @@ public sealed class ProjectExporter
     private static ItemSnapshot ParseItem(
         JsonElement node,
         int position,
-        HashSet<string> issueFieldNames,
-        List<string> observedFieldNames,
-        HashSet<string> observedFieldNameSet)
+        HashSet<string> issueFieldNames)
     {
         var type = node.GetProperty("type").GetString() ?? string.Empty;
         var content = node.GetProperty("content");
@@ -714,9 +726,7 @@ public sealed class ProjectExporter
             Draft = draft,
             FieldValues = ParseFieldValues(
                 node.GetProperty("fieldValues"),
-                issueFieldNames,
-                observedFieldNames,
-                observedFieldNameSet),
+                issueFieldNames),
         };
     }
 
@@ -741,9 +751,7 @@ public sealed class ProjectExporter
 
     private static List<FieldValueSnapshot> ParseFieldValues(
         JsonElement connection,
-        HashSet<string> issueFieldNames,
-        List<string> observedFieldNames,
-        HashSet<string> observedFieldNameSet)
+        HashSet<string> issueFieldNames)
     {
         var values = new List<FieldValueSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
@@ -760,10 +768,6 @@ public sealed class ProjectExporter
             }
 
             var fieldName = node.GetProperty("field").GetProperty("name").GetString() ?? string.Empty;
-            if (observedFieldNameSet.Add(fieldName))
-            {
-                observedFieldNames.Add(fieldName);
-            }
             if (typeName == "ProjectV2ItemIssueFieldValue")
             {
                 issueFieldNames.Add(fieldName);
@@ -873,8 +877,6 @@ public sealed class ProjectExporter
 
     private string FieldsQuery => FieldsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
-    private string FieldByNameQuery => FieldByNameQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
-
     private string ListProjectsQuery => ListProjectsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
     private const string ListProjectsQueryTemplate =
@@ -941,31 +943,6 @@ public sealed class ProjectExporter
                       iterations { id title startDate duration }
                       completedIterations { id title startDate duration }
                     }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """;
-
-    private const string FieldByNameQueryTemplate =
-        """
-        query($login: String!, $number: Int!, $name: String!) {
-          __OWNER__(login: $login) {
-            projectV2(number: $number) {
-              field(name: $name) {
-                __typename
-                ... on ProjectV2FieldCommon { id name }
-                ... on ProjectV2SingleSelectField {
-                  options { id name color description }
-                }
-                ... on ProjectV2IterationField {
-                  configuration {
-                    duration
-                    startDay
-                    iterations { id title startDate duration }
-                    completedIterations { id title startDate duration }
                   }
                 }
               }

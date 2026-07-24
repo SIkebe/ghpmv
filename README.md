@@ -199,6 +199,11 @@ ghpmv import --org target-org --in ./snapshot --enable-browser-automation
 ghpmv verify --org target-org --project 12 --in ./snapshot --enable-browser-automation
 ```
 
+Browser-assisted export and verify also read the complete server-rendered Project field
+catalog. This avoids a current GitHub GraphQL failure on Projects containing linked
+multi-select Issue Fields and retains hidden or unset fields. If the public field connection
+fails in API-only mode, `ghpmv` exits without writing or comparing a partial snapshot.
+
 ### Cross-account migration (e.g. non-EMU source → EMU target)
 
 Use named browser profiles when the source and target require different accounts:

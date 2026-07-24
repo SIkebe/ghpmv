@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Tests;
 
@@ -263,7 +264,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_falls_back_to_observed_field_names_when_preview_connection_fails()
+    public async Task Export_fails_instead_of_writing_an_incomplete_snapshot_when_field_enumeration_fails()
     {
         using var handler = new StubHandler(
             """
@@ -274,11 +275,7 @@ public class ProjectExporterTests
             """,
             """
             {"data":{"organization":{"projectV2":{"items":{
-              "nodes":[{"type":"ISSUE","isArchived":false,
-                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
-                "fieldValues":{"nodes":[
-                  {"__typename":"ProjectV2ItemFieldTextValue","text":"Ready","field":{"name":"Notes"}}
-                ]}}],
+              "nodes":[],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
             """,
@@ -301,54 +298,6 @@ public class ProjectExporterTests
             {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
               {"message":"Something went wrong while executing your query on the preview API."}
             ]}
-            """,
-            """
-            {"data":{"organization":{"issueFields":{"nodes":[
-              {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
-               "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
-               "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]}
-            ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":{
-              "__typename":"ProjectV2Field","id":"PVTF_unobserved","name":"Unobserved"
-            }}}}}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Missing"}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":{
-              "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
-            }}}}}
-            """,
-            """
-            {"data":{"nodes":[
-              {"id":"PVTF_unobserved","dataType":"NUMBER"},
-              {"id":"PVTF_notes","dataType":"TEXT"}
-            ]}}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -356,24 +305,83 @@ public class ProjectExporterTests
             handler,
             delayAsync: static (_, _) => Task.CompletedTask);
 
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client).ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("No snapshot was written", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("--enable-browser-automation", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(6, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Export_uses_the_complete_catalog_without_querying_the_project_field_connection()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"issueFields":{"nodes":[
+              {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+               "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+               "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]}
+            ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        int? requestedView = null;
+        var catalog = new ProjectFieldCatalog
+        {
+            Fields =
+            [
+                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
+                new FieldSnapshot { Name = "Hidden", DataType = "TEXT" },
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = "MULTI_SELECT",
+                    Options = [],
+                },
+            ],
+            IssueFieldNames = new HashSet<string>(["Teams"], StringComparer.Ordinal),
+        };
+
         var snapshot = await new ProjectExporter(client)
         {
-            FieldNameHints = ["Unobserved", "Missing", "Teams"],
+            CompleteFieldCatalogProviderAsync = (viewNumber, _) =>
+            {
+                requestedView = viewNumber;
+                return Task.FromResult(catalog);
+            },
         }.ExportAsync(
             "source",
             1,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("NUMBER", snapshot.Fields.Single(field => field.Name == "Unobserved").DataType);
-        Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
-        Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
-        Assert.Equal(15, handler.RequestBodies.Count);
-        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Unobserved\"", StringComparison.Ordinal));
-        Assert.DoesNotContain(snapshot.Fields, field => field.Name == "Missing");
-        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
-        Assert.Equal(
-            4,
-            handler.RequestBodies.Count(body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal)));
+        Assert.Equal(3, requestedView);
+        Assert.Equal(["Title", "Hidden", "Teams"], snapshot.Fields.Select(field => field.Name));
+        var teams = snapshot.Fields.Single(field => field.Name == "Teams");
+        Assert.Equal("Teams involved", teams.IssueField!.Description);
+        Assert.Equal(["SDK"], teams.Options!.Select(option => option.Name));
+        Assert.Equal(3, handler.RequestBodies.Count);
     }
 
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler

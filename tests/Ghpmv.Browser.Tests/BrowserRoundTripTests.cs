@@ -47,7 +47,17 @@ public class BrowserRoundTripTests
         try
         {
             await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
-            var exporter = new ProjectExporter(client);
+            var sourceFieldExporter = new ProjectFieldUiExporter(session);
+            var exporter = new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                    sourceFieldExporter.ExportAsync(
+                        SourceOrg,
+                        ProjectOwnerType.Organization,
+                        FixtureProjectNumber,
+                        viewNumber,
+                        ct),
+            };
             var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
             var collaboratorExporter = new CollaboratorUiExporter(session);
 
@@ -80,8 +90,16 @@ public class BrowserRoundTripTests
                 var targetViewExporter = new ViewUiExporter(session);
                 var targetWorkflowExporter = new WorkflowUiExporter(session);
                 var targetCollaboratorExporter = new CollaboratorUiExporter(session);
+                var targetFieldExporter = new ProjectFieldUiExporter(session);
                 var verifier = new ProjectVerifier(client)
                 {
+                    CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                        targetFieldExporter.ExportAsync(
+                            TargetOrg,
+                            ProjectOwnerType.Organization,
+                            result.ProjectNumber,
+                            viewNumber,
+                            ct),
                     PostExportAsync = async (target, ct) =>
                     {
                         target = await targetViewExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
@@ -139,12 +157,24 @@ public class BrowserRoundTripTests
         await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
 
         // Export the fixture with UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(client);
+        var sourceFieldExporter = new ProjectFieldUiExporter(session);
+        var exporter = new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                sourceFieldExporter.ExportAsync(
+                    SourceOrg,
+                    ProjectOwnerType.Organization,
+                    FixtureProjectNumber,
+                    viewNumber,
+                    ct),
+        };
         var uiExporter = new ViewUiExporter(session);
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await uiExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(uiExporter.Warnings);
         Assert.All(source.Views, v => Assert.NotNull(v.Ui));
+        Assert.Contains(source.Fields, field => field.Name == "Labels" && field.DataType == "LABELS");
+        Assert.Contains(source.Fields, field => field.Name == "Fixture Teams" && field.IssueField is not null);
 
         // Explicit source expectations (fixture enrichment, 2026-07-06) — guards against
         // silently comparing null-to-null when the scrape misses a setting.
@@ -180,8 +210,16 @@ public class BrowserRoundTripTests
             // Verify re-exports the target through GraphQL and its browser post-export hook.
             ProjectSnapshot? reExported = null;
             var reExportUi = new ViewUiExporter(session);
+            var targetFieldExporter = new ProjectFieldUiExporter(session);
             var verifier = new ProjectVerifier(client)
             {
+                CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                    targetFieldExporter.ExportAsync(
+                        TargetOrg,
+                        ProjectOwnerType.Organization,
+                        result.ProjectNumber,
+                        viewNumber,
+                        ct),
                 PostExportAsync = async (target, ct) =>
                 {
                     reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
@@ -191,6 +229,7 @@ public class BrowserRoundTripTests
             var report = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Empty(reExportUi.Warnings);
             var target = Assert.IsType<ProjectSnapshot>(reExported);
+            Assert.DoesNotContain(report.Differences, difference => difference.Category == "Field");
             Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
 
             Assert.Equal(snapshot.Views.Count, target.Views.Count);

@@ -7,8 +7,9 @@ namespace Ghpmv.Integration.Tests;
 
 /// <summary>
 /// M3 integration tests: imports snapshots into the target org (gpm-target) via the real
-/// GraphQL API. The round-trip test exports the fixture project (gpm-source #3), imports it
-/// under a unique title, reads it back with <see cref="ProjectExporter"/> and compares fields.
+/// GraphQL API. The full import test exports the fixture project, imports it under a unique
+/// title, and validates target metadata plus the field/option/iteration IDs returned by GitHub.
+/// BrowserRoundTripTests independently read back and compare complete target field definitions.
 /// Every created project is deleted in a finally block.
 /// Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized for the test orgs).
 /// </summary>
@@ -44,7 +45,6 @@ public class ProjectImporterTests
         var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
-        exporter.FieldNameHints = snapshot.Fields.Select(field => field.Name).ToArray();
 
         var importer = new ProjectImporter(client)
         {
@@ -59,30 +59,19 @@ public class ProjectImporterTests
             Assert.True(result.ProjectNumber > 0);
             Assert.Contains(TargetOrg, result.Url, StringComparison.OrdinalIgnoreCase);
 
-            // Read back the imported project through the same exporter.
-            var imported = await exporter.ExportAsync(TargetOrg, result.ProjectNumber, cancellationToken);
+            var imported = await ReadProjectInfoAsync(client, TargetOrg, result.ProjectNumber, cancellationToken);
 
-            Assert.Equal(title, imported.Project.Title);
-            Assert.Equal(snapshot.Project.ShortDescription, imported.Project.ShortDescription);
-            Assert.Equal(snapshot.Project.Readme, imported.Project.Readme);
-            Assert.Equal(snapshot.Project.Public, imported.Project.Public);
-            Assert.Equal(snapshot.Project.Closed, imported.Project.Closed);
+            Assert.Equal(title, imported.Title);
+            Assert.Equal(snapshot.Project.ShortDescription, imported.ShortDescription);
+            Assert.Equal(snapshot.Project.Readme, imported.Readme);
+            Assert.Equal(snapshot.Project.Public, imported.Public);
+            Assert.Equal(snapshot.Project.Closed, imported.Closed);
 
             string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];
             foreach (var sourceField in snapshot.Fields.Where(f => creatable.Contains(f.DataType)))
             {
-                var importedField = Assert.Single(imported.Fields, f => f.Name == sourceField.Name);
-                Assert.Equal(sourceField.DataType, importedField.DataType);
-
                 if (sourceField.Options is { Count: > 0 })
                 {
-                    Assert.NotNull(importedField.Options);
-                    Assert.Equal(sourceField.Options.Select(o => o.Name), importedField.Options.Select(o => o.Name));
-                    Assert.Equal(sourceField.Options.Select(o => o.Color), importedField.Options.Select(o => o.Color));
-                    Assert.Equal(
-                        sourceField.Options.Select(o => o.Description ?? string.Empty),
-                        importedField.Options.Select(o => o.Description ?? string.Empty));
-
                     // Fresh option ids must have been issued and mapped.
                     Assert.True(result.OptionIds.ContainsKey(sourceField.Name));
                     Assert.Equal(
@@ -92,17 +81,11 @@ public class ProjectImporterTests
 
                 if (sourceField.IterationConfiguration is { } sourceConfig)
                 {
-                    Assert.NotNull(importedField.IterationConfiguration);
-                    Assert.Equal(sourceConfig.Duration, importedField.IterationConfiguration.Duration);
-
-                    // The API reclassifies iterations by date on read, so compare the unions.
                     static IEnumerable<(string Title, string StartDate, int Duration)> Union(IterationConfigurationSnapshot c)
                         => c.Iterations.Concat(c.CompletedIterations)
                             .Select(i => (i.Title, i.StartDate, i.Duration))
                             .OrderBy(i => i.StartDate, StringComparer.Ordinal)
                             .ThenBy(i => i.Title, StringComparer.Ordinal);
-
-                    Assert.Equal(Union(sourceConfig), Union(importedField.IterationConfiguration));
 
                     Assert.True(result.IterationIds.ContainsKey(sourceField.Name));
                     Assert.Equal(
@@ -328,6 +311,35 @@ public class ProjectImporterTests
         Workflows = [],
         Items = [],
     };
+
+    private static async Task<ProjectInfoSnapshot> ReadProjectInfoAsync(
+        GitHubGraphQLClient client,
+        string org,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var data = await client.QueryAsync(
+            """
+            query($org: String!, $number: Int!) {
+              organization(login: $org) {
+                projectV2(number: $number) {
+                  title shortDescription readme public closed
+                }
+              }
+            }
+            """,
+            new { org, number = projectNumber },
+            cancellationToken);
+        var project = data.GetProperty("organization").GetProperty("projectV2");
+        return new ProjectInfoSnapshot
+        {
+            Title = project.GetProperty("title").GetString() ?? string.Empty,
+            ShortDescription = project.GetProperty("shortDescription").GetString(),
+            Readme = project.GetProperty("readme").GetString(),
+            Public = project.GetProperty("public").GetBoolean(),
+            Closed = project.GetProperty("closed").GetBoolean(),
+        };
+    }
 
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
     {

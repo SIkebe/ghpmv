@@ -33,6 +33,9 @@ internal static class Sel
     /// <summary>The most recently opened menu.</summary>
     public static ILocator OpenMenu(IPage page) => page.GetByRole(AriaRole.Menu).Last;
 
+    /// <summary>Authoritative field catalog embedded in every Project view page.</summary>
+    public static ILocator ProjectFieldData(IPage page) => page.Locator("#memex-columns-data");
+
     /// <summary>Layout switch button (Table/Board/Roadmap) inside the View menu overlay.</summary>
     public static ILocator ViewLayoutButton(IPage page, string layoutName)
         => page.GetByRole(AriaRole.List, new() { Name = "Layout" })
