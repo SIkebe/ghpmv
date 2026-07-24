@@ -718,7 +718,10 @@ loginCommand.SetAction(async (parseResult, cancellationToken) =>
             : $"Sign in as '{expectedLogin}'";
         Console.Error.WriteLine(
             $"Opening a fresh browser session. {accountPrompt} (2FA/SSO/passkey included)...");
-        var login = await session.LoginAsync(TimeSpan.FromMinutes(5), expectedLogin, cancellationToken);
+        var timeout = TimeSpan.FromMinutes(5);
+        var login = string.IsNullOrWhiteSpace(expectedLogin)
+            ? await session.LoginAsync(timeout, cancellationToken)
+            : await session.LoginAsAsync(timeout, expectedLogin, cancellationToken);
         Console.Error.WriteLine($"Signed in as '{login}'. Browser state saved to {session.StatePath}");
         return 0;
     }
