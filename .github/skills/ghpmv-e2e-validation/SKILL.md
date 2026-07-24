@@ -17,7 +17,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
 2. **質問は一つずつ行う。** 選択肢を提示できる場合は対話用質問ツールを使う。
-3. **token 値を会話へ貼らせない。** PowerShell の `Read-Host -MaskInput` などでローカル環境変数へ設定させる。
+3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
 6. **既存変更を壊さない。** branch、working tree、snapshot directory、mapping CSV を勝手に reset、削除、上書きしない。
@@ -174,21 +174,26 @@ GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/
 `read-only`:
 
 ```powershell
-$env:SOURCE_TOKEN = Read-Host "Source PAT" -MaskInput
+$sourceSecureToken = Read-Host "Source PAT" -AsSecureString
+$env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password
 ```
 
 `api-only` と `browser-e2e`:
 
 ```powershell
-$env:SOURCE_TOKEN = Read-Host "Source PAT" -MaskInput
-$env:TARGET_TOKEN = Read-Host "Target PAT" -MaskInput
+$sourceSecureToken = Read-Host "Source PAT" -AsSecureString
+$env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password
+$targetSecureToken = Read-Host "Target PAT" -AsSecureString
+$env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password
 ```
 
 `GEI`:
 
 ```powershell
-$env:GEI_SOURCE_TOKEN = Read-Host "GEI source classic PAT" -MaskInput
-$env:GEI_TARGET_TOKEN = Read-Host "GEI target classic PAT" -MaskInput
+$geiSourceSecureToken = Read-Host "GEI source classic PAT" -AsSecureString
+$env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password
+$geiTargetSecureToken = Read-Host "GEI target classic PAT" -AsSecureString
+$env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password
 ```
 
 ### Fine-grained fixture token の preflight
