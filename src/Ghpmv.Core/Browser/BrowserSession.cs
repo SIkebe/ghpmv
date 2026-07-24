@@ -16,11 +16,25 @@ public sealed class BrowserSession : IAsyncDisposable
     private IBrowser? _browser;
     private IBrowserContext? _context;
     private IPage? _page;
+    private readonly Func<bool, CancellationToken, Task<BrowserLoginOperations>> _createLoginOperations;
+    private readonly Func<CancellationToken, Task> _saveLoginState;
 
     public BrowserSession(BrowserSessionOptions? options = null)
     {
         _options = options ?? new BrowserSessionOptions();
         BaseUrl = BrowserBaseUrl.NormalizeStandalone(_options.BaseUrl);
+        _createLoginOperations = CreateLoginOperationsAsync;
+        _saveLoginState = SaveStateAsync;
+    }
+
+    internal BrowserSession(
+        BrowserSessionOptions options,
+        Func<bool, CancellationToken, Task<BrowserLoginOperations>> createLoginOperations,
+        Func<CancellationToken, Task> saveLoginState)
+        : this(options)
+    {
+        _createLoginOperations = createLoginOperations;
+        _saveLoginState = saveLoginState;
     }
 
     /// <summary>Web UI base URL without a trailing slash.</summary>
@@ -58,7 +72,12 @@ public sealed class BrowserSession : IAsyncDisposable
     /// Returns the single page of this session, launching Playwright/Chromium and creating
     /// the context (with the stored sign-in state, when the state file exists) on first call.
     /// </summary>
-    public async Task<IPage> GetPageAsync(CancellationToken cancellationToken = default)
+    public Task<IPage> GetPageAsync(CancellationToken cancellationToken = default)
+        => GetPageAsync(_options.LoadStoredState, cancellationToken);
+
+    private async Task<IPage> GetPageAsync(
+        bool loadStoredState,
+        CancellationToken cancellationToken)
     {
         if (_page is not null)
         {
@@ -90,7 +109,7 @@ public sealed class BrowserSession : IAsyncDisposable
         var statePath = StatePath;
         _context = await _browser.NewContextAsync(new()
         {
-            StorageStatePath = File.Exists(statePath) ? statePath : null,
+            StorageStatePath = ResolveStorageStatePath(loadStoredState, statePath),
             // A narrow viewport collapses the column menus (BROWSER_AUTOMATION_PLAN §1.4).
             ViewportSize = new() { Width = 1600, Height = 1000 },
         }).ConfigureAwait(false);
@@ -179,12 +198,32 @@ public sealed class BrowserSession : IAsyncDisposable
     /// Interactive sign-in (headful): navigates to <c>{base}/login</c>, waits for the user
     /// to complete the sign-in manually (2FA/SSO/passkey included) until the logged-in
     /// avatar button / <c>user-login</c> meta appears, then saves the storage state.
-    /// Returns the signed-in login name.
+    /// The login context never loads stored state. Returns the signed-in login name.
     /// </summary>
-    public async Task<string> LoginAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    public Task<string> LoginAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+        => LoginCoreAsync(timeout, expectedLogin: null, cancellationToken);
+
+    /// <summary>
+    /// Interactive sign-in in a context that never loads stored state. When
+    /// <paramref name="expectedLogin"/> is set, a different account fails before the
+    /// storage state is saved. Returns the signed-in login name.
+    /// </summary>
+    public Task<string> LoginAsAsync(
+        TimeSpan timeout,
+        string expectedLogin,
+        CancellationToken cancellationToken = default)
     {
-        var page = await GetPageAsync(cancellationToken).ConfigureAwait(false);
-        await page.GotoAsync(BaseUrl + "/login").ConfigureAwait(false);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedLogin);
+        return LoginCoreAsync(timeout, expectedLogin, cancellationToken);
+    }
+
+    private async Task<string> LoginCoreAsync(
+        TimeSpan timeout,
+        string? expectedLogin,
+        CancellationToken cancellationToken)
+    {
+        var operations = await _createLoginOperations(false, cancellationToken).ConfigureAwait(false);
+        await operations.GotoAsync(BaseUrl + "/login").ConfigureAwait(false);
 
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (DateTimeOffset.UtcNow < deadline)
@@ -192,12 +231,22 @@ public sealed class BrowserSession : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var login = await page.EvaluateAsync<string?>(
-                    "() => document.querySelector('meta[name=\"user-login\"]')?.content || null").ConfigureAwait(false);
-                var avatarVisible = await Sel.AvatarButton(page).CountAsync().ConfigureAwait(false) > 0;
+                var login = await operations.GetLoginAsync().ConfigureAwait(false);
+                var avatarVisible = await operations.IsAvatarVisibleAsync().ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(login) || avatarVisible)
                 {
-                    await SaveStateAsync(cancellationToken).ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(expectedLogin))
+                    {
+                        if (string.IsNullOrWhiteSpace(login))
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+
+                        EnsureExpectedLogin(login, expectedLogin);
+                    }
+
+                    await _saveLoginState(cancellationToken).ConfigureAwait(false);
                     return string.IsNullOrEmpty(login) ? "(unknown)" : login;
                 }
             }
@@ -212,6 +261,42 @@ public sealed class BrowserSession : IAsyncDisposable
         throw new System.TimeoutException(string.Create(CultureInfo.InvariantCulture,
             $"Sign-in was not completed within {timeout.TotalMinutes:0} minutes."));
     }
+
+    private async Task<BrowserLoginOperations> CreateLoginOperationsAsync(
+        bool loadStoredState,
+        CancellationToken cancellationToken)
+    {
+        if (_context is not null)
+        {
+            await _context.CloseAsync().ConfigureAwait(false);
+            _context = null;
+            _page = null;
+        }
+
+        var page = await GetPageAsync(loadStoredState, cancellationToken).ConfigureAwait(false);
+        return new BrowserLoginOperations(
+            async url => await page.GotoAsync(url).ConfigureAwait(false),
+            () => page.EvaluateAsync<string?>(
+                "() => document.querySelector('meta[name=\"user-login\"]')?.content || null"),
+            async () => await Sel.AvatarButton(page).CountAsync().ConfigureAwait(false) > 0);
+    }
+
+    internal static string? ResolveStorageStatePath(bool loadStoredState, string statePath)
+        => loadStoredState && File.Exists(statePath) ? statePath : null;
+
+    internal static void EnsureExpectedLogin(string actualLogin, string expectedLogin)
+    {
+        if (!string.Equals(actualLogin, expectedLogin, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Signed in as '{actualLogin}', but expected '{expectedLogin}'. The browser state was not saved. Retry and sign in with the expected account.");
+        }
+    }
+
+    internal sealed record BrowserLoginOperations(
+        Func<string, Task> GotoAsync,
+        Func<Task<string?>> GetLoginAsync,
+        Func<Task<bool>> IsAvatarVisibleAsync);
 
     /// <summary>
     /// Fails fast when the current page was redirected to the login screen
