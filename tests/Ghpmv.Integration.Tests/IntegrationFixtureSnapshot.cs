@@ -49,9 +49,13 @@ internal static class IntegrationFixtureSnapshot
     public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        var fields = snapshot.Fields.Any(field =>
+            string.Equals(field.Name, "Title", StringComparison.Ordinal))
+                ? snapshot.Fields
+                : [new FieldSnapshot { Name = "Title", DataType = "TITLE" }, .. snapshot.Fields];
         return new ProjectFieldCatalog
         {
-            Fields = snapshot.Fields,
+            Fields = fields,
             IssueFieldNames = snapshot.Fields
                 .Where(field => field.IssueField is not null)
                 .Select(field => field.Name)

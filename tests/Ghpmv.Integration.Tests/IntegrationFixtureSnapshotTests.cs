@@ -54,6 +54,9 @@ public class IntegrationFixtureSnapshotTests
             Assert.False(title.IsIssueField);
             Assert.Equal(item.Draft!.Title, title.Text);
         });
+        Assert.Contains(
+            IntegrationFixtureSnapshot.CreateFieldCatalog(result).Fields,
+            field => field.Name == "Title" && field.DataType == "TITLE");
     }
 
     private static ItemSnapshot Draft(string title, int position) => new()

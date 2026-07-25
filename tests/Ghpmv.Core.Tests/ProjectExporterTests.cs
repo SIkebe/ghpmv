@@ -444,6 +444,96 @@ public class ProjectExporterTests
         Assert.Equal(2, handler.RequestBodies.Count);
     }
 
+    [Fact]
+    public async Task Export_rejects_item_fields_missing_from_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"DRAFT_ISSUE","isArchived":false,
+                "content":{"title":"Draft","body":null,"creator":null,"createdAt":null,"assignees":{"nodes":[]}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemFieldTextValue",
+                  "field":{"name":"Notes"},"text":"Observed"
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Fields = [new FieldSnapshot { Name = "Title", DataType = "TITLE" }],
+            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync("source", 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("Notes", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain it", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Export_rejects_view_fields_missing_from_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[{"name":"Priority"}]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Fields = [new FieldSnapshot { Name = "Title", DataType = "TITLE" }],
+            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync("source", 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("Priority", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain it", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);

@@ -82,6 +82,14 @@ public sealed class ProjectExporter
             projectNumber,
             issueFieldNames,
             cancellationToken).ConfigureAwait(false);
+        var referencedFieldNames = items
+            .SelectMany(item => item.FieldValues)
+            .Select(value => value.FieldName)
+            .Concat(views.SelectMany(view => view.GroupByFields))
+            .Concat(views.SelectMany(view => view.VerticalGroupByFields))
+            .Concat(views.SelectMany(view => view.SortByFields.Select(sort => sort.Field)))
+            .Concat(views.SelectMany(view => view.VisibleFields))
+            .ToHashSet(StringComparer.Ordinal);
         List<FieldSnapshot> fields;
         if (completeFieldCatalog is not null)
         {
@@ -89,6 +97,7 @@ public sealed class ProjectExporter
                 ownerLogin,
                 completeFieldCatalog,
                 issueFieldNames,
+                referencedFieldNames,
                 cancellationToken).ConfigureAwait(false);
         }
         else
@@ -259,6 +268,7 @@ public sealed class ProjectExporter
         string ownerLogin,
         ProjectFieldCatalog catalog,
         IReadOnlySet<string> observedIssueFieldNames,
+        IReadOnlySet<string> referencedFieldNames,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -277,6 +287,16 @@ public sealed class ProjectExporter
         {
             throw new GitHubGraphQLException(
                 $"The complete field catalog marked unknown field '{unknownIssueField}' as an Issue Field.");
+        }
+
+        var missingReferencedField = referencedFieldNames
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault(name => !catalogNames.Contains(name));
+        if (missingReferencedField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Project items or views reference field '{missingReferencedField}', " +
+                "but the complete field catalog did not contain it.");
         }
 
         var unlinkedObservedIssueField = observedIssueFieldNames
