@@ -26,10 +26,9 @@ public sealed class ProjectImporter
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
-    private HashSet<string> _snapshotFieldNames = [];
+    private HashSet<string> _snapshotNormalFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
     private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
-    private HashSet<string> _knownLinkedIssueFieldNames = [];
     private HashSet<string> _targetIssueFieldNames = [];
     private HashSet<string> _targetMultiSelectIssueFieldNames = [];
 
@@ -71,16 +70,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
-        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
-        _snapshotIssueFieldNames = snapshot.Fields
-            .Where(field => field.IssueField is not null)
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
-            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        _knownLinkedIssueFieldNames = [];
+        InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
@@ -188,16 +178,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
-        _snapshotFieldNames = snapshot.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
-        _snapshotIssueFieldNames = snapshot.Fields
-            .Where(field => field.IssueField is not null)
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
-            .Where(field => field.IssueField is not null && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
-            .Select(field => field.Name)
-            .ToHashSet(StringComparer.Ordinal);
-        _knownLinkedIssueFieldNames = [];
+        InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -222,6 +203,23 @@ public sealed class ProjectImporter
 
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+
+    private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)
+    {
+        _snapshotNormalFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectIssueFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is not null
+                && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+    }
 
     private void ValidatePendingItemProject(string? projectId)
     {
@@ -600,8 +598,6 @@ public sealed class ProjectImporter
                 projectId,
                 targetIssueField,
                 projectFields,
-                projectFieldsByName,
-                maps,
                 cancellationToken).ConfigureAwait(false);
         }
     }
@@ -675,11 +671,8 @@ public sealed class ProjectImporter
         string projectId,
         TargetIssueField issueField,
         List<TargetField> projectFields,
-        Dictionary<string, TargetField> projectFieldsByName,
-        FieldMaps maps,
         CancellationToken cancellationToken)
     {
-        TargetField linkedField;
         if (_operationLog?.PendingIssueFieldLinks.TryGetValue(issueField.Name, out var pendingLink) == true)
         {
             if (!string.Equals(pendingLink.ProjectId, projectId, StringComparison.Ordinal)
@@ -689,102 +682,86 @@ public sealed class ProjectImporter
                     $"Pending Issue Field link operation '{pendingLink.OperationId}' does not match field '{issueField.Name}'.");
             }
 
-            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
-            {
-                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
-                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            linkedField = await ReconcilePendingIssueFieldLinkAsync(
+            OnProgress?.Invoke($"Resuming organization Issue Field link '{issueField.Name}' with an idempotent mutation...");
+            await CreateProjectIssueFieldAsync(
                 projectId,
-                issueField.Name,
-                projectFields,
-                maps,
-                pendingLink,
+                issueField.Id,
+                pendingLink.OperationId,
+                MutationRetryPolicy.Idempotent,
                 cancellationToken).ConfigureAwait(false);
             _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            if (_knownLinkedIssueFieldNames.Contains(issueField.Name))
-            {
-                return;
-            }
-
-            var linkCandidates = projectFields.Where(field =>
-                string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
-                && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
-                && (string.Equals(field.DataType, issueField.DataType, StringComparison.Ordinal)
-                    || (string.Equals(issueField.DataType, "MULTI_SELECT", StringComparison.Ordinal)
-                        && string.IsNullOrEmpty(field.DataType)))).ToArray();
-            if (linkCandidates.Length > 1)
-            {
-                throw new InvalidOperationException(
-                    $"Multiple project fields can satisfy the organization Issue Field link '{issueField.Name}'. Reconcile the target manually.");
-            }
-
-            if (linkCandidates.Length == 1)
-            {
-                return;
-            }
-
-            OnProgress?.Invoke($"Linking organization Issue Field '{issueField.Name}' to the project...");
-            var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-            if (_operationLog is not null)
-            {
-                _operationLog.PendingIssueFieldLinks[issueField.Name] = new PendingIssueFieldLinkOperation
-                {
-                    OperationId = operationId,
-                    ProjectId = projectId,
-                    IssueFieldId = issueField.Id,
-                    Name = issueField.Name,
-                    ExistingFieldIds = [.. projectFields.Select(field => field.Id)],
-                };
-                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            try
-            {
-                await CreateProjectIssueFieldAsync(
-                    projectId,
-                    issueField.Id,
-                    operationId,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (AmbiguousMutationResultException)
-            {
-                throw;
-            }
-            catch
-            {
-                if (_operationLog is not null)
-                {
-                    _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
-                    await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-
-                throw;
-            }
-
-            if (_operationLog is not null)
-            {
-                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
-                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            }
-
             return;
         }
 
-        projectFields.Add(linkedField);
-        projectFieldsByName[linkedField.Name] = linkedField;
+        var linkCandidates = projectFields.Where(field =>
+            string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
+            && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
+            && (string.Equals(field.DataType, issueField.DataType, StringComparison.Ordinal)
+                || (string.Equals(issueField.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+                    && string.IsNullOrEmpty(field.DataType)))).ToArray();
+        if (linkCandidates.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Multiple project fields can satisfy the organization Issue Field link '{issueField.Name}'. Reconcile the target manually.");
+        }
+
+        if (linkCandidates.Length == 1)
+        {
+            return;
+        }
+
+        OnProgress?.Invoke($"Ensuring organization Issue Field '{issueField.Name}' is linked to the project...");
+        var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingIssueFieldLinks[issueField.Name] = new PendingIssueFieldLinkOperation
+            {
+                OperationId = operationId,
+                ProjectId = projectId,
+                IssueFieldId = issueField.Id,
+                Name = issueField.Name,
+                ExistingFieldIds = [.. projectFields.Select(field => field.Id)],
+            };
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            await CreateProjectIssueFieldAsync(
+                projectId,
+                issueField.Id,
+                operationId,
+                MutationRetryPolicy.Create,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (AmbiguousMutationResultException)
+        {
+            throw;
+        }
+        catch
+        {
+            if (_operationLog is not null)
+            {
+                _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task CreateProjectIssueFieldAsync(
         string projectId,
         string issueFieldId,
         string clientMutationId,
+        MutationRetryPolicy retryPolicy,
         CancellationToken cancellationToken)
         => await _client.MutationAsync(
             "createProjectV2IssueField",
@@ -796,6 +773,7 @@ public sealed class ProjectImporter
             }
             """,
             new { projectId, issueFieldId },
+            retryPolicy,
             target: projectId,
             clientMutationId: clientMutationId,
             requiredResultPath: "clientMutationId",
@@ -1135,20 +1113,29 @@ public sealed class ProjectImporter
         }
 
         List<JsonElement> nodes;
-        try
-        {
-            var safeData = await _client.QueryWithoutInternalErrorRetryAsync(
-                FieldsWithIssueFieldsQuery,
-                new { id = projectId },
-                cancellationToken).ConfigureAwait(false);
-            nodes = [.. safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
-        }
-        catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
+        if (_snapshotMultiSelectIssueFieldNames.Count > 0)
         {
             OnProgress?.Invoke(
-                "GitHub's preview API could not enumerate this project's fields because it contains linked Issue Fields. " +
-                "Querying the snapshot's fields individually before applying changes.");
+                "Reading normal project fields individually; linked multi-select Issue Fields are reconciled with an idempotent link mutation.");
             nodes = await FetchFieldNodesByNameAsync(projectId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            try
+            {
+                var safeData = await _client.QueryWithoutInternalErrorRetryAsync(
+                    FieldsWithIssueFieldsQuery,
+                    new { id = projectId },
+                    cancellationToken).ConfigureAwait(false);
+                nodes = [.. safeData.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
+            }
+            catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
+            {
+                OnProgress?.Invoke(
+                    "GitHub's preview API could not enumerate this project's linked Issue Fields. " +
+                    "Querying normal project fields individually instead.");
+                nodes = await FetchFieldNodesByNameAsync(projectId, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         Dictionary<string, JsonElement> details = [];
@@ -1237,7 +1224,7 @@ public sealed class ProjectImporter
         CancellationToken cancellationToken)
     {
         var nodes = new List<JsonElement>();
-        foreach (var name in _snapshotFieldNames)
+        foreach (var name in _snapshotNormalFieldNames)
         {
             JsonElement data;
             try
@@ -1246,19 +1233,6 @@ public sealed class ProjectImporter
                     FieldByNameQuery,
                     new { id = projectId, name },
                     cancellationToken).ConfigureAwait(false);
-            }
-            catch (GitHubGraphQLException exception) when (
-                _snapshotMultiSelectIssueFieldNames.Contains(name)
-                && IsPreviewFieldInternalError(exception))
-            {
-                if (_knownLinkedIssueFieldNames.Add(name))
-                {
-                    OnProgress?.Invoke(
-                        $"GitHub's preview API consistently could not inspect linked multi-select Issue Field '{name}'. " +
-                        "Continuing import reconciliation with the organization Issue Field metadata.");
-                }
-
-                continue;
             }
             catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))
             {
@@ -1396,43 +1370,6 @@ public sealed class ProjectImporter
 
         throw new InvalidOperationException(
             $"Pending Issue Field operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target organization is reconciled manually.");
-    }
-
-    private async Task<TargetField> ReconcilePendingIssueFieldLinkAsync(
-        string projectId,
-        string fieldName,
-        IReadOnlyList<TargetField> initialFields,
-        FieldMaps maps,
-        PendingIssueFieldLinkOperation pending,
-        CancellationToken cancellationToken)
-    {
-        IReadOnlyList<TargetField> fields = initialFields;
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var baseline = new HashSet<string>(pending.ExistingFieldIds, StringComparer.Ordinal);
-            var candidates = fields.Where(candidate =>
-                string.Equals(candidate.Name, fieldName, StringComparison.Ordinal)
-                && !baseline.Contains(candidate.Id)).ToArray();
-            if (candidates.Length == 1)
-            {
-                return candidates[0];
-            }
-
-            if (candidates.Length > 1)
-            {
-                throw new InvalidOperationException(
-                    $"Pending Issue Field link operation '{pending.OperationId}' matches multiple new project fields. Reconcile the target project manually.");
-            }
-
-            if (attempt < 2)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
-                fields = await FetchFieldListAsync(projectId, maps, cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Pending Issue Field link operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target project is reconciled manually.");
     }
 
     private async Task<TargetField> ReconcilePendingFieldAsync(

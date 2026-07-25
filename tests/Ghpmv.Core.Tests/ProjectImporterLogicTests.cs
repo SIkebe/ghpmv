@@ -166,7 +166,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_reuses_existing_multi_select_issue_field_link()
+    public async Task Import_idempotently_ensures_existing_multi_select_issue_field_link_without_broken_reads()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -177,6 +177,8 @@ public class ProjectImporterLogicTests
                 new Uri("https://example.test/graphql"),
                 handler,
                 delayAsync: null);
+            var retries = new List<string>();
+            client.OnRetry = retries.Add;
             var snapshot = MinimalSnapshot("Roadmap") with
             {
                 Fields =
@@ -214,22 +216,23 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
-            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
-            var fieldsQuery = Assert.Single(
+            Assert.Single(
                 handler.RequestBodies,
-                body => body.Contains("fields(first:", StringComparison.Ordinal));
-            Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
-            Assert.DoesNotContain("options", fieldsQuery, StringComparison.Ordinal);
-            Assert.Contains("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
+                body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("fields(first:", StringComparison.Ordinal)
+                    || body.Contains("field(name:", StringComparison.Ordinal));
+            Assert.Empty(retries);
             Assert.Contains(
                 progress,
                 message => message.Contains(
-                    "Querying the snapshot's fields individually before applying changes",
+                    "linked multi-select Issue Fields are reconciled with an idempotent link mutation",
                     StringComparison.Ordinal));
             Assert.Contains(
                 progress,
                 message => message.Contains(
-                    "Continuing import reconciliation with the organization Issue Field metadata",
+                    "Ensuring organization Issue Field 'Teams' is linked",
                     StringComparison.Ordinal));
         }
         finally
@@ -294,7 +297,7 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Equal(2, handler.NormalDataTypeQueryCount);
-            Assert.DoesNotContain(
+            Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
@@ -362,7 +365,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_retries_transient_field_lookup_before_linking_issue_field()
+    public async Task Import_does_not_probe_linked_multi_select_issue_field_by_name()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -402,7 +405,8 @@ public class ProjectImporterLogicTests
                 7,
                 TestContext.Current.CancellationToken);
 
-            Assert.Equal(2, handler.FieldByNameQueryCount);
+            Assert.Equal(0, handler.FieldByNameQueryCount);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("field(name:", StringComparison.Ordinal));
             Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
@@ -455,7 +459,7 @@ public class ProjectImporterLogicTests
 
             Assert.Equal("PVTF_notes", result.FieldIds["Notes"]);
             Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
-            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
         {
@@ -600,7 +604,11 @@ public class ProjectImporterLogicTests
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("field(name:", StringComparison.Ordinal) =>
-                    missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
+                    ordinaryFields && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
+                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"}}}}"""
+                        : ordinaryFields && body.Contains("\"name\":\"Estimate\"", StringComparison.Ordinal)
+                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_estimate","name":"Estimate"}}}}"""
+                        : missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
                         ? """{"data":{"node":{"field":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Notes"}]}"""
                         : normalSameName
                         ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
