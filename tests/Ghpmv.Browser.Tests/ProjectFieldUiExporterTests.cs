@@ -90,6 +90,23 @@ public class ProjectFieldUiExporterTests
         Assert.Contains("futureType", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ParseCatalog_rejects_unsupported_ordinary_multi_select_fields()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProjectFieldUiExporter.ParseCatalog(
+                """
+                [{
+                  "dataType":"multiSelect","id":1,"name":"Teams","position":1,
+                  "settings":{"options":[
+                    {"id":"sdk","name":"SDK","color":"GREEN","description":null}
+                  ]},"issueFieldId":null
+                }]
+                """));
+
+        Assert.Contains("unsupported ordinary multi-select field 'Teams'", exception.Message, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("false")]
     [InlineData("[]")]
