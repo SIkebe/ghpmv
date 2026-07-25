@@ -217,7 +217,16 @@ public sealed class ProjectFieldUiExporter
     }
 
     private static string? OptionalString(JsonElement element, string propertyName)
-        => element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+    {
+        if (!element.TryGetProperty(propertyName, out var value)
+            || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.String
             ? value.GetString()
-            : null;
+            : throw new InvalidOperationException(
+                $"The Projects UI field catalog property '{propertyName}' was not a string.");
+    }
 }

@@ -102,4 +102,25 @@ public class ProjectFieldUiExporterTests
                 }]
                 """));
     }
+
+    [Theory]
+    [InlineData("false")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void ParseCatalog_rejects_non_string_option_descriptions(string description)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProjectFieldUiExporter.ParseCatalog(
+                $$"""
+                [{
+                  "dataType":"singleSelect","id":1,"name":"Priority","position":1,
+                  "settings":{"options":[{
+                    "id":"high","name":"High","color":"RED","description":{{description}}
+                  }]},"issueFieldId":null
+                }]
+                """));
+
+        Assert.Contains("description", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("not a string", exception.Message, StringComparison.Ordinal);
+    }
 }

@@ -237,13 +237,18 @@ public class ProjectImporterTests
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
 
             // The existing project keeps its own title but gains the snapshot's custom fields.
-            var exporter = IntegrationFixtureSnapshot.CreateKnownCatalogExporter(client, snapshot);
-            var readBack = await exporter.ExportAsync(TargetOrg, emptyProjectNumber, cancellationToken);
-            Assert.Equal(title, readBack.Project.Title);
+            var readBackProject = await ReadProjectInfoAsync(client, TargetOrg, emptyProjectNumber, cancellationToken);
+            Assert.Equal(title, readBackProject.Title);
             string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];
-            foreach (var field in snapshot.Fields.Where(f => creatable.Contains(f.DataType)))
+            var expectedFields = snapshot.Fields.Where(field => creatable.Contains(field.DataType)).ToArray();
+            var readBackFields = await ReadFieldsByIdAsync(
+                client,
+                expectedFields.Select(field => result.FieldIds[field.Name]).ToArray(),
+                cancellationToken);
+            foreach (var field in expectedFields)
             {
-                Assert.Contains(readBack.Fields, f => f.Name == field.Name && f.DataType == field.DataType);
+                Assert.Contains(readBackFields, actual =>
+                    actual.Name == field.Name && actual.DataType == field.DataType);
             }
         }
         finally
@@ -337,6 +342,31 @@ public class ProjectImporterTests
             Public = project.GetProperty("public").GetBoolean(),
             Closed = project.GetProperty("closed").GetBoolean(),
         };
+    }
+
+    private static async Task<IReadOnlyList<FieldSnapshot>> ReadFieldsByIdAsync(
+        GitHubGraphQLClient client,
+        IReadOnlyList<string> fieldIds,
+        CancellationToken cancellationToken)
+    {
+        var data = await client.QueryAsync(
+            """
+            query($fieldIds: [ID!]!) {
+              nodes(ids: $fieldIds) {
+                ... on ProjectV2FieldCommon { name dataType }
+              }
+            }
+            """,
+            new { fieldIds },
+            cancellationToken);
+        return
+        [
+            .. data.GetProperty("nodes").EnumerateArray().Select(field => new FieldSnapshot
+            {
+                Name = field.GetProperty("name").GetString() ?? string.Empty,
+                DataType = field.GetProperty("dataType").GetString() ?? string.Empty,
+            }),
+        ];
     }
 
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
