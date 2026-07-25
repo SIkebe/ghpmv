@@ -39,10 +39,9 @@ public class ProjectImporterTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
 
-        // Export the fixture and retarget it under a unique title.
-        var exporter = new ProjectExporter(client);
-        var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-        var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        // Use the known fixture contract because the public field connection cannot
+        // enumerate projects linked to a multi-select Issue Field.
+        var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
 
@@ -199,10 +198,8 @@ public class ProjectImporterTests
         Directory.CreateDirectory(logDirectory);
         try
         {
-            // Export the fixture and apply it to the existing project by number.
-            var exporter = new ProjectExporter(client);
-            var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-            var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+            // Apply the known fixture contract to the existing project by number.
+            var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
             var snapshot = source with
             {
                 // The target fixture repository mirrors issues but does not contain the
@@ -240,6 +237,7 @@ public class ProjectImporterTests
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
 
             // The existing project keeps its own title but gains the snapshot's custom fields.
+            var exporter = IntegrationFixtureSnapshot.CreateKnownCatalogExporter(client, snapshot);
             var readBack = await exporter.ExportAsync(TargetOrg, emptyProjectNumber, cancellationToken);
             Assert.Equal(title, readBack.Project.Title);
             string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];

@@ -1,3 +1,5 @@
+using Ghpmv.Core.Export;
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.GitHub;
 
@@ -5,6 +7,43 @@ namespace Ghpmv.Integration.Tests;
 
 internal static class IntegrationFixtureSnapshot
 {
+    public static async Task<ProjectSnapshot> CreateKnownAsync(
+        GitHubGraphQLClient client,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        var viewerLogin = await client.GetViewerLoginAsync(cancellationToken);
+        return FixtureProjectBuilder.CreateSnapshot(
+            "gpm-fixture",
+            IntegrationTestSettings.FixtureRepositoryFullName,
+            viewerLogin,
+            IntegrationTestSettings.FixturePullRequestNumber);
+    }
+
+    public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return new ProjectFieldCatalog
+        {
+            Fields = snapshot.Fields,
+            IssueFieldNames = snapshot.Fields
+                .Where(field => field.IssueField is not null)
+                .Select(field => field.Name)
+                .ToHashSet(StringComparer.Ordinal),
+        };
+    }
+
+    public static ProjectExporter CreateKnownCatalogExporter(
+        GitHubGraphQLClient client,
+        ProjectSnapshot snapshot)
+    {
+        var catalog = CreateFieldCatalog(snapshot);
+        return new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        };
+    }
+
     public static ProjectSnapshot SelectCanonicalItems(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);

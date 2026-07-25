@@ -384,6 +384,66 @@ public class ProjectExporterTests
         Assert.Equal(3, handler.RequestBodies.Count);
     }
 
+    [Fact]
+    public async Task Export_rejects_item_issue_fields_not_linked_by_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"ISSUE","isArchived":false,
+                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemIssueFieldValue",
+                  "field":{"name":"Teams"},
+                  "issueFieldValue":{
+                    "__typename":"IssueFieldMultiSelectValue",
+                    "options":[{"name":"SDK"}]
+                  }
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Fields =
+            [
+                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
+                new FieldSnapshot { Name = "Teams", DataType = "MULTI_SELECT", Options = [] },
+            ],
+            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("Teams", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not mark it as linked", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);

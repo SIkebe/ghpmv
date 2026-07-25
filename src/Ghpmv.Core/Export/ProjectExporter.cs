@@ -88,6 +88,7 @@ public sealed class ProjectExporter
             fields = await BuildCompleteFieldsAsync(
                 ownerLogin,
                 completeFieldCatalog,
+                issueFieldNames,
                 cancellationToken).ConfigureAwait(false);
         }
         else
@@ -257,6 +258,7 @@ public sealed class ProjectExporter
     private async Task<List<FieldSnapshot>> BuildCompleteFieldsAsync(
         string ownerLogin,
         ProjectFieldCatalog catalog,
+        IReadOnlySet<string> observedIssueFieldNames,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
@@ -275,6 +277,15 @@ public sealed class ProjectExporter
         {
             throw new GitHubGraphQLException(
                 $"The complete field catalog marked unknown field '{unknownIssueField}' as an Issue Field.");
+        }
+
+        var unlinkedObservedIssueField = observedIssueFieldNames
+            .FirstOrDefault(name => !catalog.IssueFieldNames.Contains(name));
+        if (unlinkedObservedIssueField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Project item data identified linked Issue Field '{unlinkedObservedIssueField}', " +
+                "but the complete field catalog did not mark it as linked.");
         }
 
         if (catalog.IssueFieldNames.Count == 0)

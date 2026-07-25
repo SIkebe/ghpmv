@@ -49,10 +49,7 @@ public class ItemImporterTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
-        var exporter = new ProjectExporter(client);
-
-        var exported = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-        var source = IntegrationFixtureSnapshot.SelectCanonicalItems(exported);
+        var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
         source = source with
         {
             Items = source.Items
@@ -62,6 +59,7 @@ public class ItemImporterTests
         };
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
+        var exporter = IntegrationFixtureSnapshot.CreateKnownCatalogExporter(client, snapshot);
 
         // Identity user mapping so the fixture's assigned draft keeps its assignee.
         var userMapping = snapshot.Items

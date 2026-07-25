@@ -91,6 +91,11 @@ public sealed class ProjectFieldUiExporter
             };
             var isIssueField = element.TryGetProperty("issueFieldId", out var issueFieldId)
                 && issueFieldId.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
+            if (isIssueField)
+            {
+                _ = RequiredScalarString(element, "issueFieldId");
+            }
+
             entries.Add((element.GetProperty("position").GetInt32(), field, isIssueField));
         }
 

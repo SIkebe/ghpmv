@@ -70,4 +70,23 @@ public class ProjectFieldUiExporterTests
 
         Assert.Contains("futureType", exception.Message, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("false")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void ParseCatalog_rejects_non_scalar_issue_field_ids(string issueFieldId)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProjectFieldUiExporter.ParseCatalog(
+                $$"""
+                [{
+                  "dataType":"text","id":1,"name":"Notes","position":1,
+                  "settings":null,"issueFieldId":{{issueFieldId}}
+                }]
+                """));
+
+        Assert.Contains("issueFieldId", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("scalar ID", exception.Message, StringComparison.Ordinal);
+    }
 }
