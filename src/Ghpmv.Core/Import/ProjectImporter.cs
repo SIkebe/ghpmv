@@ -1184,6 +1184,24 @@ public sealed class ProjectImporter
             }
         }
 
+        var unresolvedSameNamedNormalField = _snapshotNormalFieldNames
+            .Intersect(_targetMultiSelectIssueFieldNames, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .FirstOrDefault(name =>
+            {
+                var sameNamedCandidates = candidates.Where(candidate =>
+                    string.Equals(candidate.GetProperty("name").GetString(), name, StringComparison.Ordinal));
+                return sameNamedCandidates.Any()
+                    && !sameNamedCandidates.Any(candidate =>
+                        dataTypes.ContainsKey(candidate.GetProperty("id").GetString() ?? string.Empty));
+            });
+        if (unresolvedSameNamedNormalField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"GitHub's preview API could not identify ordinary field '{unresolvedSameNamedNormalField}' separately " +
+                "from a same-named linked multi-select Issue Field. Reconcile the target manually before importing.");
+        }
+
         return
         [
             .. nodes.Select(node =>

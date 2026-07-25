@@ -470,12 +470,13 @@ public class ProjectExporterTests
                 TestContext.Current.CancellationToken));
 
         Assert.Contains("Teams", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("did not mark it as linked", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("linked field", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain that identity", exception.Message, StringComparison.Ordinal);
         Assert.Equal(2, handler.RequestBodies.Count);
     }
 
     [Fact]
-    public async Task Export_rejects_item_fields_missing_from_the_complete_catalog()
+    public async Task Export_rejects_item_field_identities_missing_from_the_complete_catalog()
     {
         using var handler = new StubHandler(
             """
@@ -508,7 +509,11 @@ public class ProjectExporterTests
             delayAsync: static (_, _) => Task.CompletedTask);
         var catalog = new ProjectFieldCatalog
         {
-            Entries = [new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false)],
+            Entries =
+            [
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Notes", DataType = "TEXT" }, true),
+            ],
         };
 
         var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
@@ -518,7 +523,8 @@ public class ProjectExporterTests
             }.ExportAsync("source", 1, TestContext.Current.CancellationToken));
 
         Assert.Contains("Notes", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("did not contain it", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("ordinary", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain that identity", exception.Message, StringComparison.Ordinal);
         Assert.Equal(2, handler.RequestBodies.Count);
     }
 

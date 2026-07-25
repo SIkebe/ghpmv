@@ -241,8 +241,16 @@ public class ProjectImporterLogicTests
         }
     }
 
-    [Fact]
-    public async Task Import_preserves_normal_field_mapping_and_ensures_same_named_same_type_issue_field_link()
+    [Theory]
+    [InlineData("TEXT", true, "IFT_teams", false, true)]
+    [InlineData("MULTI_SELECT", false, "IFM_teams", false, true)]
+    [InlineData("MULTI_SELECT", false, "IFM_teams", true, false)]
+    public async Task Import_reconciles_same_named_normal_and_issue_fields_by_identity(
+        string issueFieldDataType,
+        bool textIssueField,
+        string expectedIssueFieldId,
+        bool fieldByNameReturnsLinked,
+        bool shouldSucceed)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -252,12 +260,13 @@ public class ProjectImporterLogicTests
                 normalSameName: true,
                 existingSameNamedLink: true,
                 transientNormalDataTypeFailure: true,
-                textIssueField: true);
+                textIssueField: textIssueField,
+                fieldByNameReturnsLinked: fieldByNameReturnsLinked);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
                 handler,
-                delayAsync: null);
+                delayAsync: static (_, _) => Task.CompletedTask);
             var snapshot = MinimalSnapshot("Roadmap") with
             {
                 Fields =
@@ -270,7 +279,14 @@ public class ProjectImporterLogicTests
                     new FieldSnapshot
                     {
                         Name = "Teams",
-                        DataType = "TEXT",
+                        DataType = issueFieldDataType,
+                        Options = issueFieldDataType == "MULTI_SELECT"
+                            ?
+                            [
+                                new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                                new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                            ]
+                            : null,
                         IssueField = new IssueFieldConfigurationSnapshot
                         {
                             Description = "Teams involved",
@@ -284,13 +300,20 @@ public class ProjectImporterLogicTests
                 OperationLogDirectory = directory,
             };
 
-            var result = await importer.ImportIntoAsync(
-                snapshot,
-                "target",
-                7,
-                TestContext.Current.CancellationToken);
+            if (!shouldSucceed)
+            {
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => importer.ImportIntoAsync(
+                    snapshot,
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+                Assert.Contains("could not identify ordinary field 'Teams' separately", exception.Message, StringComparison.Ordinal);
+                return;
+            }
 
-            Assert.Equal("IFT_teams", result.IssueFieldIds["Teams"]);
+            var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            Assert.Equal(expectedIssueFieldId, result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Equal(2, handler.NormalDataTypeQueryCount);
             Assert.Single(
@@ -572,7 +595,8 @@ public class ProjectImporterLogicTests
         bool missingNormalField = false,
         bool transientFieldByNameFailure = false,
         bool ordinaryFields = false,
-        bool textIssueField = false) : HttpMessageHandler
+        bool textIssueField = false,
+        bool fieldByNameReturnsLinked = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -608,7 +632,9 @@ public class ProjectImporterLogicTests
                         : missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
                         ? """{"data":{"node":{"field":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Notes"}]}"""
                         : normalSameName
-                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
+                        ? fieldByNameReturnsLinked
+                            ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}}}}"""
+                            : """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
                         : transientFieldByNameFailure
                         ? FieldByNameResponse()
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",

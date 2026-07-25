@@ -82,6 +82,12 @@ public sealed class ProjectExporter
             projectNumber,
             issueFieldNames,
             cancellationToken).ConfigureAwait(false);
+        var referencedItemFields = items
+            .SelectMany(item => item.FieldValues)
+            .Select(value => (
+                value.FieldName,
+                IsIssueField: value.IsIssueField ?? issueFieldNames.Contains(value.FieldName)))
+            .ToHashSet();
         var referencedFieldNames = items
             .SelectMany(item => item.FieldValues)
             .Select(value => value.FieldName)
@@ -97,6 +103,7 @@ public sealed class ProjectExporter
                 ownerLogin,
                 completeFieldCatalog,
                 issueFieldNames,
+                referencedItemFields,
                 referencedFieldNames,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -268,6 +275,7 @@ public sealed class ProjectExporter
         string ownerLogin,
         ProjectFieldCatalog catalog,
         IReadOnlySet<string> observedIssueFieldNames,
+        IReadOnlySet<(string FieldName, bool IsIssueField)> referencedItemFields,
         IReadOnlySet<string> referencedFieldNames,
         CancellationToken cancellationToken)
     {
@@ -286,6 +294,20 @@ public sealed class ProjectExporter
             .Where(entry => entry.IsIssueField)
             .Select(entry => entry.Field.Name)
             .ToHashSet(StringComparer.Ordinal);
+        var catalogIdentities = catalog.Entries
+            .Select(entry => (entry.Field.Name, entry.IsIssueField))
+            .ToHashSet();
+        var missingReferencedItemField = referencedItemFields
+            .OrderBy(identity => identity.FieldName, StringComparer.Ordinal)
+            .ThenBy(identity => identity.IsIssueField)
+            .FirstOrDefault(identity => !catalogIdentities.Contains(identity));
+        if (!string.IsNullOrEmpty(missingReferencedItemField.FieldName))
+        {
+            throw new GitHubGraphQLException(
+                $"Project items reference {(missingReferencedItemField.IsIssueField ? "linked" : "ordinary")} " +
+                $"field '{missingReferencedItemField.FieldName}', but the complete field catalog did not contain that identity.");
+        }
+
         var catalogNames = catalog.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
         var missingReferencedField = referencedFieldNames
             .Order(StringComparer.Ordinal)
