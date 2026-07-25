@@ -242,7 +242,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_preserves_normal_field_mapping_when_same_named_issue_field_link_exists()
+    public async Task Import_preserves_normal_field_mapping_and_ensures_same_named_same_type_issue_field_link()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -251,7 +251,8 @@ public class ProjectImporterLogicTests
                 existing: true,
                 normalSameName: true,
                 existingSameNamedLink: true,
-                transientNormalDataTypeFailure: true);
+                transientNormalDataTypeFailure: true,
+                textIssueField: true);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
@@ -269,12 +270,7 @@ public class ProjectImporterLogicTests
                     new FieldSnapshot
                     {
                         Name = "Teams",
-                        DataType = "MULTI_SELECT",
-                        Options =
-                        [
-                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
-                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
-                        ],
+                        DataType = "TEXT",
                         IssueField = new IssueFieldConfigurationSnapshot
                         {
                             Description = "Teams involved",
@@ -294,7 +290,7 @@ public class ProjectImporterLogicTests
                 7,
                 TestContext.Current.CancellationToken);
 
-            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            Assert.Equal("IFT_teams", result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Equal(2, handler.NormalDataTypeQueryCount);
             Assert.Single(
@@ -575,7 +571,8 @@ public class ProjectImporterLogicTests
         bool transientNormalDataTypeFailure = false,
         bool missingNormalField = false,
         bool transientFieldByNameFailure = false,
-        bool ordinaryFields = false) : HttpMessageHandler
+        bool ordinaryFields = false,
+        bool textIssueField = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -627,7 +624,14 @@ public class ProjectImporterLogicTests
                             : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
-                        ? requiresUpdate
+                        ? textIssueField
+                            ? """
+                              {"data":{"organization":{"issueFields":{"nodes":[{
+                                "__typename":"IssueFieldText","id":"IFT_teams","name":"Teams",
+                                "dataType":"TEXT","description":"Teams involved","visibility":"ALL"
+                              }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                              """
+                            : requiresUpdate
                             ? """
                               {"data":{"organization":{"issueFields":{"nodes":[{
                                 "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",

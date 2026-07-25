@@ -694,23 +694,6 @@ public sealed class ProjectImporter
             return;
         }
 
-        var linkCandidates = projectFields.Where(field =>
-            string.Equals(field.Name, issueField.Name, StringComparison.Ordinal)
-            && string.Equals(field.TypeName, "ProjectV2Field", StringComparison.Ordinal)
-            && (string.Equals(field.DataType, issueField.DataType, StringComparison.Ordinal)
-                || (string.Equals(issueField.DataType, "MULTI_SELECT", StringComparison.Ordinal)
-                    && string.IsNullOrEmpty(field.DataType)))).ToArray();
-        if (linkCandidates.Length > 1)
-        {
-            throw new InvalidOperationException(
-                $"Multiple project fields can satisfy the organization Issue Field link '{issueField.Name}'. Reconcile the target manually.");
-        }
-
-        if (linkCandidates.Length == 1)
-        {
-            return;
-        }
-
         OnProgress?.Invoke($"Ensuring organization Issue Field '{issueField.Name}' is linked to the project...");
         var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         if (_operationLog is not null)
