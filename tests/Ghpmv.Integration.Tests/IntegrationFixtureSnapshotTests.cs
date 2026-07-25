@@ -1,3 +1,4 @@
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Integration.Tests;
@@ -32,6 +33,27 @@ public class IntegrationFixtureSnapshotTests
         Assert.Equal(7, result.Items.Count);
         Assert.Equal(Enumerable.Range(0, 7), result.Items.Select(item => item.Position));
         Assert.DoesNotContain(result.Items, item => item.Type == "ISSUE" && item.Number == 4);
+    }
+
+    [Fact]
+    public void NormalizeKnownSnapshot_matches_exported_field_value_shape()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "fixture",
+            IntegrationTestSettings.FixtureRepositoryFullName,
+            "viewer",
+            IntegrationTestSettings.FixturePullRequestNumber);
+
+        var result = IntegrationFixtureSnapshot.NormalizeKnownSnapshot(snapshot);
+
+        Assert.All(result.Items.SelectMany(item => item.FieldValues), value =>
+            Assert.NotNull(value.IsIssueField));
+        Assert.All(result.Items.Where(item => item.Draft is not null), item =>
+        {
+            var title = Assert.Single(item.FieldValues, value => value.FieldName == "Title");
+            Assert.False(title.IsIssueField);
+            Assert.Equal(item.Draft!.Title, title.Text);
+        });
     }
 
     private static ItemSnapshot Draft(string title, int position) => new()

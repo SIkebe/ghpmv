@@ -13,11 +13,37 @@ internal static class IntegrationFixtureSnapshot
     {
         ArgumentNullException.ThrowIfNull(client);
         var viewerLogin = await client.GetViewerLoginAsync(cancellationToken);
-        return FixtureProjectBuilder.CreateSnapshot(
+        return NormalizeKnownSnapshot(FixtureProjectBuilder.CreateSnapshot(
             "gpm-fixture",
             IntegrationTestSettings.FixtureRepositoryFullName,
             viewerLogin,
-            IntegrationTestSettings.FixturePullRequestNumber);
+            IntegrationTestSettings.FixturePullRequestNumber));
+    }
+
+    internal static ProjectSnapshot NormalizeKnownSnapshot(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return snapshot with
+        {
+            Items = snapshot.Items.Select(item =>
+            {
+                var values = item.FieldValues
+                    .Select(value => value with { IsIssueField = value.IsIssueField ?? false })
+                    .ToList();
+                if (item.Draft is not null
+                    && !values.Any(value => string.Equals(value.FieldName, "Title", StringComparison.Ordinal)))
+                {
+                    values.Insert(0, new FieldValueSnapshot
+                    {
+                        FieldName = "Title",
+                        IsIssueField = false,
+                        Text = item.Draft.Title,
+                    });
+                }
+
+                return item with { FieldValues = values };
+            }).ToArray(),
+        };
     }
 
     public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
