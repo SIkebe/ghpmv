@@ -316,8 +316,14 @@ public class ProjectExporterTests
         Assert.Equal(6, handler.RequestBodies.Count);
     }
 
-    [Fact]
-    public async Task Export_uses_the_complete_catalog_without_querying_the_project_field_connection()
+    [Theory]
+    [InlineData("MULTI_SELECT", false, true)]
+    [InlineData("TEXT", false, false)]
+    [InlineData("MULTI_SELECT", true, false)]
+    public async Task Export_enriches_only_type_matching_linked_catalog_entries(
+        string linkedDataType,
+        bool duplicateOrdinaryField,
+        bool shouldSucceed)
     {
         using var handler = new StubHandler(
             """
@@ -348,32 +354,53 @@ public class ProjectExporterTests
             handler,
             delayAsync: static (_, _) => Task.CompletedTask);
         int? requestedView = null;
-        var catalog = new ProjectFieldCatalog
+        var entries = new List<ProjectFieldCatalogEntry>
         {
-            Entries =
-            [
-                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
-                new(new FieldSnapshot { Name = "Hidden", DataType = "TEXT" }, false),
-                new(new FieldSnapshot { Name = "Teams", DataType = "TEXT" }, false),
-                new(
-                    new FieldSnapshot
-                    {
-                        Name = "Teams",
-                        DataType = "MULTI_SELECT",
-                        Options = [],
-                    },
-                    true),
-            ],
+            new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+            new(new FieldSnapshot { Name = "Hidden", DataType = "TEXT" }, false),
+            new(new FieldSnapshot { Name = "Teams", DataType = "TEXT" }, false),
+            new(
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = linkedDataType,
+                    Options = [],
+                },
+                true),
         };
+        if (duplicateOrdinaryField)
+        {
+            entries.Add(new(new FieldSnapshot { Name = "Teams", DataType = "NUMBER" }, false));
+        }
 
-        var snapshot = await new ProjectExporter(client)
+        var catalog = new ProjectFieldCatalog { Entries = entries };
+
+        var exporter = new ProjectExporter(client)
         {
             CompleteFieldCatalogProviderAsync = (viewNumber, _) =>
             {
                 requestedView = viewNumber;
                 return Task.FromResult(catalog);
             },
-        }.ExportAsync(
+        };
+        if (!shouldSucceed)
+        {
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => exporter.ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+            Assert.Contains(
+                duplicateOrdinaryField
+                    ? "duplicate field identity 'Teams' (ordinary)"
+                    : "organization Issue Field catalog reported MULTI_SELECT",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.Equal(duplicateOrdinaryField ? 2 : 3, handler.RequestBodies.Count);
+            return;
+        }
+
+        var snapshot = await exporter.ExportAsync(
             "source",
             1,
             TestContext.Current.CancellationToken);

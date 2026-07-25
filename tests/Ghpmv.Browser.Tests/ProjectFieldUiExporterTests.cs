@@ -68,7 +68,7 @@ public class ProjectFieldUiExporterTests
                 """
                 [
                   {"dataType":"text","id":1,"name":"Notes","position":1,"settings":null,"issueFieldId":null},
-                  {"dataType":"text","id":2,"name":"Notes","position":2,"settings":null,"issueFieldId":null}
+                  {"dataType":"number","id":2,"name":"Notes","position":2,"settings":null,"issueFieldId":null}
                 ]
                 """));
 

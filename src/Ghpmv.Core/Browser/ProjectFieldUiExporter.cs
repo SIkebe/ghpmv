@@ -64,7 +64,7 @@ public sealed class ProjectFieldUiExporter
         }
 
         var entries = new List<(int Position, ProjectFieldCatalogEntry Entry)>();
-        var identities = new HashSet<(string Name, string DataType, bool IsIssueField)>();
+        var identities = new HashSet<(string Name, bool IsIssueField)>();
         foreach (var element in document.RootElement.EnumerateArray())
         {
             var name = RequiredString(element, "name");
@@ -91,11 +91,11 @@ public sealed class ProjectFieldUiExporter
                 _ = RequiredScalarString(element, "issueFieldId");
             }
 
-            if (!identities.Add((name, dataType, isIssueField)))
+            if (!identities.Add((name, isIssueField)))
             {
                 throw new InvalidOperationException(
-                    $"The Projects UI field catalog contained duplicate field identity '{name}' ({dataType}, " +
-                    $"{(isIssueField ? "linked" : "ordinary")}).");
+                    $"The Projects UI field catalog contained duplicate field identity '{name}' " +
+                    $"({(isIssueField ? "linked" : "ordinary")}).");
             }
 
             entries.Add((

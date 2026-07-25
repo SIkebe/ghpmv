@@ -273,13 +273,13 @@ public sealed class ProjectExporter
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var duplicateField = catalog.Entries
-            .GroupBy(entry => (entry.Field.Name, entry.Field.DataType, entry.IsIssueField))
+            .GroupBy(entry => (entry.Field.Name, entry.IsIssueField))
             .FirstOrDefault(group => group.Skip(1).Any());
         if (duplicateField is not null)
         {
             throw new GitHubGraphQLException(
                 $"The complete field catalog contained duplicate field identity '{duplicateField.Key.Name}' " +
-                $"({duplicateField.Key.DataType}, {(duplicateField.Key.IsIssueField ? "linked" : "ordinary")}).");
+                $"({(duplicateField.Key.IsIssueField ? "linked" : "ordinary")}).");
         }
 
         var issueFieldNames = catalog.Entries
@@ -337,6 +337,18 @@ public sealed class ProjectExporter
                 throw new GitHubGraphQLException(
                     $"The Projects UI identified linked Issue Field '{issueFieldName}', but it was not present in the organization Issue Field catalog.");
             }
+        }
+
+        var mismatchedIssueField = catalog.Entries.FirstOrDefault(entry =>
+            entry.IsIssueField
+            && issueFieldsByName.TryGetValue(entry.Field.Name, out var issueField)
+            && !string.Equals(entry.Field.DataType, issueField.DataType, StringComparison.Ordinal));
+        if (mismatchedIssueField is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"The Projects UI identified linked Issue Field '{mismatchedIssueField.Field.Name}' as " +
+                $"{mismatchedIssueField.Field.DataType}, but the organization Issue Field catalog reported " +
+                $"{issueFieldsByName[mismatchedIssueField.Field.Name].DataType}.");
         }
 
         return

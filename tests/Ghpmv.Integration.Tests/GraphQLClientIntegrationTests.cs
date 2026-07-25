@@ -35,7 +35,18 @@ public class GraphQLClientIntegrationTests
                 IntegrationTestSettings.FixtureProjectNumber,
                 TestContext.Current.CancellationToken);
             Assert.False(string.IsNullOrWhiteSpace(snapshot.Project.Title));
-            Assert.Contains(snapshot.Fields, field => field.Name == "Fixture Teams");
+            foreach (var fieldName in (string[])
+                     [
+                         "Fixture Text",
+                         "Fixture Number",
+                         "Fixture Date",
+                         "Fixture Select",
+                         "Fixture Sprint",
+                         "Fixture Teams",
+                     ])
+            {
+                Assert.Contains(snapshot.Fields, field => field.Name == fieldName);
+            }
         }
         catch (GitHubGraphQLException exception)
         {
