@@ -272,23 +272,21 @@ public sealed class ProjectExporter
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        var duplicateField = catalog.Fields
-            .GroupBy(field => field.Name, StringComparer.Ordinal)
+        var duplicateField = catalog.Entries
+            .GroupBy(entry => (entry.Field.Name, entry.Field.DataType, entry.IsIssueField))
             .FirstOrDefault(group => group.Skip(1).Any());
         if (duplicateField is not null)
         {
             throw new GitHubGraphQLException(
-                $"The complete field catalog contained duplicate field name '{duplicateField.Key}'.");
+                $"The complete field catalog contained duplicate field identity '{duplicateField.Key.Name}' " +
+                $"({duplicateField.Key.DataType}, {(duplicateField.Key.IsIssueField ? "linked" : "ordinary")}).");
         }
 
+        var issueFieldNames = catalog.Entries
+            .Where(entry => entry.IsIssueField)
+            .Select(entry => entry.Field.Name)
+            .ToHashSet(StringComparer.Ordinal);
         var catalogNames = catalog.Fields.Select(field => field.Name).ToHashSet(StringComparer.Ordinal);
-        var unknownIssueField = catalog.IssueFieldNames.FirstOrDefault(name => !catalogNames.Contains(name));
-        if (unknownIssueField is not null)
-        {
-            throw new GitHubGraphQLException(
-                $"The complete field catalog marked unknown field '{unknownIssueField}' as an Issue Field.");
-        }
-
         var missingReferencedField = referencedFieldNames
             .Order(StringComparer.Ordinal)
             .FirstOrDefault(name => !catalogNames.Contains(name));
@@ -300,7 +298,7 @@ public sealed class ProjectExporter
         }
 
         var unlinkedObservedIssueField = observedIssueFieldNames
-            .FirstOrDefault(name => !catalog.IssueFieldNames.Contains(name));
+            .FirstOrDefault(name => !issueFieldNames.Contains(name));
         if (unlinkedObservedIssueField is not null)
         {
             throw new GitHubGraphQLException(
@@ -308,7 +306,7 @@ public sealed class ProjectExporter
                 "but the complete field catalog did not mark it as linked.");
         }
 
-        if (catalog.IssueFieldNames.Count == 0)
+        if (issueFieldNames.Count == 0)
         {
             return [.. catalog.Fields];
         }
@@ -320,7 +318,7 @@ public sealed class ProjectExporter
         }
 
         var issueFields = (await FetchIssueFieldsAsync(ownerLogin, cancellationToken).ConfigureAwait(false))
-            .Where(field => catalog.IssueFieldNames.Contains(field.Name))
+            .Where(field => issueFieldNames.Contains(field.Name))
             .ToList();
         var duplicateIssueField = issueFields
             .GroupBy(field => field.Name, StringComparer.Ordinal)
@@ -332,7 +330,7 @@ public sealed class ProjectExporter
         }
 
         var issueFieldsByName = issueFields.ToDictionary(field => field.Name, StringComparer.Ordinal);
-        foreach (var issueFieldName in catalog.IssueFieldNames)
+        foreach (var issueFieldName in issueFieldNames)
         {
             if (!issueFieldsByName.ContainsKey(issueFieldName))
             {
@@ -343,10 +341,10 @@ public sealed class ProjectExporter
 
         return
         [
-            .. catalog.Fields.Select(field =>
-                issueFieldsByName.TryGetValue(field.Name, out var issueField)
+            .. catalog.Entries.Select(entry =>
+                entry.IsIssueField && issueFieldsByName.TryGetValue(entry.Field.Name, out var issueField)
                     ? BuildIssueFieldSnapshot(issueField)
-                    : field),
+                    : entry.Field),
         ];
     }
 

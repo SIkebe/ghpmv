@@ -80,11 +80,11 @@ internal static class IntegrationFixtureSnapshot
         ArgumentNullException.ThrowIfNull(snapshot);
         return new ProjectFieldCatalog
         {
-            Fields = snapshot.Fields,
-            IssueFieldNames = snapshot.Fields
-                .Where(field => field.IssueField is not null)
-                .Select(field => field.Name)
-                .ToHashSet(StringComparer.Ordinal),
+            Entries =
+            [
+                .. snapshot.Fields.Select(field =>
+                    new ProjectFieldCatalogEntry(field, field.IssueField is not null)),
+            ],
         };
     }
 

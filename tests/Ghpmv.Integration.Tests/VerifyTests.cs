@@ -145,8 +145,8 @@ public class VerifyTests
                 cancellationToken);
             targetFieldCatalog = targetFieldCatalog with
             {
-                Fields = targetFieldCatalog.Fields
-                    .Where(field => !string.Equals(field.Name, fieldName, StringComparison.Ordinal))
+                Entries = targetFieldCatalog.Entries
+                    .Where(entry => !string.Equals(entry.Field.Name, fieldName, StringComparison.Ordinal))
                     .ToArray(),
             };
 

@@ -33,7 +33,11 @@ public class ProjectFieldUiExporterTests
                 }},"issueFieldId":null
               },
               {
-                "dataType":"multiSelect","id":104,"name":"Teams","position":5,
+                "dataType":"text","id":104,"name":"Teams","position":5,
+                "settings":null,"issueFieldId":null
+              },
+              {
+                "dataType":"multiSelect","id":105,"name":"Teams","position":6,
                 "settings":{"options":[
                   {"id":7,"name":"SDK","color":"GREEN","description":null}
                 ]},"issueFieldId":44611488
@@ -41,7 +45,7 @@ public class ProjectFieldUiExporterTests
             ]
             """);
 
-        Assert.Equal(["Title", "Hidden text", "Priority", "Sprint", "Teams"], catalog.Fields.Select(field => field.Name));
+        Assert.Equal(["Title", "Hidden text", "Priority", "Sprint", "Teams", "Teams"], catalog.Fields.Select(field => field.Name));
         Assert.Equal("TEXT", catalog.Fields.Single(field => field.Name == "Hidden text").DataType);
         var priority = catalog.Fields.Single(field => field.Name == "Priority");
         Assert.Equal("SINGLE_SELECT", priority.DataType);
@@ -50,10 +54,25 @@ public class ProjectFieldUiExporterTests
         Assert.Equal(14, sprint.Duration);
         Assert.Equal("Sprint 2", Assert.Single(sprint.Iterations).Title);
         Assert.Equal("Sprint 1", Assert.Single(sprint.CompletedIterations).Title);
-        var teams = catalog.Fields.Single(field => field.Name == "Teams");
+        var teams = catalog.Entries.Single(entry => entry.IsIssueField).Field;
         Assert.Equal("MULTI_SELECT", teams.DataType);
         Assert.Equal("7", Assert.Single(teams.Options!).Id);
-        Assert.Equal(["Teams"], catalog.IssueFieldNames);
+        Assert.Single(catalog.Entries, entry => entry.Field.Name == "Teams" && !entry.IsIssueField);
+    }
+
+    [Fact]
+    public void ParseCatalog_rejects_duplicate_field_identity()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProjectFieldUiExporter.ParseCatalog(
+                """
+                [
+                  {"dataType":"text","id":1,"name":"Notes","position":1,"settings":null,"issueFieldId":null},
+                  {"dataType":"text","id":2,"name":"Notes","position":2,"settings":null,"issueFieldId":null}
+                ]
+                """));
+
+        Assert.Contains("duplicate field identity", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

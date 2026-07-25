@@ -350,18 +350,20 @@ public class ProjectExporterTests
         int? requestedView = null;
         var catalog = new ProjectFieldCatalog
         {
-            Fields =
+            Entries =
             [
-                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
-                new FieldSnapshot { Name = "Hidden", DataType = "TEXT" },
-                new FieldSnapshot
-                {
-                    Name = "Teams",
-                    DataType = "MULTI_SELECT",
-                    Options = [],
-                },
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Hidden", DataType = "TEXT" }, false),
+                new(new FieldSnapshot { Name = "Teams", DataType = "TEXT" }, false),
+                new(
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options = [],
+                    },
+                    true),
             ],
-            IssueFieldNames = new HashSet<string>(["Teams"], StringComparer.Ordinal),
         };
 
         var snapshot = await new ProjectExporter(client)
@@ -377,10 +379,12 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(3, requestedView);
-        Assert.Equal(["Title", "Hidden", "Teams"], snapshot.Fields.Select(field => field.Name));
-        var teams = snapshot.Fields.Single(field => field.Name == "Teams");
-        Assert.Equal("Teams involved", teams.IssueField!.Description);
-        Assert.Equal(["SDK"], teams.Options!.Select(option => option.Name));
+        Assert.Equal(["Title", "Hidden", "Teams", "Teams"], snapshot.Fields.Select(field => field.Name));
+        var ordinaryTeams = snapshot.Fields.Single(field => field.Name == "Teams" && field.IssueField is null);
+        Assert.Equal("TEXT", ordinaryTeams.DataType);
+        var linkedTeams = snapshot.Fields.Single(field => field.Name == "Teams" && field.IssueField is not null);
+        Assert.Equal("Teams involved", linkedTeams.IssueField!.Description);
+        Assert.Equal(["SDK"], linkedTeams.Options!.Select(option => option.Name));
         Assert.Equal(3, handler.RequestBodies.Count);
     }
 
@@ -422,12 +426,11 @@ public class ProjectExporterTests
             delayAsync: static (_, _) => Task.CompletedTask);
         var catalog = new ProjectFieldCatalog
         {
-            Fields =
+            Entries =
             [
-                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
-                new FieldSnapshot { Name = "Teams", DataType = "MULTI_SELECT", Options = [] },
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Teams", DataType = "MULTI_SELECT", Options = [] }, false),
             ],
-            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
         };
 
         var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
@@ -478,8 +481,7 @@ public class ProjectExporterTests
             delayAsync: static (_, _) => Task.CompletedTask);
         var catalog = new ProjectFieldCatalog
         {
-            Fields = [new FieldSnapshot { Name = "Title", DataType = "TITLE" }],
-            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
+            Entries = [new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false)],
         };
 
         var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
@@ -519,8 +521,7 @@ public class ProjectExporterTests
             delayAsync: static (_, _) => Task.CompletedTask);
         var catalog = new ProjectFieldCatalog
         {
-            Fields = [new FieldSnapshot { Name = "Title", DataType = "TITLE" }],
-            IssueFieldNames = new HashSet<string>(StringComparer.Ordinal),
+            Entries = [new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false)],
         };
 
         var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>

@@ -269,10 +269,10 @@ public class ProjectExporterTests
         var catalog = IntegrationFixtureSnapshot.CreateFieldCatalog(knownSnapshot);
         return catalog with
         {
-            Fields = catalog.Fields.Select(field =>
-                string.Equals(field.Name, "Fixture Teams", StringComparison.Ordinal)
-                    ? field with { Options = [], IssueField = null }
-                    : field).ToArray(),
+            Entries = catalog.Entries.Select(entry =>
+                string.Equals(entry.Field.Name, "Fixture Teams", StringComparison.Ordinal)
+                    ? entry with { Field = entry.Field with { Options = [], IssueField = null } }
+                    : entry).ToArray(),
         };
     }
 }

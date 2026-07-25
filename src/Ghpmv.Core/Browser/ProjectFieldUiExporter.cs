@@ -63,16 +63,11 @@ public sealed class ProjectFieldUiExporter
             throw new InvalidOperationException("The Projects UI field catalog was not an array.");
         }
 
-        var entries = new List<(int Position, FieldSnapshot Field, bool IsIssueField)>();
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var entries = new List<(int Position, ProjectFieldCatalogEntry Entry)>();
+        var identities = new HashSet<(string Name, string DataType, bool IsIssueField)>();
         foreach (var element in document.RootElement.EnumerateArray())
         {
             var name = RequiredString(element, "name");
-            if (!names.Add(name))
-            {
-                throw new InvalidOperationException($"The Projects UI field catalog contained duplicate field name '{name}'.");
-            }
-
             var dataType = MapDataType(RequiredString(element, "dataType"));
             var settings = element.TryGetProperty("settings", out var settingsElement)
                 && settingsElement.ValueKind == JsonValueKind.Object
@@ -96,7 +91,16 @@ public sealed class ProjectFieldUiExporter
                 _ = RequiredScalarString(element, "issueFieldId");
             }
 
-            entries.Add((element.GetProperty("position").GetInt32(), field, isIssueField));
+            if (!identities.Add((name, dataType, isIssueField)))
+            {
+                throw new InvalidOperationException(
+                    $"The Projects UI field catalog contained duplicate field identity '{name}' ({dataType}, " +
+                    $"{(isIssueField ? "linked" : "ordinary")}).");
+            }
+
+            entries.Add((
+                element.GetProperty("position").GetInt32(),
+                new ProjectFieldCatalogEntry(field, isIssueField)));
         }
 
         if (entries.Count == 0)
@@ -107,11 +111,7 @@ public sealed class ProjectFieldUiExporter
         var ordered = entries.OrderBy(entry => entry.Position).ToArray();
         return new ProjectFieldCatalog
         {
-            Fields = [.. ordered.Select(entry => entry.Field)],
-            IssueFieldNames = ordered
-                .Where(entry => entry.IsIssueField)
-                .Select(entry => entry.Field.Name)
-                .ToHashSet(StringComparer.Ordinal),
+            Entries = [.. ordered.Select(entry => entry.Entry)],
         };
     }
 

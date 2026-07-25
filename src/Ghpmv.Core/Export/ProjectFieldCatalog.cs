@@ -4,12 +4,14 @@ namespace Ghpmv.Core.Export;
 
 /// <summary>
 /// Complete project field data supplied by a source outside the public Projects GraphQL
-/// field connection. <see cref="IssueFieldNames"/> identifies fields linked from the
-/// organization Issue Field catalog.
+/// field connection. Linkage is carried per entry so an ordinary field and an organization
+/// Issue Field may share a name.
 /// </summary>
 public sealed record ProjectFieldCatalog
 {
-    public required IReadOnlyList<FieldSnapshot> Fields { get; init; }
+    public required IReadOnlyList<ProjectFieldCatalogEntry> Entries { get; init; }
 
-    public required IReadOnlySet<string> IssueFieldNames { get; init; }
+    public IReadOnlyList<FieldSnapshot> Fields => [.. Entries.Select(entry => entry.Field)];
 }
+
+public sealed record ProjectFieldCatalogEntry(FieldSnapshot Field, bool IsIssueField);
