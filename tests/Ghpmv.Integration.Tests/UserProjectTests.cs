@@ -7,8 +7,8 @@ namespace Ghpmv.Integration.Tests;
 /// <summary>
 /// User-owned project support: creates a temporary project owned by the viewer (the test
 /// account) via the real API, exports it with <see cref="ProjectOwnerType.User"/>, deletes
-/// the source, re-imports it as a user project and compares the read-back. Skipped when
-/// the account cannot create user projects (e.g. a policy-restricted EMU account).
+/// the source, re-imports it as a user project and compares the read-back. A credentialed
+/// integration account must be allowed to create user-owned projects.
 /// Every created project is deleted in a finally block.
 /// </summary>
 public class UserProjectTests
@@ -59,8 +59,10 @@ public class UserProjectTests
             }
             catch (GitHubGraphQLException exception)
             {
-                Assert.Skip($"Account '{viewerLogin}' cannot create user-owned projects ({exception.ErrorType ?? "error"}): {exception.Message}");
-                return;
+                throw new InvalidOperationException(
+                    $"Credentialed integration account '{viewerLogin}' must be able to create user-owned projects " +
+                    $"({exception.ErrorType ?? "error"}).",
+                    exception);
             }
 
             await client.QueryAsync(
