@@ -166,7 +166,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_reuses_existing_multi_select_issue_field_link()
+    public async Task Import_idempotently_ensures_existing_multi_select_issue_field_link_without_broken_reads()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -177,6 +177,8 @@ public class ProjectImporterLogicTests
                 new Uri("https://example.test/graphql"),
                 handler,
                 delayAsync: null);
+            var retries = new List<string>();
+            client.OnRetry = retries.Add;
             var snapshot = MinimalSnapshot("Roadmap") with
             {
                 Fields =
@@ -198,9 +200,11 @@ public class ProjectImporterLogicTests
                     },
                 ],
             };
+            var progress = new List<string>();
             var importer = new ProjectImporter(client)
             {
                 OperationLogDirectory = directory,
+                OnProgress = progress.Add,
             };
 
             var result = await importer.ImportIntoAsync(
@@ -212,13 +216,24 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
-            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
-            var fieldsQuery = Assert.Single(
+            Assert.Single(
                 handler.RequestBodies,
-                body => body.Contains("fields(first:", StringComparison.Ordinal));
-            Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
-            Assert.DoesNotContain("options", fieldsQuery, StringComparison.Ordinal);
-            Assert.Contains("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
+                body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("fields(first:", StringComparison.Ordinal)
+                    || body.Contains("field(name:", StringComparison.Ordinal));
+            Assert.Empty(retries);
+            Assert.Contains(
+                progress,
+                message => message.Contains(
+                    "linked multi-select Issue Fields are reconciled with an idempotent link mutation",
+                    StringComparison.Ordinal));
+            Assert.Contains(
+                progress,
+                message => message.Contains(
+                    "Ensuring organization Issue Field 'Teams' is linked",
+                    StringComparison.Ordinal));
         }
         finally
         {
@@ -226,8 +241,16 @@ public class ProjectImporterLogicTests
         }
     }
 
-    [Fact]
-    public async Task Import_preserves_normal_field_mapping_when_same_named_issue_field_link_exists()
+    [Theory]
+    [InlineData("TEXT", true, "IFT_teams", false, false)]
+    [InlineData("MULTI_SELECT", false, "IFM_teams", false, true)]
+    [InlineData("MULTI_SELECT", false, "IFM_teams", true, false)]
+    public async Task Import_reconciles_same_named_normal_and_issue_fields_by_identity(
+        string issueFieldDataType,
+        bool textIssueField,
+        string expectedIssueFieldId,
+        bool fieldByNameReturnsLinked,
+        bool shouldSucceed)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -236,12 +259,14 @@ public class ProjectImporterLogicTests
                 existing: true,
                 normalSameName: true,
                 existingSameNamedLink: true,
-                transientNormalDataTypeFailure: true);
+                transientNormalDataTypeFailure: true,
+                textIssueField: textIssueField,
+                fieldByNameReturnsLinked: fieldByNameReturnsLinked);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
                 handler,
-                delayAsync: null);
+                delayAsync: static (_, _) => Task.CompletedTask);
             var snapshot = MinimalSnapshot("Roadmap") with
             {
                 Fields =
@@ -254,12 +279,14 @@ public class ProjectImporterLogicTests
                     new FieldSnapshot
                     {
                         Name = "Teams",
-                        DataType = "MULTI_SELECT",
-                        Options =
-                        [
-                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
-                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
-                        ],
+                        DataType = issueFieldDataType,
+                        Options = issueFieldDataType == "MULTI_SELECT"
+                            ?
+                            [
+                                new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                                new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                            ]
+                            : null,
                         IssueField = new IssueFieldConfigurationSnapshot
                         {
                             Description = "Teams involved",
@@ -273,16 +300,23 @@ public class ProjectImporterLogicTests
                 OperationLogDirectory = directory,
             };
 
-            var result = await importer.ImportIntoAsync(
-                snapshot,
-                "target",
-                7,
-                TestContext.Current.CancellationToken);
+            if (!shouldSucceed)
+            {
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => importer.ImportIntoAsync(
+                    snapshot,
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+                Assert.Contains("could not identify ordinary field 'Teams' separately", exception.Message, StringComparison.Ordinal);
+                return;
+            }
 
-            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            Assert.Equal(expectedIssueFieldId, result.IssueFieldIds["Teams"]);
             Assert.Equal("PVTF_teams", result.FieldIds["Teams"]);
             Assert.Equal(2, handler.NormalDataTypeQueryCount);
-            Assert.DoesNotContain(
+            Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
@@ -350,7 +384,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_retries_transient_field_lookup_before_linking_issue_field()
+    public async Task Import_does_not_probe_linked_multi_select_issue_field_by_name()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -390,7 +424,8 @@ public class ProjectImporterLogicTests
                 7,
                 TestContext.Current.CancellationToken);
 
-            Assert.Equal(2, handler.FieldByNameQueryCount);
+            Assert.Equal(0, handler.FieldByNameQueryCount);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("field(name:", StringComparison.Ordinal));
             Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
@@ -443,7 +478,7 @@ public class ProjectImporterLogicTests
 
             Assert.Equal("PVTF_notes", result.FieldIds["Notes"]);
             Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
-            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
+            Assert.Contains(handler.RequestBodies, body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
         {
@@ -559,7 +594,9 @@ public class ProjectImporterLogicTests
         bool transientNormalDataTypeFailure = false,
         bool missingNormalField = false,
         bool transientFieldByNameFailure = false,
-        bool ordinaryFields = false) : HttpMessageHandler
+        bool ordinaryFields = false,
+        bool textIssueField = false,
+        bool fieldByNameReturnsLinked = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -588,10 +625,16 @@ public class ProjectImporterLogicTests
                         ? """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
                         : """{"data":{"node":{"fields":{"nodes":[{"id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
                 _ when body.Contains("field(name:", StringComparison.Ordinal) =>
-                    missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
+                    ordinaryFields && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
+                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"}}}}"""
+                        : ordinaryFields && body.Contains("\"name\":\"Estimate\"", StringComparison.Ordinal)
+                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_estimate","name":"Estimate"}}}}"""
+                        : missingNormalField && body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal)
                         ? """{"data":{"node":{"field":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Notes"}]}"""
                         : normalSameName
-                        ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
+                        ? fieldByNameReturnsLinked
+                            ? """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}}}}"""
+                            : """{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"}}}}"""
                         : transientFieldByNameFailure
                         ? FieldByNameResponse()
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
@@ -607,7 +650,14 @@ public class ProjectImporterLogicTests
                             : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
                     existing
-                        ? requiresUpdate
+                        ? textIssueField
+                            ? """
+                              {"data":{"organization":{"issueFields":{"nodes":[{
+                                "__typename":"IssueFieldText","id":"IFT_teams","name":"Teams",
+                                "dataType":"TEXT","description":"Teams involved","visibility":"ALL"
+                              }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                              """
+                            : requiresUpdate
                             ? """
                               {"data":{"organization":{"issueFields":{"nodes":[{
                                 "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
@@ -675,6 +725,8 @@ public class ProjectImporterLogicTests
             NormalDataTypeQueryCount++;
             return transientNormalDataTypeFailure && NormalDataTypeQueryCount == 1
                 ? """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
+                : textIssueField
+                    ? """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"},{"id":"PVTF_linked_teams","dataType":"TEXT"}]}}"""
                 : """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}""";
         }
 

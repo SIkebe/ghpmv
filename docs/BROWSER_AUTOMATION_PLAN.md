@@ -14,6 +14,11 @@ M6/M7 は実装済みで、現行コードは `src/Ghpmv.Core/Browser/`、実 UI
 
 **大原則: 読めるものは GraphQL で読む。UI 操作は「API に無い読み取り」と「すべての書き込み」だけ。**
 
+Project fields are the exception while GitHub's public schema cannot resolve linked
+multi-select Issue Fields. Browser-assisted export reads the complete server-rendered
+`#memex-columns-data` catalog before API item export; API-only export fails closed when the
+public field connection cannot prove completeness.
+
 ### View のプロパティ別ソースマップ
 
 | プロパティ | export(読み) | import(書き) | 備考 |

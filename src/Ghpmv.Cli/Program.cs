@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using Ghpmv.Core;
 using Ghpmv.Core.Browser;
 using Ghpmv.Core.Export;
@@ -124,6 +125,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         ViewUiExporter? uiExporter = null;
         WorkflowUiExporter? workflowExporter = null;
         CollaboratorUiExporter? collaboratorExporter = null;
+        ProjectFieldUiExporter? fieldExporter = null;
         if (enableBrowserAutomation)
         {
             session = new BrowserSession(new BrowserSessionOptions
@@ -136,16 +138,19 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
             collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            fieldExporter = new ProjectFieldUiExporter(session) { OnProgress = Console.Error.WriteLine };
         }
 
         // Installs the browser enrichment hook for one project number.
         void SetBrowserHook(int number)
         {
-            if (uiExporter is null || workflowExporter is null || collaboratorExporter is null)
+            if (uiExporter is null || workflowExporter is null || collaboratorExporter is null || fieldExporter is null)
             {
                 return;
             }
 
+            exporter.CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                fieldExporter.ExportAsync(org, ownerType, number, viewNumber, ct);
             exporter.PostExportAsync = async (snapshot, ct) =>
             {
                 snapshot = await uiExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
@@ -198,7 +203,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException or ArgumentException or FormatException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException or TimeoutException or ArgumentException or FormatException or JsonException or KeyNotFoundException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -623,11 +628,15 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;
         CollaboratorUiExporter? collaboratorExporter = null;
+        ProjectFieldUiExporter? fieldExporter = null;
         if (session is not null)
         {
             viewExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
             collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            fieldExporter = new ProjectFieldUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            verifier.CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                fieldExporter.ExportAsync(org, ownerType, projectNumber, viewNumber, ct);
             verifier.PostExportAsync = async (target, ct) =>
             {
                 target = await viewExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
@@ -659,7 +668,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return report.ShouldFail(failOnWarning) ? 1 : 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException or JsonException or KeyNotFoundException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;

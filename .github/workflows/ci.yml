@@ -105,7 +105,19 @@ jobs:
             Write-Output $fixtureUrl
             $env:GHPMV_TEST_PROJECT_NUMBER = ([Uri]$fixtureUrl.Trim()).Segments[-1].TrimEnd('/')
           }
-          dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --logger trx
+          $resultsDirectory = 'tests/Ghpmv.Integration.Tests/TestResults/ci'
+          dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --results-directory $resultsDirectory --logger 'trx;LogFileName=integration.trx'
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:GHPMV_TEST_TOKEN)) {
+            [xml]$results = Get-Content (Join-Path $resultsDirectory 'integration.trx')
+            $skipped = @($results.SelectNodes("//*[local-name()='UnitTestResult' and @outcome='NotExecuted']"))
+            if ($skipped.Count -gt 0) {
+              $names = ($skipped | ForEach-Object { $_.testName }) -join ', '
+              throw "Credentialed integration tests must not skip tests. Skipped: $names"
+            }
+          }
       - name: Upload test result logs
         if: ${{ failure() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

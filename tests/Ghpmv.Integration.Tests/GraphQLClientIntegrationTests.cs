@@ -24,21 +24,34 @@ public class GraphQLClientIntegrationTests
     }
 
     [Fact]
-    public async Task Fixture_project_has_expected_title_and_custom_fields()
+    public async Task Fixture_project_export_is_complete_or_fails_closed()
     {
         using var client = new GitHubGraphQLClient(Token);
 
-        var snapshot = await new ProjectExporter(client).ExportAsync(
-            Org,
-            IntegrationTestSettings.FixtureProjectNumber,
-            TestContext.Current.CancellationToken);
-        Assert.False(string.IsNullOrWhiteSpace(snapshot.Project.Title));
-        var fieldNames = snapshot.Fields.Select(field => field.Name).ToList();
-
-        string[] expected = ["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint", "Fixture Teams"];
-        foreach (var name in expected)
+        try
         {
-            Assert.Contains(name, fieldNames);
+            var snapshot = await new ProjectExporter(client).ExportAsync(
+                Org,
+                IntegrationTestSettings.FixtureProjectNumber,
+                TestContext.Current.CancellationToken);
+            Assert.False(string.IsNullOrWhiteSpace(snapshot.Project.Title));
+            foreach (var fieldName in (string[])
+                     [
+                         "Fixture Text",
+                         "Fixture Number",
+                         "Fixture Date",
+                         "Fixture Select",
+                         "Fixture Sprint",
+                         "Fixture Teams",
+                     ])
+            {
+                Assert.Contains(snapshot.Fields, field => field.Name == fieldName);
+            }
+        }
+        catch (GitHubGraphQLException exception)
+        {
+            Assert.Contains("No snapshot was written", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("--enable-browser-automation", exception.Message, StringComparison.Ordinal);
         }
     }
 

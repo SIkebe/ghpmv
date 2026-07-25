@@ -12,6 +12,7 @@
 | View 設定メニュー | フィルターバーの `button "View"`(exact)| `menu > group "Configuration"` に `menuitem "Group by: <val>" / "Markers: <val>" / "Sort by: <val>" / "Dates: <val>" / "Zoom level: <val>" / "Slice by: <val>"`。**ラベルと現在値が name に結合**されるため部分一致(`name: /^Group by:/` 等)で特定する |
 | Roadmap 日付フィールド | `menuitem "Dates: ..."` → `dialog "Select date fields"` → group "Start date" / "Target date" の `menuitemradio` | Iteration フィールドは "<name> start" / "<name> end" の 2 radio に展開される |
 | View 設定の保存 | `button "Save view"` → **確認 alertdialog** "Save display options for <view>?" → `button "Save"` | 設定変更は「Unsaved changes」status で検出可能。保存は 2 段階 |
+| Project field catalog | `script#memex-columns-data` | 全フィールドの name / dataType / position / options / iteration configuration / `issueFieldId` を含む。hidden script のため attached state で待つ |
 | Workflow 一覧 | `/orgs/{org}/projects/{n}/workflows`。サイドバー `list "Default workflows"` 内の link | |
 | Workflow 編集 | `button "Edit"`(viewing mode)→ 編集 → `button "Save and turn on workflow"` | |
 | Auto-add フィルター | `combobox "Filters"`(編集時)/ `textbox "Filters" [disabled]`(閲覧時) | 閲覧モードでも値は読める(UI-export 可能) |
@@ -91,3 +92,4 @@ Important limitations:
 8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
 10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)
+11. **Project field の完全カタログは server-rendered JSON に存在する**: `script#memex-columns-data` は非表示・未使用の built-in/custom field も含み、linked Issue Field には `issueFieldId` が入る。fixture #37 では GraphQL fallback が 11 fields しか取得しなかった一方、このカタログは 20 fields を返した。browser-assisted export/verify はこのJSONを主経路にし、public GraphQL field connectionを呼ばない

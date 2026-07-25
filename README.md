@@ -170,7 +170,7 @@ Creating a new project emits `result=created`. The result line also includes the
 
 Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `ghpmv` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
 
-Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Issue Field link, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending.
+Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending. Project-to-Issue-Field linking is idempotent: a pending link is resent with its recorded client mutation ID and cleared after a definitive success. Resume stops for manual reconciliation if the recorded project or Issue Field no longer matches the current target.
 
 If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
 
@@ -198,6 +198,11 @@ ghpmv export --org source-org --project 7 --out ./snapshot --enable-browser-auto
 ghpmv import --org target-org --in ./snapshot --enable-browser-automation
 ghpmv verify --org target-org --project 12 --in ./snapshot --enable-browser-automation
 ```
+
+Browser-assisted export and verify also read the complete server-rendered Project field
+catalog. This avoids a current GitHub GraphQL failure on Projects containing linked
+multi-select Issue Fields and retains hidden or unset fields. If the public field connection
+fails in API-only mode, `ghpmv` exits without writing or comparing a partial snapshot.
 
 ### Cross-account migration (e.g. non-EMU source → EMU target)
 

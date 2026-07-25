@@ -4,6 +4,8 @@ namespace Ghpmv.Integration.Tests;
 
 internal static class IntegrationTestSettings
 {
+    public const int FixturePullRequestNumber = 3;
+
     public static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG")
         ?? Environment.GetEnvironmentVariable("GHPMV_SOURCE_ORG")
         ?? "gpm-source";

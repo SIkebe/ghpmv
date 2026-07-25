@@ -259,7 +259,7 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
-    public async Task Ambiguous_issue_field_link_is_adopted_without_resending()
+    public async Task Ambiguous_issue_field_link_is_resumed_with_an_idempotent_mutation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-link-resume-").FullName;
@@ -279,7 +279,7 @@ public class ProjectImporterResumeTests
             var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
 
             Assert.False(result.FieldIds.ContainsKey("Teams"));
-            Assert.Equal(1, handler.LinkCreateMutationCount);
+            Assert.Equal(2, handler.LinkCreateMutationCount);
             Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
         }
         finally
@@ -289,7 +289,7 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
-    public async Task Issue_field_link_reconciliation_rejects_multiple_candidates()
+    public async Task Issue_field_link_resume_does_not_depend_on_broken_field_enumeration()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-link-duplicates-").FullName;
@@ -304,12 +304,11 @@ public class ProjectImporterResumeTests
 
             handler.Resume = true;
             handler.ReturnDuplicates = true;
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+            var result = await importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken);
 
-            Assert.Contains("multiple new project fields", exception.Message, StringComparison.Ordinal);
-            Assert.Equal(1, handler.LinkCreateMutationCount);
-            Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
+            Assert.False(result.FieldIds.ContainsKey("Teams"));
+            Assert.Equal(2, handler.LinkCreateMutationCount);
+            Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFieldLinks);
         }
         finally
         {
@@ -512,9 +511,18 @@ public class ProjectImporterResumeTests
                     : Json("""{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_created","name":"Teams"}]}}}}""");
             }
 
+            if (query.Contains("field(name:", StringComparison.Ordinal))
+            {
+                return ambiguousFieldCreate && Resume
+                    ? Json("""{"data":{"node":{"field":{"__typename":"ProjectV2Field","id":"PVTF_normal_teams","name":"Teams"}}}}""")
+                    : Json("""{"data":{"node":{"field":null}}}""");
+            }
+
             if (query.Contains("nodes(ids:", StringComparison.Ordinal))
             {
-                return Json("""{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""");
+                return ambiguousFieldCreate && Resume
+                    ? Json("""{"data":{"nodes":[{"id":"PVTF_normal_teams","dataType":"TEXT"}]}}""")
+                    : Json("""{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""");
             }
 
             if (query.Contains("issueFields(first:", StringComparison.Ordinal))
@@ -560,7 +568,7 @@ public class ProjectImporterResumeTests
             if (query.Contains("createProjectV2IssueField(", StringComparison.Ordinal))
             {
                 LinkCreateMutationCount++;
-                if (!ambiguousFieldCreate)
+                if (!ambiguousFieldCreate && !Resume)
                 {
                     var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);
                     PendingWasPresentAtMutation = log.PendingIssueFieldLinks.Count == 1;

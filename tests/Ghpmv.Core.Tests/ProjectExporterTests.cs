@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Tests;
 
@@ -263,7 +264,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_falls_back_to_observed_field_names_when_preview_connection_fails()
+    public async Task Export_fails_instead_of_writing_an_incomplete_snapshot_when_field_enumeration_fails()
     {
         using var handler = new StubHandler(
             """
@@ -274,11 +275,7 @@ public class ProjectExporterTests
             """,
             """
             {"data":{"organization":{"projectV2":{"items":{
-              "nodes":[{"type":"ISSUE","isArchived":false,
-                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
-                "fieldValues":{"nodes":[
-                  {"__typename":"ProjectV2ItemFieldTextValue","text":"Ready","field":{"name":"Notes"}}
-                ]}}],
+              "nodes":[],
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
             """,
@@ -301,54 +298,6 @@ public class ProjectExporterTests
             {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
               {"message":"Something went wrong while executing your query on the preview API."}
             ]}
-            """,
-            """
-            {"data":{"organization":{"issueFields":{"nodes":[
-              {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
-               "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
-               "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]}
-            ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":{
-              "__typename":"ProjectV2Field","id":"PVTF_unobserved","name":"Unobserved"
-            }}}}}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"type":"NOT_FOUND","message":"Could not resolve to a Unions::ProjectV2FieldConfiguration with the name Missing"}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":null}}},"errors":[
-              {"message":"Something went wrong while executing your query on the preview API."}
-            ]}
-            """,
-            """
-            {"data":{"organization":{"projectV2":{"field":{
-              "__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"
-            }}}}}
-            """,
-            """
-            {"data":{"nodes":[
-              {"id":"PVTF_unobserved","dataType":"NUMBER"},
-              {"id":"PVTF_notes","dataType":"TEXT"}
-            ]}}
             """);
         using var client = new GitHubGraphQLClient(
             "dummy-token",
@@ -356,24 +305,267 @@ public class ProjectExporterTests
             handler,
             delayAsync: static (_, _) => Task.CompletedTask);
 
-        var snapshot = await new ProjectExporter(client)
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client).ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("No snapshot was written", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("--enable-browser-automation", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(6, handler.RequestBodies.Count);
+    }
+
+    [Theory]
+    [InlineData("MULTI_SELECT", false, true)]
+    [InlineData("TEXT", false, false)]
+    [InlineData("MULTI_SELECT", true, false)]
+    public async Task Export_enriches_only_type_matching_linked_catalog_entries(
+        string linkedDataType,
+        bool duplicateOrdinaryField,
+        bool shouldSucceed)
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"issueFields":{"nodes":[
+              {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+               "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+               "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]}
+            ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        int? requestedView = null;
+        var entries = new List<ProjectFieldCatalogEntry>
         {
-            FieldNameHints = ["Unobserved", "Missing", "Teams"],
-        }.ExportAsync(
+            new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+            new(new FieldSnapshot { Name = "Hidden", DataType = "TEXT" }, false),
+            new(new FieldSnapshot { Name = "Teams", DataType = "TEXT" }, false),
+            new(
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = linkedDataType,
+                    Options = [],
+                },
+                true),
+        };
+        if (duplicateOrdinaryField)
+        {
+            entries.Add(new(new FieldSnapshot { Name = "Teams", DataType = "NUMBER" }, false));
+        }
+
+        var catalog = new ProjectFieldCatalog { Entries = entries };
+
+        var exporter = new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (viewNumber, _) =>
+            {
+                requestedView = viewNumber;
+                return Task.FromResult(catalog);
+            },
+        };
+        if (!shouldSucceed)
+        {
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => exporter.ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+            Assert.Contains(
+                duplicateOrdinaryField
+                    ? "duplicate field identity 'Teams' (ordinary)"
+                    : "organization Issue Field catalog reported MULTI_SELECT",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.Equal(duplicateOrdinaryField ? 2 : 3, handler.RequestBodies.Count);
+            return;
+        }
+
+        var snapshot = await exporter.ExportAsync(
             "source",
             1,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("NUMBER", snapshot.Fields.Single(field => field.Name == "Unobserved").DataType);
-        Assert.Equal("TEXT", snapshot.Fields.Single(field => field.Name == "Notes").DataType);
-        Assert.Equal("MULTI_SELECT", snapshot.Fields.Single(field => field.Name == "Teams").DataType);
-        Assert.Equal(15, handler.RequestBodies.Count);
-        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Unobserved\"", StringComparison.Ordinal));
-        Assert.DoesNotContain(snapshot.Fields, field => field.Name == "Missing");
-        Assert.Contains(handler.RequestBodies, body => body.Contains("\"name\":\"Notes\"", StringComparison.Ordinal));
-        Assert.Equal(
-            4,
-            handler.RequestBodies.Count(body => body.Contains("\"name\":\"Teams\"", StringComparison.Ordinal)));
+        Assert.Equal(3, requestedView);
+        Assert.Equal(["Title", "Hidden", "Teams", "Teams"], snapshot.Fields.Select(field => field.Name));
+        var ordinaryTeams = snapshot.Fields.Single(field => field.Name == "Teams" && field.IssueField is null);
+        Assert.Equal("TEXT", ordinaryTeams.DataType);
+        var linkedTeams = snapshot.Fields.Single(field => field.Name == "Teams" && field.IssueField is not null);
+        Assert.Equal("Teams involved", linkedTeams.IssueField!.Description);
+        Assert.Equal(["SDK"], linkedTeams.Options!.Select(option => option.Name));
+        Assert.Equal(3, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Export_rejects_item_issue_fields_not_linked_by_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"ISSUE","isArchived":false,
+                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemIssueFieldValue",
+                  "field":{"name":"Teams"},
+                  "issueFieldValue":{
+                    "__typename":"IssueFieldMultiSelectValue",
+                    "options":[{"name":"SDK"}]
+                  }
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Entries =
+            [
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Teams", DataType = "MULTI_SELECT", Options = [] }, false),
+            ],
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("Teams", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("linked field", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain that identity", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Export_rejects_item_field_identities_missing_from_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"DRAFT_ISSUE","isArchived":false,
+                "content":{"title":"Draft","body":null,"creator":null,"createdAt":null,"assignees":{"nodes":[]}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemFieldTextValue",
+                  "field":{"name":"Notes"},"text":"Observed"
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Entries =
+            [
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Notes", DataType = "TEXT" }, true),
+            ],
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync("source", 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("Notes", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("ordinary", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain that identity", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Export_rejects_view_fields_missing_from_the_complete_catalog()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[{"name":"Priority"}]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Entries = [new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false)],
+        };
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client)
+            {
+                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+            }.ExportAsync("source", 1, TestContext.Current.CancellationToken));
+
+        Assert.Contains("Priority", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("did not contain it", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.RequestBodies.Count);
     }
 
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler

@@ -1,3 +1,5 @@
+using Ghpmv.Core.Export;
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.GitHub;
 
@@ -5,6 +7,98 @@ namespace Ghpmv.Integration.Tests;
 
 internal static class IntegrationFixtureSnapshot
 {
+    public static async Task<ProjectSnapshot> CreateKnownAsync(
+        GitHubGraphQLClient client,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        var viewerLogin = await client.GetViewerLoginAsync(cancellationToken);
+        return NormalizeKnownSnapshot(
+            FixtureProjectBuilder.CreateSnapshot(
+                "gpm-fixture",
+                IntegrationTestSettings.FixtureRepositoryFullName,
+                viewerLogin,
+                IntegrationTestSettings.FixturePullRequestNumber),
+            viewerLogin);
+    }
+
+    internal static ProjectSnapshot NormalizeKnownSnapshot(
+        ProjectSnapshot snapshot,
+        string viewerLogin)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewerLogin);
+        return snapshot with
+        {
+            Fields =
+            [
+                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
+                new FieldSnapshot { Name = "Assignees", DataType = "ASSIGNEES" },
+                new FieldSnapshot { Name = "Linked pull requests", DataType = "LINKED_PULL_REQUESTS" },
+                new FieldSnapshot { Name = "Sub-issues progress", DataType = "SUB_ISSUES_PROGRESS" },
+                .. snapshot.Fields.Where(field =>
+                    !string.Equals(field.Name, "Title", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Assignees", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Linked pull requests", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Sub-issues progress", StringComparison.Ordinal)),
+            ],
+            Items = snapshot.Items.Select(item =>
+            {
+                var values = item.FieldValues
+                    .Select(value => value with { IsIssueField = value.IsIssueField ?? false })
+                    .ToList();
+                var title = item.Draft?.Title ?? item.Type switch
+                {
+                    "ISSUE" => $"Fixture issue {item.Number}",
+                    "PULL_REQUEST" => "Fixture pull request",
+                    _ => null,
+                };
+                if (title is not null
+                    && !values.Any(value => string.Equals(value.FieldName, "Title", StringComparison.Ordinal)))
+                {
+                    values.Insert(0, new FieldValueSnapshot
+                    {
+                        FieldName = "Title",
+                        IsIssueField = false,
+                        Text = title,
+                    });
+                }
+
+                return item with
+                {
+                    Draft = item.Draft is null
+                        ? null
+                        : item.Draft with { Creator = item.Draft.Creator ?? viewerLogin },
+                    FieldValues = values,
+                };
+            }).ToArray(),
+        };
+    }
+
+    public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return new ProjectFieldCatalog
+        {
+            Entries =
+            [
+                .. snapshot.Fields.Select(field =>
+                    new ProjectFieldCatalogEntry(field, field.IssueField is not null)),
+            ],
+        };
+    }
+
+    public static ProjectExporter CreateKnownCatalogExporter(
+        GitHubGraphQLClient client,
+        ProjectSnapshot snapshot)
+    {
+        var catalog = CreateFieldCatalog(snapshot);
+        return new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        };
+    }
+
     public static ProjectSnapshot SelectCanonicalItems(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
