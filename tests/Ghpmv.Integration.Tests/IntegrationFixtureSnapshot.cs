@@ -13,35 +13,64 @@ internal static class IntegrationFixtureSnapshot
     {
         ArgumentNullException.ThrowIfNull(client);
         var viewerLogin = await client.GetViewerLoginAsync(cancellationToken);
-        return NormalizeKnownSnapshot(FixtureProjectBuilder.CreateSnapshot(
-            "gpm-fixture",
-            IntegrationTestSettings.FixtureRepositoryFullName,
-            viewerLogin,
-            IntegrationTestSettings.FixturePullRequestNumber));
+        return NormalizeKnownSnapshot(
+            FixtureProjectBuilder.CreateSnapshot(
+                "gpm-fixture",
+                IntegrationTestSettings.FixtureRepositoryFullName,
+                viewerLogin,
+                IntegrationTestSettings.FixturePullRequestNumber),
+            viewerLogin);
     }
 
-    internal static ProjectSnapshot NormalizeKnownSnapshot(ProjectSnapshot snapshot)
+    internal static ProjectSnapshot NormalizeKnownSnapshot(
+        ProjectSnapshot snapshot,
+        string viewerLogin)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewerLogin);
         return snapshot with
         {
+            Fields =
+            [
+                new FieldSnapshot { Name = "Title", DataType = "TITLE" },
+                new FieldSnapshot { Name = "Assignees", DataType = "ASSIGNEES" },
+                new FieldSnapshot { Name = "Linked pull requests", DataType = "LINKED_PULL_REQUESTS" },
+                new FieldSnapshot { Name = "Sub-issues progress", DataType = "SUB_ISSUES_PROGRESS" },
+                .. snapshot.Fields.Where(field =>
+                    !string.Equals(field.Name, "Title", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Assignees", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Linked pull requests", StringComparison.Ordinal)
+                    && !string.Equals(field.Name, "Sub-issues progress", StringComparison.Ordinal)),
+            ],
             Items = snapshot.Items.Select(item =>
             {
                 var values = item.FieldValues
                     .Select(value => value with { IsIssueField = value.IsIssueField ?? false })
                     .ToList();
-                if (item.Draft is not null
+                var title = item.Draft?.Title ?? item.Type switch
+                {
+                    "ISSUE" => $"Fixture issue {item.Number}",
+                    "PULL_REQUEST" => "Fixture pull request",
+                    _ => null,
+                };
+                if (title is not null
                     && !values.Any(value => string.Equals(value.FieldName, "Title", StringComparison.Ordinal)))
                 {
                     values.Insert(0, new FieldValueSnapshot
                     {
                         FieldName = "Title",
                         IsIssueField = false,
-                        Text = item.Draft.Title,
+                        Text = title,
                     });
                 }
 
-                return item with { FieldValues = values };
+                return item with
+                {
+                    Draft = item.Draft is null
+                        ? null
+                        : item.Draft with { Creator = item.Draft.Creator ?? viewerLogin },
+                    FieldValues = values,
+                };
             }).ToArray(),
         };
     }
@@ -49,13 +78,9 @@ internal static class IntegrationFixtureSnapshot
     public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var fields = snapshot.Fields.Any(field =>
-            string.Equals(field.Name, "Title", StringComparison.Ordinal))
-                ? snapshot.Fields
-                : [new FieldSnapshot { Name = "Title", DataType = "TITLE" }, .. snapshot.Fields];
         return new ProjectFieldCatalog
         {
-            Fields = fields,
+            Fields = snapshot.Fields,
             IssueFieldNames = snapshot.Fields
                 .Where(field => field.IssueField is not null)
                 .Select(field => field.Name)
