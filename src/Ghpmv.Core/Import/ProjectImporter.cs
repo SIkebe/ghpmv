@@ -1145,6 +1145,9 @@ public sealed class ProjectImporter
         }
         catch (GitHubGraphQLException exception) when (IsPreviewFieldInternalError(exception))
         {
+            OnProgress?.Invoke(
+                "GitHub's preview API could not enumerate this project's fields because it contains linked Issue Fields. " +
+                "Querying the snapshot's fields individually before applying changes.");
             nodes = await FetchFieldNodesByNameAsync(projectId, cancellationToken).ConfigureAwait(false);
         }
 
@@ -1248,7 +1251,13 @@ public sealed class ProjectImporter
                 _snapshotMultiSelectIssueFieldNames.Contains(name)
                 && IsPreviewFieldInternalError(exception))
             {
-                _knownLinkedIssueFieldNames.Add(name);
+                if (_knownLinkedIssueFieldNames.Add(name))
+                {
+                    OnProgress?.Invoke(
+                        $"GitHub's preview API consistently could not inspect linked multi-select Issue Field '{name}'. " +
+                        "Continuing import reconciliation with the organization Issue Field metadata.");
+                }
+
                 continue;
             }
             catch (GitHubGraphQLException exception) when (IsMissingProjectFieldError(exception))

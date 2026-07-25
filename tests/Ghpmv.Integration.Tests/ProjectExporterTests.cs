@@ -5,8 +5,9 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M2 integration tests: exports the fixture project (gpm-source #3) via the real
-/// GraphQL API and verifies the snapshot contents against the known fixture state.
+/// M2 integration tests: exports the fixture project through the real GraphQL metadata
+/// and item connections while supplying the known field catalog that the public field
+/// connection cannot enumerate. API-only fail-closed behavior is covered separately.
 /// Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized for the test orgs).
 /// Skipped when the variable is not set (e.g. fork PRs without secrets).
 /// </summary>
@@ -28,54 +29,38 @@ public class ProjectExporterTests
 
     private static async Task<ProjectSnapshot> ExportFixtureAsync()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
-        var exporter = new ProjectExporter(client);
-        try
+        var catalog = await CreateFixtureCatalogAsync(client, cancellationToken);
+        var snapshot = await new ProjectExporter(client)
         {
-            var snapshot = await exporter.ExportAsync(Org, FixtureProjectNumber, TestContext.Current.CancellationToken);
-            return IntegrationFixtureSnapshot.SelectCanonicalItems(snapshot);
-        }
-        catch (GitHubGraphQLException exception) when (IsExpectedFieldEnumerationFailure(exception))
-        {
-            Assert.Skip("GitHub cannot enumerate the fixture fields through the public API; browser coverage verifies the complete export path.");
-            return null!;
-        }
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        }.ExportAsync(Org, FixtureProjectNumber, cancellationToken);
+        return IntegrationFixtureSnapshot.SelectCanonicalItems(snapshot);
     }
 
     [Fact]
-    public async Task Bulk_export_writes_one_snapshot_directory_per_project()
+    public async Task Listed_project_export_writes_a_numbered_snapshot_directory()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
-        var exporter = new ProjectExporter(client);
+        var catalog = await CreateFixtureCatalogAsync(client, cancellationToken);
+        var exporter = new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        };
 
         var entries = await exporter.ListProjectsAsync(Org, includeClosed: false, cancellationToken);
-        Assert.Contains(entries, e => e.Number == FixtureProjectNumber && !e.Closed);
+        var entry = Assert.Single(entries, candidate =>
+            candidate.Number == FixtureProjectNumber && !candidate.Closed);
 
         var outDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-bulk-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // Same loop the CLI runs when --project is omitted.
-            var snapshots = new List<ProjectSnapshot>();
-            foreach (var entry in entries)
-            {
-                ProjectSnapshot snapshot;
-                try
-                {
-                    snapshot = await exporter.ExportAsync(Org, entry.Number, cancellationToken);
-                }
-                catch (GitHubGraphQLException exception) when (IsExpectedFieldEnumerationFailure(exception))
-                {
-                    Assert.Skip("GitHub cannot enumerate every listed project's fields through the public API.");
-                    return;
-                }
-
-                var directory = Path.Combine(outDirectory, entry.Number.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
-                snapshots.Add(snapshot);
-            }
-
-            await MappingTemplates.WriteAsync(snapshots, outDirectory, cancellationToken: cancellationToken);
+            var snapshot = await exporter.ExportAsync(Org, entry.Number, cancellationToken);
+            var directory = Path.Combine(outDirectory, entry.Number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+            await MappingTemplates.WriteAsync([snapshot], outDirectory, cancellationToken: cancellationToken);
 
             Assert.True(File.Exists(Path.Combine(outDirectory, FixtureProjectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture), SnapshotFile.FileName)));
             Assert.True(File.Exists(Path.Combine(outDirectory, MappingTemplates.RepositoryMappingFileName)));
@@ -96,10 +81,6 @@ public class ProjectExporterTests
             }
         }
     }
-
-    private static bool IsExpectedFieldEnumerationFailure(GitHubGraphQLException exception)
-        => exception.Message.Contains("No snapshot was written", StringComparison.Ordinal)
-            && exception.Message.Contains("--enable-browser-automation", StringComparison.Ordinal);
 
     [Fact]
     public async Task Export_has_schema_version_and_project_metadata()
@@ -130,55 +111,16 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_contains_all_fixture_fields_with_options_and_iterations()
+    public async Task Export_enriches_the_fixture_issue_field_from_the_live_organization_catalog()
     {
         var snapshot = await ExportFixtureAsync();
-
-        var fieldNames = snapshot.Fields.Select(f => f.Name).ToList();
-        foreach (var name in (string[])["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint", "Fixture Teams"])
-        {
-            Assert.Contains(name, fieldNames);
-        }
-
-        Assert.Equal("TEXT", snapshot.Fields.Single(f => f.Name == "Fixture Text").DataType);
-        Assert.Equal("NUMBER", snapshot.Fields.Single(f => f.Name == "Fixture Number").DataType);
-        Assert.Equal("DATE", snapshot.Fields.Single(f => f.Name == "Fixture Date").DataType);
-
-        var select = snapshot.Fields.Single(f => f.Name == "Fixture Select");
-        Assert.Equal("SINGLE_SELECT", select.DataType);
-        Assert.NotNull(select.Options);
-        Assert.Equal(["Alpha", "Beta", "Gamma"], select.Options.Select(o => o.Name));
-        Assert.Equal(["RED", "BLUE", "GREEN"], select.Options.Select(o => o.Color));
 
         var teams = snapshot.Fields.Single(f => f.Name == "Fixture Teams");
         Assert.Equal("MULTI_SELECT", teams.DataType);
         Assert.NotNull(teams.IssueField);
         Assert.Equal("ALL", teams.IssueField.Visibility);
+        Assert.Equal("Teams involved in the issue", teams.IssueField.Description);
         Assert.Equal(["Platform", "SDK", "Docs"], teams.Options!.Select(o => o.Name));
-
-        var sprint = snapshot.Fields.Single(f => f.Name == "Fixture Sprint");
-        Assert.Equal("ITERATION", sprint.DataType);
-        Assert.NotNull(sprint.IterationConfiguration);
-        Assert.Equal(14, sprint.IterationConfiguration.Duration);
-
-        // Sprint 0 is past-dated, so the API must classify it into completedIterations.
-        var sprint0 = Assert.Single(sprint.IterationConfiguration.CompletedIterations, i => i.Title == "Sprint 0");
-        Assert.Equal(14, sprint0.Duration);
-        Assert.True(
-            DateTime.Parse(sprint0.StartDate, System.Globalization.CultureInfo.InvariantCulture).AddDays(sprint0.Duration) < DateTime.UtcNow.Date.AddDays(1),
-            $"Sprint 0 ({sprint0.StartDate} + {sprint0.Duration}d) should have ended in the past");
-
-        // Iterations move to completedIterations as time passes, so check the union.
-        var allIterations = sprint.IterationConfiguration.Iterations
-            .Concat(sprint.IterationConfiguration.CompletedIterations)
-            .ToList();
-        Assert.Equal(4, allIterations.Count);
-        foreach (var title in (string[])["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3"])
-        {
-            var iteration = Assert.Single(allIterations, i => i.Title == title);
-            Assert.Equal(14, iteration.Duration);
-            Assert.False(string.IsNullOrWhiteSpace(iteration.StartDate));
-        }
     }
 
     [Fact]
@@ -318,4 +260,19 @@ public class ProjectExporterTests
 
     private static FieldValueSnapshot? ValueOf(ItemSnapshot item, string fieldName)
         => item.FieldValues.FirstOrDefault(v => v.FieldName == fieldName);
+
+    private static async Task<ProjectFieldCatalog> CreateFixtureCatalogAsync(
+        GitHubGraphQLClient client,
+        CancellationToken cancellationToken)
+    {
+        var knownSnapshot = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
+        var catalog = IntegrationFixtureSnapshot.CreateFieldCatalog(knownSnapshot);
+        return catalog with
+        {
+            Fields = catalog.Fields.Select(field =>
+                string.Equals(field.Name, "Fixture Teams", StringComparison.Ordinal)
+                    ? field with { Options = [], IssueField = null }
+                    : field).ToArray(),
+        };
+    }
 }

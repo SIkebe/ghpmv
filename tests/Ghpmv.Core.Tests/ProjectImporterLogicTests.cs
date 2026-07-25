@@ -198,9 +198,11 @@ public class ProjectImporterLogicTests
                     },
                 ],
             };
+            var progress = new List<string>();
             var importer = new ProjectImporter(client)
             {
                 OperationLogDirectory = directory,
+                OnProgress = progress.Add,
             };
 
             var result = await importer.ImportIntoAsync(
@@ -219,6 +221,16 @@ public class ProjectImporterLogicTests
             Assert.DoesNotContain("id name dataType", fieldsQuery, StringComparison.Ordinal);
             Assert.DoesNotContain("options", fieldsQuery, StringComparison.Ordinal);
             Assert.Contains("ProjectV2FieldCommon", fieldsQuery, StringComparison.Ordinal);
+            Assert.Contains(
+                progress,
+                message => message.Contains(
+                    "Querying the snapshot's fields individually before applying changes",
+                    StringComparison.Ordinal));
+            Assert.Contains(
+                progress,
+                message => message.Contains(
+                    "Continuing import reconciliation with the organization Issue Field metadata",
+                    StringComparison.Ordinal));
         }
         finally
         {
