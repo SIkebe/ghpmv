@@ -89,4 +89,17 @@ public class ProjectFieldUiExporterTests
         Assert.Contains("issueFieldId", exception.Message, StringComparison.Ordinal);
         Assert.Contains("scalar ID", exception.Message, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ParseCatalog_rejects_missing_issue_field_id_members()
+    {
+        Assert.Throws<KeyNotFoundException>(() =>
+            ProjectFieldUiExporter.ParseCatalog(
+                """
+                [{
+                  "dataType":"text","id":1,"name":"Notes","position":1,
+                  "settings":null
+                }]
+                """));
+    }
 }

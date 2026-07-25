@@ -89,8 +89,8 @@ public sealed class ProjectFieldUiExporter
                     ? ParseIterationConfiguration(settings)
                     : null,
             };
-            var isIssueField = element.TryGetProperty("issueFieldId", out var issueFieldId)
-                && issueFieldId.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
+            var issueFieldId = element.GetProperty("issueFieldId");
+            var isIssueField = issueFieldId.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
             if (isIssueField)
             {
                 _ = RequiredScalarString(element, "issueFieldId");
