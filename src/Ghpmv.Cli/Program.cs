@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
+using System.Text.Json;
 using Ghpmv.Core;
 using Ghpmv.Core.Browser;
 using Ghpmv.Core.Export;
@@ -202,7 +203,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException or TimeoutException or ArgumentException or FormatException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or PlaywrightException or TimeoutException or ArgumentException or FormatException or JsonException or KeyNotFoundException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -667,7 +668,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return report.ShouldFail(failOnWarning) ? 1 : 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException or JsonException or KeyNotFoundException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
