@@ -299,7 +299,17 @@ public class BrowserRoundTripTests
         await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
 
         // Export the fixture with workflow UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(client);
+        var sourceFieldExporter = new ProjectFieldUiExporter(session);
+        var exporter = new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                sourceFieldExporter.ExportAsync(
+                    SourceOrg,
+                    ProjectOwnerType.Organization,
+                    FixtureProjectNumber,
+                    viewNumber,
+                    ct),
+        };
         var workflowExporter = new WorkflowUiExporter(session);
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await workflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
@@ -341,8 +351,16 @@ public class BrowserRoundTripTests
 
             var reExportUi = new WorkflowUiExporter(session);
             ProjectSnapshot? reExported = null;
+            var targetFieldExporter = new ProjectFieldUiExporter(session);
             var verifier = new ProjectVerifier(client)
             {
+                CompleteFieldCatalogProviderAsync = (viewNumber, ct) =>
+                    targetFieldExporter.ExportAsync(
+                        TargetOrg,
+                        ProjectOwnerType.Organization,
+                        result.ProjectNumber,
+                        viewNumber,
+                        ct),
                 PostExportAsync = async (target, ct) =>
                 {
                     reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
