@@ -1185,21 +1185,22 @@ public sealed class ProjectImporter
         }
 
         var unresolvedSameNamedNormalField = _snapshotNormalFieldNames
-            .Intersect(_targetMultiSelectIssueFieldNames, StringComparer.Ordinal)
+            .Intersect(_targetIssueFieldNames, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .FirstOrDefault(name =>
             {
                 var sameNamedCandidates = candidates.Where(candidate =>
-                    string.Equals(candidate.GetProperty("name").GetString(), name, StringComparison.Ordinal));
-                return sameNamedCandidates.Any()
-                    && !sameNamedCandidates.Any(candidate =>
-                        dataTypes.ContainsKey(candidate.GetProperty("id").GetString() ?? string.Empty));
+                    string.Equals(candidate.GetProperty("name").GetString(), name, StringComparison.Ordinal)).ToArray();
+                return sameNamedCandidates.Length > 0
+                    && (!_targetMultiSelectIssueFieldNames.Contains(name)
+                        || !sameNamedCandidates.Any(candidate =>
+                            dataTypes.ContainsKey(candidate.GetProperty("id").GetString() ?? string.Empty)));
             });
         if (unresolvedSameNamedNormalField is not null)
         {
             throw new GitHubGraphQLException(
                 $"GitHub's preview API could not identify ordinary field '{unresolvedSameNamedNormalField}' separately " +
-                "from a same-named linked multi-select Issue Field. Reconcile the target manually before importing.");
+                "from a same-named linked Issue Field. Reconcile the target manually before importing.");
         }
 
         return

@@ -242,7 +242,7 @@ public class ProjectImporterLogicTests
     }
 
     [Theory]
-    [InlineData("TEXT", true, "IFT_teams", false, true)]
+    [InlineData("TEXT", true, "IFT_teams", false, false)]
     [InlineData("MULTI_SELECT", false, "IFM_teams", false, true)]
     [InlineData("MULTI_SELECT", false, "IFM_teams", true, false)]
     public async Task Import_reconciles_same_named_normal_and_issue_fields_by_identity(
@@ -725,6 +725,8 @@ public class ProjectImporterLogicTests
             NormalDataTypeQueryCount++;
             return transientNormalDataTypeFailure && NormalDataTypeQueryCount == 1
                 ? """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}"""
+                : textIssueField
+                    ? """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"},{"id":"PVTF_linked_teams","dataType":"TEXT"}]}}"""
                 : """{"data":{"nodes":[{"id":"PVTF_teams","dataType":"TEXT"}]}}""";
         }
 
