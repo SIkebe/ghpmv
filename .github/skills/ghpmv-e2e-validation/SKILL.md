@@ -134,6 +134,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | source / target token environment variable | `SOURCE_TOKEN`, `TARGET_TOKEN` |
 | target user login | EMU suffixを含む実 login |
 | repository preparation mode | `GEI` または `fixture-seed` |
+| source / target empty-repository fallback | side ごとの `selected` または `not-selected` |
 | GEI source / destination role status | `owner`, `migrator-active`, `migrator-pending` |
 | validation mode | `build-only`, `baseline-full`, `read-only`, `api-only`, `browser-e2e` |
 | fixture preparation | `existing` または `create` |
@@ -426,7 +427,7 @@ finally {
 
 fine-grained PAT の **Administration** または **All repositories** を付与できない場合だけ、空 repository を先に作成し、その repository を選択した token に Administration 以外の fixture 権限を付ける。
 
-この fallback を選んだ場合は、repository に commit / file / Issue がないことをユーザーに明示確認し、fixture command に `--fixture-require-new --fixture-allow-existing-empty-repo` を指定する。CLI は新規 Project title を必須のまま維持し、既存 repository の contents と Issue が空であることを読み取り確認してからだけ fixture write を許可する。通常経路では `--fixture-allow-existing-empty-repo` を付けない。
+この fallback を選んだ場合は、選択した side の `empty-repository fallback` だけを `selected` と記録し、repository に commit / file / Issue がないことをユーザーに明示確認する。その side の fixture command に `--fixture-require-new --fixture-allow-existing-empty-repo` を指定する。CLI は新規 Project title を必須のまま維持し、既存 repository の contents と Issue が空であることを読み取り確認してからだけ fixture write を許可する。通常経路と、fallback を選んでいない反対 side には `--fixture-allow-existing-empty-repo` を付けない。
 
 ## Step 5: Source fixture
 
@@ -457,7 +458,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
 
 source が data residency の場合は `--api-base-url <source-api-url>` を追加する。`browser-e2e` の `--fixture-ui` にはさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
 
-空 repository fallback を選択済みの場合だけ、上記 command に次も追加する。
+`source empty-repository fallback` が `selected` の場合だけ、上記 source command に次も追加する。
 
 ```powershell
 --fixture-allow-existing-empty-repo
@@ -595,7 +596,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
 
 target が data residency の場合は `--api-base-url <target-api-url>` を追加する。
 
-空 repository fallback を選択済みの場合だけ、上記 command に `--fixture-allow-existing-empty-repo` も追加する。
+`target empty-repository fallback` が `selected` の場合だけ、上記 target command に `--fixture-allow-existing-empty-repo` も追加する。
 
 target 側の `setup --fixture-ui` は不要。
 
