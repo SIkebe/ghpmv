@@ -16,7 +16,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 ## 最重要原則
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
-2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付け、login、organization、repository 名などの自由入力では choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
+2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付ける。resource 名など安全な推奨値を生成できる項目は、推奨値を最初の choice として `(Recommended)` を付け、別名は質問カードの自由入力で受け付ける。推奨値を安全に決められない login、organization、既存 repository 名などだけ choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
 3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
@@ -400,7 +400,14 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 `api-only` または `browser-e2e` で `fixture preparation` が `create` の場合だけ実行する。`read-only` と `existing` の経路ではスキップし、source resource を作成しない。
 
-source organization、衝突しない fixture title / repository name を一つずつ確認する。作成物を説明してから実行する。
+source organization を確定した後、validation run ごとに `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成し、以後 source / target の resource 名で共用する。
+
+source fixture title と repository name は一つずつ確認するが、空の自由入力カードにしない。次の推奨値を各質問カードの最初の choice として表示し、choice label には `(Recommended)` を付ける。
+
+- fixture title: `ghpmv E2E source <run-id>`
+- repository name: `ghpmv-e2e-source-<run-id>`
+
+質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。推奨値またはユーザー入力値が source organization 内で既存 resource と衝突しないことを API で確認してから実行する。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
@@ -494,6 +501,13 @@ target repository full name を記録し、target の Issue / PR number が sour
 ### Fixture seed
 
 `ghpmv` 自体の短時間デモ用であり、GEI の検証にはならず、補助 Project が一つ増えることを説明してから実行する。
+
+target seed title と repository name も空の自由入力カードにしない。Step 5 で生成した同じ run ID を使い、次の推奨値を各質問カードの最初の choice として `(Recommended)` 付きで表示する。
+
+- target seed title: `ghpmv E2E target seed <run-id>`
+- target repository name: `ghpmv-e2e-target-<run-id>`
+
+別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。target organization 内で既存 resource と衝突しないことを API で確認する。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
