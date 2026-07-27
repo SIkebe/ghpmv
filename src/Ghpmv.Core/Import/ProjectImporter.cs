@@ -557,20 +557,6 @@ public sealed class ProjectImporter
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
 
-    private static void ValidateProjectFieldContracts(ProjectSnapshot snapshot)
-    {
-        var invalidMultiSelect = snapshot.Fields.FirstOrDefault(field =>
-            field.IssueField is null
-            && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal)
-            && field.Options is not { Count: > 0 });
-        if (invalidMultiSelect is not null)
-        {
-            throw new InvalidDataException(
-                $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
-                "GitHub requires at least one option when creating the field and ignores empty option updates.");
-        }
-    }
-
     private async Task MarkOwnedImportIncompleteAsync(string projectId, CancellationToken cancellationToken)
     {
         if (_operationLog?.CreatedProjectId is not { } createdProjectId
@@ -649,8 +635,22 @@ public sealed class ProjectImporter
             _operationLog.ImportCompleted = false;
             await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
         }
+
         return project;
-        return project;
+    }
+
+    private static void ValidateProjectFieldContracts(ProjectSnapshot snapshot)
+    {
+        var invalidMultiSelect = snapshot.Fields.FirstOrDefault(field =>
+            field.IssueField is null
+            && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+            && field.Options is not { Count: > 0 });
+        if (invalidMultiSelect is not null)
+        {
+            throw new InvalidDataException(
+                $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
+                "GitHub requires at least one option when creating the field and ignores empty option updates.");
+        }
     }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)
