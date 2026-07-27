@@ -278,6 +278,15 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 
 URL 内に literal `\n`、escaped newline、空白、Markdown link label を混ぜない。renderer 上で折り返されても href 自体は一つの URL になるようにする。URL を表示した assistant 本文の直後に `ask_user` を呼ぶ場合、質問カードには「Source fine-grained PAT を準備できましたか？」のような確認文と choices だけを渡し、URL や Markdown を重複させない。
 
+fine-grained PAT URL を表示した turn は、URL の表示だけで終了してはならない。同じ turn で直ちに `ask_user` を呼び、次を一つの readiness question として明示する。
+
+- 表示した source / target URL を開いて PAT を作成する。
+- 経路に必要な Repository access を選び、organization approval が必要なら **Active** まで待つ。
+- token 値は会話へ貼らない。
+- 両方の PAT が準備できたら、次の Step で共有 terminal の hidden prompt へ安全に入力する。
+
+source / target の両方を準備する経路では choices を `Source/target PAT を両方作成済み` と `まだ準備中` にする。`作成済み` の場合だけ `Read-Host` へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
+
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
 ### Classic PAT
