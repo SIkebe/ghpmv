@@ -446,6 +446,8 @@ $geiSourceSecureToken = Read-Host "GHPMV_GEI_SOURCE_TOKEN for <source-org> on <s
 $geiTargetSecureToken = Read-Host "GHPMV_GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GHPMV_GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_TARGET_TOKEN)) { Remove-Item Env:GHPMV_GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
+Step 5 以降の `ghpmv` native command では PAT を `--token` argument に展開しない。command ごとに、対応する `SOURCE_TOKEN` または `TARGET_TOKEN` を process-scoped `GHPMV_TOKEN` へ一時 mapping し、`GHPMV_TOKEN` より先に解決される既存の process-scoped `GITHUB_TOKEN` を一時削除して、`--token` を省略する。`finally` で両方の以前の値へ戻す。以前の値が `null` なら `SetEnvironmentVariable` は一時変数を削除する。これにより意図した side の PAT を確実に使いながら、PAT を process argument inspection へ露出させない。
+
 ### Fine-grained fixture token の preflight
 
 `fixture preparation` が `create` で source に fine-grained PAT を選んだ場合、`setup --fixture` より先に次の preflight 専用 wrapper を endpoint ごとに別々に実行する。送信直前に一意な `<preflight-id>` を生成する。target の `fixture-seed` でも organization と token を置き換えて同じ確認を行う。
@@ -503,27 +505,45 @@ run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpo
 `api-only`:
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
-  --fixture `
-  --fixture-org <source-org> `
-  --fixture-title '<escaped-unique-title>' `
-  --fixture-repo '<escaped-unique-repo>' `
-  --fixture-require-new `
-  --token $env:SOURCE_TOKEN
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture `
+      --fixture-org <source-org> `
+      --fixture-title '<escaped-unique-title>' `
+      --fixture-repo '<escaped-unique-repo>' `
+      --fixture-require-new
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 `browser-e2e` では API fixture と UI fixture を同じ owned operation として実行する。`--fixture-project` を指定した別 command に分けない。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
-  --fixture `
-  --fixture-ui `
-  --fixture-org <source-org> `
-  --fixture-title '<escaped-unique-title>' `
-  --fixture-repo '<escaped-unique-repo>' `
-  --fixture-require-new `
-  --browser-profile source `
-  --token $env:SOURCE_TOKEN
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture `
+      --fixture-ui `
+      --fixture-org <source-org> `
+      --fixture-title '<escaped-unique-title>' `
+      --fixture-repo '<escaped-unique-repo>' `
+      --fixture-require-new `
+      --browser-profile source
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 source が data residency の場合は選択した source command に `--api-base-url <source-api-url>` を追加し、`browser-e2e` ではさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
@@ -555,23 +575,41 @@ Workflow は再設定できる。warning が出た場合は、目視だけで終
 
 ```powershell
 $env:GHPMV_DEMO_SNAPSHOT = Join-Path $env:TEMP "ghpmv-demo-snapshot-$(Get-Date -Format yyyyMMdd-HHmmss)"
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
-  --org <source-org> `
-  --project <source-project-number> `
-  --out $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:SOURCE_TOKEN
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
+      --org <source-org> `
+      --project <source-project-number> `
+      --out $env:GHPMV_DEMO_SNAPSHOT
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 `browser-e2e` では同じ export に browser option を追加する。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
-  --org <source-org> `
-  --project <source-project-number> `
-  --out $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:SOURCE_TOKEN `
-  --enable-browser-automation `
-  --browser-profile source
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
+      --org <source-org> `
+      --project <source-project-number> `
+      --out $env:GHPMV_DEMO_SNAPSHOT `
+      --enable-browser-automation `
+      --browser-profile source
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 source が data residency の場合は、browser option の有無にかかわらず `--base-url <source-api-url>` を追加し、browser automation を使う場合はさらに `--browser-base-url <source-web-url>` を追加する。`github.com-to-ghec-dr` の source export にはこれらを付けない。
@@ -661,13 +699,22 @@ target seed title と repository name も空の自由入力カードにしない
 target seed title と repository name も `'` を `''` に置換したうえで PowerShell single-quoted argument として渡す。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
-  --fixture `
-  --fixture-org <target-org> `
-  --fixture-title '<escaped-unique-target-seed-title>' `
-  --fixture-repo '<escaped-target-repo>' `
-  --fixture-require-new `
-  --token $env:TARGET_TOKEN
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture `
+      --fixture-org <target-org> `
+      --fixture-title '<escaped-unique-target-seed-title>' `
+      --fixture-repo '<escaped-target-repo>' `
+      --fixture-require-new
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 target が data residency の場合は `--api-base-url <target-api-url>` を追加する。
@@ -697,13 +744,22 @@ target login は token 値ではなくユーザー名だけを確認する。EMU
 `api-only` では browser option を付けない。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
-  --org <target-org> `
-  --in $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:TARGET_TOKEN `
-  --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-  --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-  --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv"
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
+      --org <target-org> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv"
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 target が data residency の場合は `--target-base-url <target-api-url>` を追加する。GitHub.com target では付けない。
@@ -711,15 +767,24 @@ target が data residency の場合は `--target-base-url <target-api-url>` を�
 `browser-e2e` では同じ import に browser option を追加する。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
-  --org <target-org> `
-  --in $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:TARGET_TOKEN `
-  --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-  --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-  --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-  --enable-browser-automation `
-  --browser-profile target
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
+      --org <target-org> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`github.com-to-ghec-dr` ではこの target command にだけ両方を付ける。
@@ -735,15 +800,24 @@ Import と同じ mapping / browser profile を渡す。
 `api-only` では browser option を付けない。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
-  --org <target-org> `
-  --project <target-project-number> `
-  --in $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:TARGET_TOKEN `
-  --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-  --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-  --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-  --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 target が data residency の場合は `--target-base-url <target-api-url>` を追加する。
@@ -751,17 +825,26 @@ target が data residency の場合は `--target-base-url <target-api-url>` を�
 `browser-e2e` では同じ verify に browser option を追加する。
 
 ```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
-  --org <target-org> `
-  --project <target-project-number> `
-  --in $env:GHPMV_DEMO_SNAPSHOT `
-  --token $env:TARGET_TOKEN `
-  --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-  --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-  --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-  --enable-browser-automation `
-  --browser-profile target `
-  --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
+$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target `
+      --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。Import と Verify で同じ target endpoint と browser profile を使う。
