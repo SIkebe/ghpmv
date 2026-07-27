@@ -16,15 +16,46 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 ## 最重要原則
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
-2. **質問は一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付け、login、organization、repository 名などの自由入力では choices なしの質問カードを使う。assistant 本文だけで質問してユーザー入力を待ってはならない。
+2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付け、login、organization、repository 名などの自由入力では choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
 3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
 6. **既存変更を壊さない。** branch、working tree、snapshot directory、mapping CSV を勝手に reset、削除、上書きしない。
 7. **warning を成功扱いしない。** 対象 category と欠落情報を説明し、ユーザーが許容するか確認する。
-8. **実行するコマンドを省略しない。** 「次のコマンド」「次の 4 行」のように、実体を省略した案内をしてはならない。agent が対話 terminal へ入力できる場合は command を agent 自身が送信する。入力できずユーザーへ実行を依頼する場合は、質問カードより前の assistant 本文にコピー可能な `powershell` code block を掲載する。質問カードは実行結果の確認だけに使い、command の表示場所にしない。
+8. **実行するコマンドを省略しない。** 「次のコマンド」「次の 4 行」のように、実体を省略した案内をしてはならない。agent が対話 terminal へ入力できる場合は command を agent 自身が送信する。入力できずユーザーへ実行を依頼する場合は、質問カードより前の assistant 本文にコピー可能な `powershell` code block を掲載する。質問カードは agent が結果を観測できない場合だけ使い、command の表示場所にしない。
 9. **token を設定した PowerShell session を維持する。** ユーザーが `Read-Host` を実行した terminal と、token を参照する preflight / fixture / export / GEI / import / verify command は同じ terminal session で実行する。agent の shell tool が毎回別 process を開始する環境では、ユーザー terminal に設定された `$env:*_TOKEN` を参照できると仮定してはならない。
 10. **terminal readiness を hard gate にする。** `read-only`、`api-only`、`browser-e2e` では、共有 terminal の起動と入出力を実測できるまで Step 2 以降へ進まない。terminal action が `Terminal not found or not running` などで失敗した場合、別の shell tool で baseline を続行してはならない。
+11. **観測可能な完了をユーザーに報告させない。** agent が起動した command は exit code、完了 sentinel、標準出力、生成物を agent 自身が監視する。「完了したら『完了』と返してください」「結果を教えてください」のような質問をしてはならない。
+
+## 自動完了検出
+
+対話 terminal へ送る非対話 command は、可能な限り次の形で一意の完了 sentinel と exit code を出す。`<command>` 自体の出力だけを見て早期に成功判定しない。
+
+```powershell
+& {
+    <command>
+}
+$ghpmvExitCode = $LASTEXITCODE
+Write-Output "GHPMV_COMMAND_DONE:$ghpmvExitCode"
+```
+
+terminal 出力取得 action で sentinel を監視し、`GHPMV_COMMAND_DONE:0` を読めた場合だけ成功とする。まだ sentinel がなければ command 実行中として監視を継続し、ユーザーへ完了報告を求めない。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
+
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で sign in を行ってください」と通知するだけで、質問カードや「完了したら返答」を表示しない。command が `Signed in as '<expected-login>'` を出力して exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+
+| Step / 処理 | agent が自動確認するもの |
+|---|---|
+| terminal readiness | `GHPMV_TERMINAL_READY` |
+| restore / build / browser setup | exit code または完了 sentinel |
+| browser login | `Signed in as '<expected-login>'` と exit code 0 |
+| PAT permission preflight | HTTP status と endpoint ごとの response |
+| fixture 作成 | exit code、作成された repository / Project、Project number |
+| export | exit code、`snapshot.json`、mapping CSV、warning |
+| GEI | migration status、target repository、Issue / PR number |
+| import | `result`、target Project number、`import-log.json` |
+| verify | overall / category result、`verify-report.json` |
+
+対話用質問ツールを使うのは、validation mode、host / organization / login / resource name、mapping の未知値、PAT の terminal 手入力、warning の許容、cleanup 同意など、ユーザーの判断または agent が観測できない入力が必要な場合に限る。
 
 ## 対話 terminal の readiness gate
 
@@ -42,7 +73,7 @@ token 入力時は次の流れを必須とする。
 
 1. agent が同じ terminal instance へ `Read-Host -AsSecureString` と環境変数への代入 command を送信する。
 2. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
-3. ユーザーが入力完了を返したら、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信し、同じ terminal の出力を読む。
+3. PAT の terminal 手入力は agent が値を観測できないため、対話用質問ツールで入力を依頼する。ユーザーの応答後、token 値を表示せず readiness sentinel を確認し、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信する。
 4. token を参照する command を、別 process で動く shell tool へ切り替えない。
 
 terminal を開く機能がある場合は agent が先に開く。agent が terminal に command を直接入力できない場合だけ、その制約を明示し、command をユーザーに貼り付けてもらう。この場合、質問カードを出す前の assistant 本文を必ず次の形式にする。
@@ -57,7 +88,7 @@ terminal を開く機能がある場合は agent が先に開く。agent が ter
 この command を実行してください。
 ````
 
-code block を本文へ表示した直後に対話用質問ツールを呼び、質問カードでは「terminal での実行は完了しましたか？」のように結果だけを確認する。質問カード内に command を重複掲載しない。本文と質問カードの間に別の説明や tool call を挟まず、どの command に対する確認かが曖昧にならないようにする。agent が terminal へ command を送信済みの場合は、質問文に「terminal に表示された prompt へ PAT を手入力してください」と明記し、ユーザーに command の再実行を求めない。
+agent が terminal に command を直接入力できず、ユーザー自身が command を実行する必要がある場合だけ、code block を本文へ表示した直後に対話用質問ツールを呼ぶ。質問カード内に command を重複掲載しない。agent が terminal へ command を送信済みの場合、PAT 手入力以外では質問カードを出さず、agent が出力を監視する。PAT の場合は質問文に「terminal に表示された prompt へ PAT を手入力してください」と明記し、ユーザーに command の再実行を求めない。
 
 `Read-Host` 後は、その terminal を閉じたり新しい terminal に切り替えたりしない。terminal session が失われた場合は token 値を会話へ貼らせず、同じ `Read-Host -AsSecureString` command で必要な環境変数を再設定する。agent の別 process から `$env:SOURCE_TOKEN` などの存在確認を試みても、token 準備の確認にはならない。
 
@@ -180,6 +211,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 ```
 
 `github.com-to-ghec-dr` では source login に `--base-url` を付けず、target login に `--base-url <target-web-url>` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
+
+各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへログイン完了の返信を求めない。`Signed in as '<expected-login>'` と exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
 
 ## Step 4: Token を準備する
 
