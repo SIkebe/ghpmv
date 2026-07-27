@@ -60,13 +60,17 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 
 ## 対話 terminal の readiness gate
 
-`read-only`、`api-only`、`browser-e2e` では、Step 1 で validation mode と経路を確定した直後、Step 2 より前にユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。`build-only` と `baseline-full` では対話 terminal を要求しない。terminal canvas に command 送信と出力取得の action がある場合は、同じ terminal instance へ次を送信して readiness を確認する。
+`read-only`、`api-only`、`browser-e2e` では、Step 1 で validation mode と経路を確定した直後、Step 2 より前にユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。`build-only` と `baseline-full` では対話 terminal を要求しない。
+
+terminal canvas の open input に `command` がある場合は、空の canvas を開いて直後に `send_terminal_input` するのではなく、新しい一意な instance ID を使い、readiness command 付きで atomic に open する。panel は focus する。
 
 ```powershell
 Write-Output "GHPMV_TERMINAL_READY"
 ```
 
-出力取得 action で `GHPMV_TERMINAL_READY` を実際に読めた場合だけ、terminal を ready と記録して Step 2 へ進む。canvas を開く action が成功しただけでは ready とみなさない。command 送信または出力取得が失敗した場合はそこで停止し、対話用質問ツールで terminal panel の起動・focus 後に再試行するかを一問で確認する。成功するまで build、test、browser setup、token、live resource の処理を一切実行しない。
+open 後の terminal process 起動は非同期である。最初の出力取得が空でも失敗扱いせず、同じ instance を再読する。`GHPMV_TERMINAL_READY` を実際に読めた場合だけ terminal を ready と記録して Step 2 へ進む。canvas を開く action が成功しただけでは ready とみなさない。
+
+`Terminal not found or not running` が返った場合は、stale instance を使い続けず、新しい一意な instance ID で command 付き open を再実行し、bounded retry する。空出力または一時的な runtime error だけを理由に project session を作り直さない。fresh instance でも繰り返し失敗した場合だけ停止し、terminal panel の focus / App 再起動を案内する。成功するまで build、test、browser setup、token、live resource の処理を一切実行しない。
 
 ready になった terminal instance ID を `token execution terminal` として記録し、`read-only`、`api-only`、`browser-e2e` の Step 2 以降の command はすべてその terminal へ送信する。別 process の shell tool へ切り替えない。
 
