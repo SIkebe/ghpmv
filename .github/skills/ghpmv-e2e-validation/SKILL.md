@@ -82,6 +82,9 @@ code block を本文へ表示した直後に対話用質問ツールを呼び、
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
 | token execution terminal | token を設定し、以後の live command を実行する同一 PowerShell session |
+| source host type / web URL / API URL | `github.com`, `https://github.com`, `https://api.github.com/graphql` |
+| target host type / web URL / API URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com` |
+| host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 
 ## Step 1: 確認範囲を決める
 
@@ -113,7 +116,14 @@ code block を本文へ表示した直後に対話用質問ツールを呼び、
 
 3 を選んだ場合は 2 として扱わない。必要なロール設定を済ませるよう案内し、適用済みと確認できるまで GEI token の入力、migration command、Step 7 へ進まない。適用後に改めて role status を確認し、`migrator-active` へ更新する。
 
-browser automation を選んだ場合は、source / target が同じアカウント・同じ host か、別アカウントか、GHEC data residency かを一問ずつ確認する。別アカウントなら `source` / `target` profile と token を分ける。
+`read-only`、`api-only`、`browser-e2e` では、アカウント構成と host 構成を一つの質問にまとめない。次を一問ずつ確認する。
+
+1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
+2. `api-only` / `browser-e2e` では target host type も同じ二択で確認する。
+3. data residency を選んだ側ごとに、placeholder ではない tenant web URL (`https://TENANT.ghe.com`) を自由入力の質問カードで確認する。対応する API URL (`https://api.TENANT.ghe.com`) を導出して別の確認カードで提示し、確定する。
+4. `browser-e2e` では source / target の browser account が同一か別かを host とは別の質問で確認する。
+
+GitHub.com は web URL `https://github.com`、API URL `https://api.github.com/graphql` として記録する。特に **GitHub.com source → GHEC with data residency target** を `github.com-to-ghec-dr` として一級シナリオにする。この topology では source command は既定の GitHub.com endpoint を使い、target command と target browser profile だけに tenant endpoint を指定する。host が異なる場合は login 文字列が似ていても `source` / `target` browser profile と token を必ず分ける。
 
 ## Step 2: ローカル baseline
 
@@ -150,7 +160,15 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile sour
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile target --expected-login <target-login>
 ```
 
-コマンド提示前に source / target の期待 login を一つずつ確認し、placeholder を実値に置き換える。`login` は既存 profile の cookie を読み込まない fresh browser context で開始し、`--expected-login` と異なるアカウントなら state を保存せず失敗する。GHEC の profile には対応する `--base-url` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
+コマンド提示前に source / target の期待 login を一つずつ質問カードで確認し、placeholder を実値に置き換える。`login` は既存 profile の cookie を読み込まない fresh browser context で開始し、`--expected-login` と異なるアカウントなら state を保存せず失敗する。
+
+data residency 側の login command だけに tenant web URL を付ける。
+
+```powershell
+dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <source-or-target> --expected-login <login> --base-url https://TENANT.ghe.com
+```
+
+`github.com-to-ghec-dr` では source login に `--base-url` を付けず、target login に `--base-url <target-web-url>` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
 
 ## Step 4: Token を準備する
 
@@ -168,7 +186,7 @@ mode ごとに必要な token だけを準備する。
 
 ### Fine-grained PAT 作成 URL
 
-ユーザーが fine-grained PAT を選んだ場合は、permission を手作業で列挙させるだけでなく、GitHub の [pre-filled fine-grained PAT URL](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters) を現在の経路に合わせて生成し、クリック可能な完全な URL として提示する。`target_name` には確認済みの organization login を設定し、`name`、`description`、`expires_in=30` と次の permission query parameter を付ける。
+ユーザーが fine-grained PAT を選んだ場合は、permission を手作業で列挙させるだけでなく、GitHub の [pre-filled fine-grained PAT URL](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters) を現在の経路に合わせて生成し、クリック可能な完全な URL として提示する。GitHub.com 側は `https://github.com/settings/personal-access-tokens/new`、data residency 側は `https://TENANT.ghe.com/settings/personal-access-tokens/new` を使う。`target_name` には確認済みの organization login を設定し、`name`、`description`、`expires_in=30` と次の permission query parameter を付ける。
 
 | token / 経路 | 必須 query parameter | 条件付き query parameter |
 |---|---|---|
@@ -183,7 +201,7 @@ mode ごとに必要な token だけを準備する。
 https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&description=Export+an+organization+Project+with+ghpmv&target_name=octo-org&expires_in=30&organization_projects=read&metadata=read
 ```
 
-作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
+作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
 ### Classic PAT
 
@@ -266,6 +284,8 @@ finally {
 }
 ```
 
+data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。GitHub.com source → data residency target の source preflight には追加せず、target preflight だけに target tenant hostname を追加する。
+
 どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が `422 Validation Failed` なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) を確認する。token owner の organization role、member の repository creation policy、organization の PAT restriction も別に確認する。原因を一つに断定しない。再作成しても 403 の場合は `setup --fixture` を実行せず、次のどちらかを選んでもらう。
 
 1. classic PAT (`repo`, `project`, `admin:org`) に切り替える
@@ -287,6 +307,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture-repo <unique-repo> `
   --token $env:SOURCE_TOKEN
 ```
+
+source が data residency の場合は `--api-base-url <source-api-url>` を追加する。`browser-e2e` の `--fixture-ui` にはさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
 
 出力された source Project number を記録する。
 
@@ -338,6 +360,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
   --browser-profile source
 ```
 
+source が data residency の場合は、browser option の有無にかかわらず `--base-url <source-api-url>` を追加し、browser automation を使う場合はさらに `--browser-base-url <source-web-url>` を追加する。`github.com-to-ghec-dr` の source export にはこれらを付けない。
+
 確認するもの:
 
 - `snapshot.json`
@@ -360,6 +384,8 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 
 `docs/MANUAL_TEST_PLAN.md` の §6 に従い、`GEI_SOURCE_TOKEN` / `GEI_TARGET_TOKEN` で repository migration を完了する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
 
+target が data residency の場合は `gh gei migrate-repo --help` で extension の現在の引数を確認し、migration command に `--target-api-url <target-api-url>` を追加する。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
+
 target repository full name を記録し、target の Issue / PR number が source と一致することを確認する。downloadable migration log は完了後 24 時間以内に保存する。target repository の Issues が無効なら `Migration Log` Issue は作成されない。migration 成功と number 維持を確認できるまで Step 8 へ進まない。
 
 ### Fixture seed
@@ -374,6 +400,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture-repo <target-repo> `
   --token $env:TARGET_TOKEN
 ```
+
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。
 
 target 側の `setup --fixture-ui` は不要。
 
@@ -407,6 +435,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
   --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv"
 ```
 
+target が data residency の場合は `--target-base-url <target-api-url>` を追加する。GitHub.com target では付けない。
+
 `browser-e2e` では同じ import に browser option を追加する。
 
 ```powershell
@@ -420,6 +450,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
   --enable-browser-automation `
   --browser-profile target
 ```
+
+target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`github.com-to-ghec-dr` ではこの target command にだけ両方を付ける。
 
 生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project number を記録する。
 
@@ -443,6 +475,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
   --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
 ```
 
+target が data residency の場合は `--target-base-url <target-api-url>` を追加する。
+
 `browser-e2e` では同じ verify に browser option を追加する。
 
 ```powershell
@@ -459,6 +493,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
   --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
 ```
 
+target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。Import と Verify で同じ target endpoint と browser profile を使う。
+
 結果を category ごとに確認する。
 
 - `Match`: 成功
@@ -473,6 +509,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
 | fine-grained PAT preflight / `setup --fixture` で `Resource not accessible by personal access token` | repository endpoint なら **Administration: Read and write** と **All repositories**、Issue Field endpoint または GraphQL `organization.issueFields` なら Organization **Issue Fields: Read and write** (`issue_fields=write`) を確認する。organization approval、token owner の role、repository creation / PAT policy、SSO も確認し、原因を一つに断定しない。解決できなければ repository を先に作成するか classic PAT (`repo`, `project`, `admin:org`) へ切り替える。 |
 | `INSUFFICIENT_SCOPES`, `id`, `read:org` | classic PAT に `read:org` を追加し、必要なら SSO を再承認する。 |
 | `The browser session is not signed in to 'github.com'` | 該当 profile で `login` を再実行し、API token と同じユーザーでログインする。 |
+| `The browser session is not signed in to '<tenant>.ghe.com'` または host mismatch | target profile を `login --profile target --base-url https://TENANT.ghe.com` で作り直し、Import / Verify に `--target-base-url https://api.TENANT.ghe.com` と `--browser-base-url https://TENANT.ghe.com` を渡す。GitHub.com source profile / token と tenant target profile / token を混用しない。 |
 | `Viewer not authorized to change project visibility` | target Project の現在値と snapshot の visibility を確認する。差分がある場合は、organization owner または visibility 変更を許可された organization role の token owner を使う。値が同じなのに発生した場合は、no-op visibility mutation を省略する版の `ghpmv` で再実行する。 |
 | `linkProjectV2ToRepository` で `Resource not accessible by personal access token` | 実環境で確認した対処として、target fine-grained PAT で対象 repository を選択し、Repository **Contents: Read and write** を追加する。permission 変更後に organization approval が **Active** であることも確認する。GitHub はこの mutation の PAT permission を個別には文書化していない。 |
 | Collaborator が `NotVerified`、`Manage access` 待機が timeout、または `/settings/access` が 404 | target browser/token user が Project の **Settings → Manage access** を開けるか確認する。開けない member profile ではなく、同じ login の organization-owner または十分な project-admin token / browser profile で verify を再実行する。 |
