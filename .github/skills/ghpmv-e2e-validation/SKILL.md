@@ -26,7 +26,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 9. **token を設定した PowerShell session を維持する。** ユーザーが `Read-Host` を実行した terminal と、token を参照する preflight / fixture / export / GEI / import / verify command は同じ terminal session で実行する。agent の shell tool が毎回別 process を開始する環境では、ユーザー terminal に設定された `$env:*_TOKEN` を参照できると仮定してはならない。
 10. **terminal readiness を hard gate にする。** `read-only`、`api-only`、`browser-e2e` では、共有 terminal の起動と入出力を実測できるまで Step 2 以降へ進まない。terminal action が `Terminal not found or not running` などで失敗した場合、別の shell tool で baseline を続行してはならない。
 11. **観測可能な完了をユーザーに報告させない。** agent が起動した command は exit code、完了 sentinel、標準出力、生成物を agent 自身が監視する。「完了したら『完了』と返してください」「結果を教えてください」のような質問をしてはならない。
-12. **preset で質問回数を減らす。** 複数の質問カードを同時表示しようとせず、一つの migration preset 選択で相互に依存する構成値をまとめて確定する。preset で決まった値を個別に再質問せず、未確定値だけを一問ずつ確認する。
+12. **`ask_user` は一度に一問とする。** 現行 Copilot CLI は [changelog 0.0.407](https://github.com/github/copilot-cli/blob/main/changelog.md#00407---2026-02-11) のとおり、明確な対話のため一問ずつ表示する。複数カードの同時表示・事前キュー、複数項目を固定した migration preset、compound question を使わない。往復削減は、観測可能な質問の削除と、選択結果により不要になった後続質問のスキップで行う。
 
 ## 自動完了検出
 
@@ -138,33 +138,24 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile を準備せず、browser option をすべて外して実行する。 |
 | `browser-e2e` | 2-4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile と source / target token を分け、fixture / GEI / browser enrichment を含む full flow を実行する。 |
 
-`api-only` または `browser-e2e` では、個別の構成質問より先に、現在の mode に合う代表的な migration preset を一枚の選択式質問カードで提示する。`browser-e2e` の preset は少なくとも次を含める。
+`api-only` または `browser-e2e` では、既存 source Project を使うか fixture を作るかを一問で確認し、`fixture preparation` として記録する。`existing` の場合は Step 5 を実行せず、fixture 作成用権限を要求しない。
 
-1. **GitHub.com → GHEC with data residency / 別アカウント / source fixture 作成 / GEI**
-2. **GitHub.com → GitHub.com / 別アカウント / source fixture 作成 / GEI**
-3. **GitHub.com → GitHub.com / 同一アカウント / 既存 source Project / fixture seed**
+同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
 
-1 を選んだ場合は `fixture preparation=create`、`repository preparation mode=GEI`、`source host type=github.com`、`target host type=ghec-dr`、`host topology=github.com-to-ghec-dr`、browser account は別、profile は `source` / `target` として一度に記録する。2 と 3 も label に含まれる値を同様に記録する。preset に当てはまらない構成が自由入力された場合は、記載内容から確定できる値を記録し、不足値だけを一問ずつ確認する。
+`GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
 
-preset で `fixture preparation` が決まらなかった場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`existing` の場合は Step 5 を実行せず、fixture 作成用権限を要求しない。
+1. Organization owner
+2. Migrator（適用済み）
+3. Migrator にする予定（まだ適用していない）
 
-同じ mode では、preset で `repository preparation mode` が決まらなかった場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
+3 を選んだ場合は 2 として扱わない。必要なロール設定を済ませるよう案内し、適用済みと確認できるまで GEI token の入力、migration command、Step 7 へ進まない。適用後に改めて role status を確認し、`migrator-active` へ更新する。
 
-`GEI` を選んだ場合は、source / destination role の組み合わせを一枚の preset 質問カードで確認する。少なくとも次を提示する。
-
-1. source owner / destination migrator（適用済み）
-2. source owner / destination owner
-3. source migrator（適用済み）/ destination migrator（適用済み）
-4. source または destination の Migrator 適用待ち
-
-4 または自由入力で未適用 role が含まれる場合は `migrator-pending` として扱う。必要なロール設定を済ませるよう案内し、適用済みと確認できるまで GEI token の入力、migration command、Step 7 へ進まない。適用後に改めて role status を確認し、`migrator-active` へ更新する。
-
-`read-only`、`api-only`、`browser-e2e` では、preset で未確定の host / account 値だけを次の順で一問ずつ確認する。
+`read-only`、`api-only`、`browser-e2e` では、host / account 値を次の順で一問ずつ確認する。
 
 1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
 2. `api-only` / `browser-e2e` では target host type も同じ二択で確認する。
 3. data residency を選んだ側ごとに、placeholder ではない tenant web URL (`https://TENANT.ghe.com`) を自由入力の質問カードで確認する。対応する API URL (`https://api.TENANT.ghe.com`) を導出して別の確認カードで提示し、確定する。
-4. `browser-e2e` では source / target の browser account が未確定の場合だけ、同一か別かを host とは別の質問で確認する。
+4. `browser-e2e` では source / target の browser account が同一か別かを host とは別の質問で確認する。
 
 GitHub.com は web URL `https://github.com`、API URL `https://api.github.com/graphql` として記録する。特に **GitHub.com source → GHEC with data residency target** を `github.com-to-ghec-dr` として一級シナリオにする。この topology では source command は既定の GitHub.com endpoint を使い、target command と target browser profile だけに tenant endpoint を指定する。host が異なる場合は login 文字列が似ていても `source` / `target` browser profile と token を必ず分ける。
 
@@ -226,13 +217,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 ## Step 4: Token を準備する
 
-**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** source / target / GEI の token 構成は、現在の経路に合う組み合わせを一枚の preset 質問カードで提示する。`GEI` では少なくとも次を含める。
-
-1. ghpmv source / target は fine-grained、GEI source / target は別の classic PAT
-2. ghpmv source / target と GEI source / target はすべて別の classic PAT
-3. 用途ごとの scope 和集合を持つ classic PAT を source / target で再利用
-
-選択結果から source / target token type と GEI token 分離有無を記録し、個別に再質問しない。必要な権限を準備できたことを一問で確認してから `Read-Host` へ進む。`read-only` など token が一つだけの経路では、その token type だけを一問で確認する。
+**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらい、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
 
 agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
