@@ -26,6 +26,8 @@ public sealed class FixtureProjectBuilder
 
     public required string OperationLogDirectory { get; init; }
 
+    public bool RequireNewResources { get; init; }
+
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
         string title = "gpm-fixture",
@@ -41,6 +43,18 @@ public sealed class FixtureProjectBuilder
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
+        var repositoryFullName = $"{organization}/{repositoryName}";
+        if (RequireNewResources)
+        {
+            var repositoryExists = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false) is not null;
+            ValidateNewResourceRequirement(
+                organization,
+                title,
+                repositoryFullName,
+                projectExists: existing is not null,
+                repositoryExists);
+        }
+
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var projectImportWasPending = projectLog.PendingProject is not null
@@ -438,6 +452,24 @@ public sealed class FixtureProjectBuilder
             && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
                 : null;
+
+    internal static void ValidateNewResourceRequirement(
+        string organization,
+        string title,
+        string repositoryFullName,
+        bool projectExists,
+        bool repositoryExists)
+    {
+        if (projectExists)
+        {
+            throw new InvalidOperationException($"Fixture project '{title}' already exists in organization '{organization}'.");
+        }
+
+        if (repositoryExists)
+        {
+            throw new InvalidOperationException($"Fixture repository '{repositoryFullName}' already exists.");
+        }
+    }
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
     {

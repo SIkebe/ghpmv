@@ -868,6 +868,10 @@ var fixtureRepoOption = new Option<string>("--fixture-repo")
     Description = "Repository short name used by the fixture Auto-add workflows.",
     DefaultValueFactory = _ => "fixture-repo",
 };
+var fixtureRequireNewOption = new Option<bool>("--fixture-require-new")
+{
+    Description = "Fail before writing when the fixture project title or repository already exists.",
+};
 var setupBrowserProfileOption = new Option<string?>("--browser-profile")
 {
     Description = "Named browser profile from 'ghpmv login --profile <name>' used with --fixture-ui.",
@@ -884,6 +888,7 @@ setupCommand.Options.Add(fixtureOrgOption);
 setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
 setupCommand.Options.Add(fixtureRepoOption);
+setupCommand.Options.Add(fixtureRequireNewOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
 setupCommand.Options.Add(baseUrlOption);
 setupCommand.Options.Add(browserBaseUrlOption);
@@ -892,6 +897,11 @@ setupCommand.Options.Add(setupApiBaseUrlOption);
 
 setupCommand.Validators.Add(result =>
 {
+    if (result.GetValue(fixtureRequireNewOption) && !result.GetValue(fixtureOption))
+    {
+        result.AddError("--fixture-require-new requires --fixture.");
+    }
+
     if (result.GetValue(fixtureOption) && string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
     {
         result.AddError("--fixture requires --fixture-org.");
@@ -1016,6 +1026,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             OnProgress = Console.Error.WriteLine,
             OperationLogDirectory = fixtureOperationDirectory,
+            RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
         };
         try
         {

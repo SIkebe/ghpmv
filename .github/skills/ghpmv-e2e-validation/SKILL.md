@@ -245,7 +245,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 ## Step 4: Token を準備する
 
-**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらい、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
+**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらうが、現在の経路で必要な全 side の token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。全 token type の確定後、fine-grained を選んだ side だけに作成 URL を表示し、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
 
 fine-grained PAT を選んだ token は URL status を `pending` にする。source / target organization login、host、fixture preparation、repository preparation mode が未確定なら、先に不足値を質問する。該当 token の完全な pre-filled URL を assistant 本文へ表示して検証し、status を `shown-and-validated` に更新するまで、次の操作を禁止する。
 
@@ -269,12 +269,12 @@ mode ごとに必要な token だけを準備する。
 
 ユーザーが fine-grained PAT を選んだ場合は、permission を手作業で列挙させるだけでなく、GitHub の [pre-filled fine-grained PAT URL](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters) を現在の経路に合わせて生成し、クリック可能な完全な URL として提示する。GitHub.com 側は `https://github.com/settings/personal-access-tokens/new`、data residency 側は `https://TENANT.ghe.com/settings/personal-access-tokens/new` を使う。`target_name` には確認済みの organization login を設定し、`name`、`description`、`expires_in=30` と次の permission query parameter を付ける。
 
-fine-grained を選択した直後は、次の state machine を厳守する。
+現在の経路で必要な全 token type を確定し、そのうち一つ以上で fine-grained を選択した直後は、次の state machine を厳守する。
 
-1. 新しい質問を出さず、確認済みの host / organization / fixture 経路から必要な source / target URL を内部で組み立てる。
-2. 次の assistant 本文に、必要な token ごとの label と placeholder のない完全な raw autolink を実際に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
+1. 新しい質問を出さず、確認済みの token type / host / organization / fixture 経路から、fine-grained を選んだ side の URL だけを内部で組み立てる。classic を選んだ side の fine-grained URL は生成しない。
+2. 次の assistant 本文に、fine-grained を選んだ token ごとの label と placeholder のない完全な raw autolink を実際に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
 3. URL を含むその同じ assistant response で readiness 用 `ask_user` を一度だけ呼ぶ。
-4. source / target の両方が必要な場合、両 URL を同じ本文に表示し、`Source/target PAT を両方作成済み` という一つの確認カードにまとめる。source と target を別々の readiness card で確認しない。
+4. source / target の両方が fine-grained の場合、両 URL を同じ本文に表示し、`Source/target fine-grained PAT を両方作成済み` という一つの確認カードにまとめる。一方だけが fine-grained の mixed route では、その side の URL だけを表示し、`Source fine-grained PAT を作成済み` または `Target fine-grained PAT を作成済み` という単一-token card にする。
 
 assistant response 本文に今回の完全な URL が一つも存在しない状態では、`PAT を準備できましたか？`、permission 確認、PAT terminal 入力のいずれにも進んではならない。URL を生成できない必須値がある場合だけ、その不足値を一つ質問する。
 
@@ -311,12 +311,12 @@ URL 内に literal `\n`、escaped newline、空白、Markdown link label を混�
 
 fine-grained PAT URL を表示した turn は、URL の表示だけで終了してはならない。同じ turn で直ちに `ask_user` を呼び、次を一つの readiness question として明示する。
 
-- 表示した source / target URL を開いて PAT を作成する。
+- 表示した fine-grained PAT URL を開いて PAT を作成する。
 - 経路に必要な Repository access を選び、organization approval が必要なら **Active** まで待つ。
 - token 値は会話へ貼らない。
-- 両方の PAT が準備できたら、次の Step で共有 terminal の hidden prompt へ安全に入力する。
+- 表示した fine-grained PAT が準備できたら、classic を選んだ side の scope / SSO 確認を行い、次の Step で共有 terminal の hidden prompt へ安全に入力する。
 
-source / target の両方を準備する経路では choices を `Source/target PAT を両方作成済み` と `まだ準備中` にする。`作成済み` の場合だけ `Read-Host` へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
+source / target の両方が fine-grained の場合だけ choices を `Source/target fine-grained PAT を両方作成済み` と `まだ準備中` にする。一方だけが fine-grained の場合は該当 side の単一-token choice と `まだ準備中` にする。`作成済み` の場合だけ次の token preparation へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
@@ -431,7 +431,7 @@ source fixture title と repository name は一つずつ確認するが、空の
 - fixture title: `ghpmv E2E source <run-id>`
 - repository name: `ghpmv-e2e-source-<run-id>`
 
-質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。
+質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
 
 run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpoint (`/orgs/{org}/projects`) を使った title 衝突確認を行わない。この endpoint は Projects v2 の確認にならず、HTTP 4xx を「衝突なし」に変換してはならない。fixture command 自体が name conflict を返した場合だけ、resource が作成されていないことを確認し、新しい run ID の推奨値を提示する。任意の preflight command を追加した場合も、non-zero exit code や HTTP error を成功扱いせず、その command の成否を fixture 作成の成否と混同しない。
 
@@ -441,6 +441,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture-org <source-org> `
   --fixture-title <unique-title> `
   --fixture-repo <unique-repo> `
+  --fixture-require-new `
   --token $env:SOURCE_TOKEN
 ```
 
@@ -533,7 +534,7 @@ target seed title と repository name も空の自由入力カードにしない
 - target seed title: `ghpmv E2E target seed <run-id>`
 - target repository name: `ghpmv-e2e-target-<run-id>`
 
-別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。衝突は fixture command の明示的な error で検出し、Projects (classic) REST endpoint による事前確認は行わない。
+別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
@@ -541,6 +542,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture-org <target-org> `
   --fixture-title <unique-target-seed-title> `
   --fixture-repo <target-repo> `
+  --fixture-require-new `
   --token $env:TARGET_TOKEN
 ```
 
