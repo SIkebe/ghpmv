@@ -28,7 +28,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 
 ## 対話 terminal の readiness gate
 
-`build-only` 以外では、Step 1 で validation mode と経路を確定した直後、Step 2 より前にユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。terminal canvas に command 送信と出力取得の action がある場合は、同じ terminal instance へ次を送信して readiness を確認する。
+`read-only`、`api-only`、`browser-e2e` では、Step 1 で validation mode と経路を確定した直後、Step 2 より前にユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。`build-only` と `baseline-full` では対話 terminal を要求しない。terminal canvas に command 送信と出力取得の action がある場合は、同じ terminal instance へ次を送信して readiness を確認する。
 
 ```powershell
 Write-Output "GHPMV_TERMINAL_READY"
@@ -78,7 +78,7 @@ code block を本文へ表示した直後に対話用質問ツールを呼び、
 | target user login | EMU suffixを含む実 login |
 | repository preparation mode | `GEI` または `fixture-seed` |
 | GEI source / destination role status | `owner`, `migrator-active`, `migrator-pending` |
-| validation mode | `build-only`, `read-only`, `api-only`, `browser-e2e` |
+| validation mode | `build-only`, `baseline-full`, `read-only`, `api-only`, `browser-e2e` |
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
 | token execution terminal | token を設定し、以後の live command を実行する同一 PowerShell session |
@@ -90,16 +90,18 @@ code block を本文へ表示した直後に対話用質問ツールを呼び、
 
 次から一つ選んでもらう。
 
-1. build + deterministic tests + CLI smoke test
-2. 実 Project の read-only export
-3. API-only export / import / verify
-4. browser automation を含む end-to-end test
+1. build のみ
+2. build + deterministic tests + CLI smoke test
+3. 実 Project の read-only export
+4. API-only export / import / verify
+5. browser automation を含む end-to-end test
 
-選択結果を `validation mode` として記録し、次の経路以外へ進めない。
+1 は `build-only`、2 は `baseline-full` として記録する。選択結果を `validation mode` として記録し、次の経路以外へ進めない。
 
 | validation mode | 実行する Step | 終了条件 |
 |---|---|---|
-| `build-only` | 2 | Step 2 完了後に終了する。token、browser、fixture、実環境操作を案内しない。 |
+| `build-only` | 2 | restore + build 成功後に終了する。test、CLI smoke、token、browser、fixture、実環境操作を案内しない。 |
+| `baseline-full` | 2 | build + deterministic tests + CLI smoke 完了後に終了する。token、browser、fixture、実環境操作を案内しない。 |
 | `read-only` | 2, 4, 6 | source token だけを準備し、Step 6 の browser option なしの export 完了後に終了する。Step 3, 5, 7-10 は実行しない。 |
 | `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | browser profile を準備せず、browser option をすべて外して実行する。 |
 | `browser-e2e` | 2-4, 必要な場合だけ 5, 6-10 | browser profile と source / target token を分けて実行する。 |
@@ -129,7 +131,7 @@ GitHub.com は web URL `https://github.com`、API URL `https://api.github.com/gr
 
 リポジトリ root で .NET SDK と branch / working tree を確認する。既存変更は報告するだけで触らない。
 
-`build-only` は通常の shell tool で実行してよい。`read-only`、`api-only`、`browser-e2e` は readiness gate を通過した `token execution terminal` に以下の command を送り、出力も同じ terminal から取得する。terminal が失われた場合は readiness gate へ戻り、成功するまで baseline を開始または再開しない。
+`build-only` と `baseline-full` は通常の shell tool で実行してよい。`read-only`、`api-only`、`browser-e2e` は readiness gate を通過した `token execution terminal` に以下の command を送り、出力も同じ terminal から取得する。terminal が失われた場合は readiness gate へ戻り、成功するまで baseline を開始または再開しない。
 
 ```powershell
 dotnet --version
@@ -141,6 +143,13 @@ git status --short --branch
 ```powershell
 dotnet restore Ghpmv.slnx
 dotnet build Ghpmv.slnx -c Release --no-restore -warnaserror
+```
+
+`build-only` は build の exit code 0 を確認した時点で完了報告を行い、終了する。test と CLI smoke を実行しない。
+
+`baseline-full`、`read-only`、`api-only`、`browser-e2e` だけが続けて deterministic tests と CLI smoke を実行する。
+
+```powershell
 dotnet test tests\Ghpmv.Core.Tests\Ghpmv.Core.Tests.csproj -c Release --no-build
 dotnet test tests\Ghpmv.Browser.Tests\Ghpmv.Browser.Tests.csproj -c Release --no-build --filter "Category!=E2E"
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- --version
@@ -148,7 +157,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- --version
 
 失敗したら、その段階で停止して原因を解消する。実環境操作へ進まない。
 
-`build-only` はここで完了報告を行い、終了する。
+`baseline-full` はここで完了報告を行い、終了する。
 
 ## Step 3: Browser 準備
 
