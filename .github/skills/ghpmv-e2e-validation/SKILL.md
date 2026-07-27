@@ -402,10 +402,11 @@ $geiTargetSecureToken = Read-Host "GHPMV_GEI_TARGET_TOKEN for <target-org> on <t
 `fixture preparation` が `create` で source に fine-grained PAT を選んだ場合、`setup --fixture` より先に次の preflight 専用 wrapper を endpoint ごとに別々に実行する。送信直前に一意な `<preflight-id>` を生成する。target の `fixture-seed` でも organization と token を置き換えて同じ確認を行う。
 
 ```powershell
-$previousGhToken = $env:GH_TOKEN
-$env:GH_TOKEN = $env:SOURCE_TOKEN
+$preflightTokenVariable = "<GH_TOKEN-or-GH_ENTERPRISE_TOKEN>"
+$previousPreflightToken = [Environment]::GetEnvironmentVariable($preflightTokenVariable, [EnvironmentVariableTarget]::Process)
+[Environment]::SetEnvironmentVariable($preflightTokenVariable, $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
 try {
-    $preflightResponse = gh api --include --method POST "orgs/<source-org>/<repos-or-issue-fields>" 2>&1
+    $preflightResponse = gh api --include --method POST -H "X-GitHub-Api-Version: 2026-03-10" "orgs/<source-org>/<repos-or-issue-fields>" 2>&1
     $preflightNativeExitCode = $LASTEXITCODE
     $preflightText = $preflightResponse | Out-String
     Write-Output $preflightResponse
@@ -414,11 +415,16 @@ try {
     Write-Output "GHPMV_PREFLIGHT_DONE:<preflight-id>:$preflightExitCode"
 }
 finally {
-    $env:GH_TOKEN = $previousGhToken
+    if ($null -eq $previousPreflightToken) {
+        Remove-Item "Env:$preflightTokenVariable" -ErrorAction SilentlyContinue
+    }
+    else {
+        [Environment]::SetEnvironmentVariable($preflightTokenVariable, $previousPreflightToken, [EnvironmentVariableTarget]::Process)
+    }
 }
 ```
 
-`repos` と `issue-fields` を一つの wrapper にまとめず、それぞれ異なる `<preflight-id>` で送り、今回の ID と完全一致する `GHPMV_PREFLIGHT_DONE:<preflight-id>:0` を確認する。期待どおりの 422 だけを semantic success とし、transport error、403、422 以外、または `Validation Failed` のない response は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。GitHub.com source → data residency target の source preflight には追加せず、target preflight だけに target tenant hostname を追加する。
+`repos` と `issue-fields` を一つの wrapper にまとめず、それぞれ異なる `<preflight-id>` で送り、今回の ID と完全一致する `GHPMV_PREFLIGHT_DONE:<preflight-id>:0` を確認する。GitHub.com 側は `<GH_TOKEN-or-GH_ENTERPRISE_TOKEN>` を `GH_TOKEN`、data residency 側は `GH_ENTERPRISE_TOKEN` に置き換える。target preflight では `$env:SOURCE_TOKEN` も `$env:TARGET_TOKEN` に置き換える。期待どおりの 422 だけを semantic success とし、transport error、403、422 以外、または `Validation Failed` のない response は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。host 用 token variable を明示しているため、別 host の cached credentials へ切り替わらない。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
 
 どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が `422 Validation Failed` なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) を確認する。token owner の organization role、member の repository creation policy、organization の PAT restriction も別に確認する。原因を一つに断定しない。再作成しても 403 の場合は `setup --fixture` を実行せず、次のどちらかを選んでもらう。
 

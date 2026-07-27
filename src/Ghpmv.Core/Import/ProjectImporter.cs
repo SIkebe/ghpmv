@@ -130,22 +130,63 @@ public sealed class ProjectImporter
                 $"Project '{projectId}' has pending import operations and cannot be released automatically.");
         }
 
-        await _client.MutationAsync(
-            "deleteProjectV2",
+        try
+        {
+            await _client.MutationAsync(
+                "deleteProjectV2",
+                """
+                mutation($projectId: ID!) {
+                  deleteProjectV2(input: { projectId: $projectId }) {
+                    projectV2 { id }
+                  }
+                }
+                """,
+                new { projectId },
+                MutationRetryPolicy.Create,
+                target: projectId,
+                requiredResultPath: "projectV2.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (AmbiguousMutationResultException exception)
+        {
+            bool projectStillExists;
+            try
+            {
+                projectStillExists = await ProjectExistsAsync(projectId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception reconciliationException)
+            {
+                throw new InvalidOperationException(
+                    $"Could not reconcile deletion of reserved Project '{projectId}'.",
+                    new AggregateException(exception, reconciliationException));
+            }
+
+            if (projectStillExists)
+            {
+                throw;
+            }
+        }
+
+        _operationLog.CreatedProjectId = null;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> ProjectExistsAsync(string projectId, CancellationToken cancellationToken)
+    {
+        var data = await _client.QueryAsync(
             """
-            mutation($projectId: ID!) {
-              deleteProjectV2(input: { projectId: $projectId }) {
-                projectV2 { id }
+            query($projectId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 { id }
               }
             }
             """,
             new { projectId },
-            MutationRetryPolicy.Idempotent,
-            target: projectId,
-            requiredResultPath: "projectV2.id",
-            cancellationToken: cancellationToken).ConfigureAwait(false);
-        _operationLog.CreatedProjectId = null;
-        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
+        return data.TryGetProperty("node", out var node)
+            && node.ValueKind == JsonValueKind.Object
+            && node.TryGetProperty("id", out var id)
+            && string.Equals(id.GetString(), projectId, StringComparison.Ordinal);
     }
 
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>

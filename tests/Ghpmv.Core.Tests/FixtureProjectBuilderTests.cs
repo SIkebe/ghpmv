@@ -666,6 +666,46 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Ambiguous_project_release_clears_claim_when_exact_project_is_absent()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-release-").FullName;
+        try
+        {
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(logRoot, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                new HttpRequestException("response lost after delete"),
+                JsonResponse("""{"data":{"node":null}}"""));
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl)
+            {
+                OperationLogDirectory = logRoot,
+            };
+
+            await importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken);
+
+            var projectLog = await ProjectImportLog.LoadAsync(
+                logRoot,
+                TestContext.Current.CancellationToken);
+            Assert.Null(projectLog.CreatedProjectId);
+            Assert.Single(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("deleteProjectV2(", StringComparison.Ordinal));
+            Assert.Single(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("node(id:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Existing_empty_repository_reaches_fixture_writes()
     {
         using var graphQlHandler = new RecordingHandler(
@@ -1008,9 +1048,9 @@ public class FixtureProjectBuilderTests
             Content = new StringContent("{}", Encoding.UTF8, "application/json"),
         };
 
-    private sealed class RecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    private sealed class RecordingHandler(params object[] responses) : HttpMessageHandler
     {
-        private readonly Queue<HttpResponseMessage> _responses = new(responses);
+        private readonly Queue<object> _responses = new(responses);
 
         public List<string> RequestBodies { get; } = [];
 
@@ -1029,7 +1069,13 @@ public class FixtureProjectBuilderTests
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
             }
 
-            return _responses.Dequeue();
+            var response = _responses.Dequeue();
+            if (response is Exception exception)
+            {
+                throw exception;
+            }
+
+            return (HttpResponseMessage)response;
         }
 
         protected override void Dispose(bool disposing)
@@ -1038,7 +1084,10 @@ public class FixtureProjectBuilderTests
             {
                 while (_responses.Count > 0)
                 {
-                    _responses.Dequeue().Dispose();
+                    if (_responses.Dequeue() is HttpResponseMessage response)
+                    {
+                        response.Dispose();
+                    }
                 }
             }
 
