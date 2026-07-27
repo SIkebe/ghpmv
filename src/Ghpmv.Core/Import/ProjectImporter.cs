@@ -80,6 +80,7 @@ public sealed class ProjectImporter
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke($"Reserving project title '{title}' in {OwnerDescription} '{ownerLogin}'...");
         var matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
@@ -119,6 +120,12 @@ public sealed class ProjectImporter
     internal async Task ReleaseReservedProjectAsync(CancellationToken cancellationToken = default)
     {
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        if (_operationLog?.PendingProjectDeletionId is not null)
+        {
+            await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         var projectId = _operationLog?.CreatedProjectId
             ?? throw new InvalidOperationException("This operation has no reserved Project to release.");
         if (_operationLog.PendingProject is not null
@@ -130,6 +137,16 @@ public sealed class ProjectImporter
                 $"Project '{projectId}' has pending import operations and cannot be released automatically.");
         }
 
+        _operationLog.PendingProjectDeletionId = projectId;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        await DeleteProjectAndReconcileAsync(projectId, cancellationToken).ConfigureAwait(false);
+        _operationLog.CreatedProjectId = null;
+        _operationLog.PendingProjectDeletionId = null;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task DeleteProjectAndReconcileAsync(string projectId, CancellationToken cancellationToken)
+    {
         try
         {
             await _client.MutationAsync(
@@ -147,7 +164,7 @@ public sealed class ProjectImporter
                 requiredResultPath: "projectV2.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-        catch (AmbiguousMutationResultException exception)
+        catch (GitHubGraphQLException exception)
         {
             bool projectStillExists;
             try
@@ -166,9 +183,6 @@ public sealed class ProjectImporter
                 throw;
             }
         }
-
-        _operationLog.CreatedProjectId = null;
-        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<bool> ProjectExistsAsync(string projectId, CancellationToken cancellationToken)
@@ -189,6 +203,29 @@ public sealed class ProjectImporter
             && string.Equals(id.GetString(), projectId, StringComparison.Ordinal);
     }
 
+    private async Task ReconcilePendingProjectDeletionAsync(CancellationToken cancellationToken)
+    {
+        if (_operationLog?.PendingProjectDeletionId is not { } projectId)
+        {
+            return;
+        }
+
+        if (!string.Equals(_operationLog.CreatedProjectId, projectId, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Pending Project deletion '{projectId}' does not match this operation's created Project.");
+        }
+
+        if (await ProjectExistsAsync(projectId, cancellationToken).ConfigureAwait(false))
+        {
+            await DeleteProjectAndReconcileAsync(projectId, cancellationToken).ConfigureAwait(false);
+        }
+
+        _operationLog.CreatedProjectId = null;
+        _operationLog.PendingProjectDeletionId = null;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
@@ -197,6 +234,7 @@ public sealed class ProjectImporter
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
         OnProgress?.Invoke($"Checking {OwnerDescription} '{ownerLogin}' for an existing project titled '{title}'...");
@@ -280,6 +318,7 @@ public sealed class ProjectImporter
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Looking up project #{projectNumber} in {OwnerDescription} '{ownerLogin}'..."));

@@ -706,6 +706,46 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Pending_project_release_is_cleared_when_exact_project_is_already_absent()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-pending-release-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_1",
+                PendingProjectDeletionId = "PVT_1",
+            }.SaveAsync(logRoot, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse("""{"data":{"node":null}}"""));
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl)
+            {
+                OperationLogDirectory = logRoot,
+            };
+
+            await importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken);
+
+            var projectLog = await ProjectImportLog.LoadAsync(
+                logRoot,
+                TestContext.Current.CancellationToken);
+            Assert.Null(projectLog.CreatedProjectId);
+            Assert.Null(projectLog.PendingProjectDeletionId);
+            Assert.DoesNotContain(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("deleteProjectV2(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Existing_empty_repository_reaches_fixture_writes()
     {
         using var graphQlHandler = new RecordingHandler(

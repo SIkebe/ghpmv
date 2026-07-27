@@ -11,6 +11,8 @@ public sealed record ProjectImportLog
 
     public string? CreatedProjectId { get; set; }
 
+    public string? PendingProjectDeletionId { get; set; }
+
     public Dictionary<string, PendingFieldOperation> PendingFields { get; init; } = new(StringComparer.Ordinal);
 
     public Dictionary<string, PendingIssueFieldOperation> PendingIssueFields { get; init; } = new(StringComparer.Ordinal);
