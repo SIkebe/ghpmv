@@ -12,6 +12,8 @@ namespace Ghpmv.Core.Fixtures;
 public sealed class FixtureProjectBuilder
 {
     private const string RepositoryClaimFileName = "fixture-repository.txt";
+    private const string PendingRepositoryStatus = "pending";
+    private const string ClaimedRepositoryStatus = "claimed";
 
     private readonly GitHubGraphQLClient _graphQl;
     private readonly GitHubRestClient _rest;
@@ -42,8 +44,9 @@ public sealed class FixtureProjectBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
 
+        var apiHost = GetApiHost();
         var operationKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{organization}\n{title}\n{repositoryName}")))[..16]
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
         var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
@@ -502,39 +505,80 @@ public sealed class FixtureProjectBuilder
         CancellationToken cancellationToken)
     {
         var repositoryFullName = $"{organization}/{repositoryName}";
-        var claimedRepository = requireNewResources
+        var repositoryState = requireNewResources
             ? await LoadRepositoryClaimAsync(operationDirectory, cancellationToken).ConfigureAwait(false)
             : null;
-        if (claimedRepository is not null
-            && !string.Equals(claimedRepository.FullName, repositoryFullName, StringComparison.OrdinalIgnoreCase))
+        if (repositoryState is not null)
         {
-            throw new InvalidDataException(
-                $"{RepositoryClaimFileName} claims '{claimedRepository.FullName}', not '{repositoryFullName}'.");
+            ValidateRepositoryStateIdentity(repositoryState, repositoryFullName);
         }
 
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
-        if (repository is null)
+        if (repositoryState?.Status == PendingRepositoryStatus)
         {
-            OnProgress?.Invoke($"Creating private repository {repositoryFullName}...");
-            repository = await _rest.PostAsync($"orgs/{organization}/repos", new { name = repositoryName, @private = true }, cancellationToken).ConfigureAwait(false);
+            repository = await ReconcilePendingRepositoryAsync(
+                repositoryState,
+                repository,
+                operationDirectory,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else if (repositoryState?.Status == ClaimedRepositoryStatus)
+        {
+            ValidateClaimedRepository(repositoryState, repositoryFullName, repository);
+        }
+        else if (repository is null)
+        {
             if (requireNewResources)
+            {
+                repositoryState = new RepositoryOperationState(
+                    GetApiHost(),
+                    repositoryFullName,
+                    PendingRepositoryStatus,
+                    Guid.NewGuid().ToString("N"));
+                await SaveRepositoryClaimAsync(operationDirectory, repositoryState, cancellationToken).ConfigureAwait(false);
+            }
+
+            OnProgress?.Invoke($"Creating private repository {repositoryFullName}...");
+            try
+            {
+                object createRequest = repositoryState is null
+                    ? new { name = repositoryName, @private = true }
+                    : new
+                    {
+                        name = repositoryName,
+                        @private = true,
+                        description = GetRepositoryOperationMarker(repositoryState.Value),
+                    };
+                repository = await _rest.PostAsync(
+                    $"orgs/{organization}/repos",
+                    createRequest,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (HttpRequestException exception) when (
+                exception.StatusCode is { } statusCode
+                && (int)statusCode is >= 400 and < 500)
+            {
+                if (repositoryState is not null)
+                {
+                    DeleteRepositoryState(operationDirectory);
+                }
+
+                throw;
+            }
+
+            if (repositoryState is not null)
             {
                 await SaveRepositoryClaimAsync(
                     operationDirectory,
-                    new RepositoryClaim(repositoryFullName, GetRepositoryId(repository.Value)),
+                    repositoryState with
+                    {
+                        Status = ClaimedRepositoryStatus,
+                        Value = GetRepositoryId(repository.Value),
+                    },
                     cancellationToken).ConfigureAwait(false);
             }
         }
-        else if (claimedRepository is not null)
-        {
-            var repositoryId = GetRepositoryId(repository.Value);
-            if (!string.Equals(claimedRepository.Id, repositoryId, StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"Fixture repository '{repositoryFullName}' no longer matches the repository recorded by this operation.");
-            }
-        }
-        else if (requireNewResources && claimedRepository is null)
+        else if (requireNewResources)
         {
             var repositoryIsEmpty = allowExistingEmptyRepository
                 && await IsRepositoryEmptyAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
@@ -546,7 +590,11 @@ public sealed class FixtureProjectBuilder
                 repositoryIsEmpty);
             await SaveRepositoryClaimAsync(
                 operationDirectory,
-                new RepositoryClaim(repositoryFullName, GetRepositoryId(repository.Value)),
+                new RepositoryOperationState(
+                    GetApiHost(),
+                    repositoryFullName,
+                    ClaimedRepositoryStatus,
+                    GetRepositoryId(repository.Value)),
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -580,7 +628,99 @@ public sealed class FixtureProjectBuilder
             && !pending.ExistingProjectIds.Contains(existing.Id, StringComparer.Ordinal);
     }
 
-    private static async Task<RepositoryClaim?> LoadRepositoryClaimAsync(
+    private async Task ValidateClaimedRepositoryAsync(
+        string repositoryFullName,
+        string operationDirectory,
+        CancellationToken cancellationToken)
+    {
+        var repositoryState = await LoadRepositoryClaimAsync(operationDirectory, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                $"Fixture repository '{repositoryFullName}' has no ownership record for this operation.");
+        ValidateRepositoryStateIdentity(repositoryState, repositoryFullName);
+        var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
+        if (repositoryState.Status == PendingRepositoryStatus)
+        {
+            await ReconcilePendingRepositoryAsync(
+                repositoryState,
+                repository,
+                operationDirectory,
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        ValidateClaimedRepository(repositoryState, repositoryFullName, repository);
+    }
+
+    private async Task<JsonElement> ReconcilePendingRepositoryAsync(
+        RepositoryOperationState pending,
+        JsonElement? repository,
+        string operationDirectory,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; repository is null && attempt < 2; attempt++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            repository = await _rest.GetAsync($"repos/{pending.FullName}", cancellationToken).ConfigureAwait(false);
+        }
+
+        if (repository is null)
+        {
+            throw new InvalidOperationException(
+                $"Pending repository operation '{pending.Value}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
+        }
+
+        if (!repository.Value.TryGetProperty("description", out var description)
+            || !string.Equals(
+                description.GetString(),
+                GetRepositoryOperationMarker(pending.Value),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Repository '{pending.FullName}' does not match pending operation '{pending.Value}'; refusing to claim it.");
+        }
+
+        await SaveRepositoryClaimAsync(
+            operationDirectory,
+            pending with
+            {
+                Status = ClaimedRepositoryStatus,
+                Value = GetRepositoryId(repository.Value),
+            },
+            cancellationToken).ConfigureAwait(false);
+        return repository.Value;
+    }
+
+    private void ValidateRepositoryStateIdentity(
+        RepositoryOperationState repositoryState,
+        string repositoryFullName)
+    {
+        if (!string.Equals(repositoryState.ApiHost, GetApiHost(), StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"{RepositoryClaimFileName} belongs to API host '{repositoryState.ApiHost}', not '{GetApiHost()}'.");
+        }
+
+        if (!string.Equals(repositoryState.FullName, repositoryFullName, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"{RepositoryClaimFileName} claims '{repositoryState.FullName}', not '{repositoryFullName}'.");
+        }
+    }
+
+    private static void ValidateClaimedRepository(
+        RepositoryOperationState repositoryState,
+        string repositoryFullName,
+        JsonElement? repository)
+    {
+        if (repository is null
+            || !string.Equals(repositoryState.Value, GetRepositoryId(repository.Value), StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Fixture repository '{repositoryFullName}' no longer matches the repository recorded by this operation.");
+        }
+    }
+
+    private static async Task<RepositoryOperationState?> LoadRepositoryClaimAsync(
         string operationDirectory,
         CancellationToken cancellationToken)
     {
@@ -593,17 +733,18 @@ public sealed class FixtureProjectBuilder
         var lines = (await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false))
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .ToArray();
-        if (lines.Length != 2)
+        if (lines.Length != 4
+            || (lines[2] != PendingRepositoryStatus && lines[2] != ClaimedRepositoryStatus))
         {
             throw new InvalidDataException($"{RepositoryClaimFileName} is malformed.");
         }
 
-        return new RepositoryClaim(lines[0], lines[1]);
+        return new RepositoryOperationState(lines[0], lines[1], lines[2], lines[3]);
     }
 
     private static async Task SaveRepositoryClaimAsync(
         string operationDirectory,
-        RepositoryClaim claim,
+        RepositoryOperationState repositoryState,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(operationDirectory);
@@ -613,7 +754,12 @@ public sealed class FixtureProjectBuilder
         {
             await File.WriteAllLinesAsync(
                 temporaryPath,
-                [claim.FullName, claim.Id],
+                [
+                    repositoryState.ApiHost,
+                    repositoryState.FullName,
+                    repositoryState.Status,
+                    repositoryState.Value,
+                ],
                 Encoding.UTF8,
                 cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, path, overwrite: true);
@@ -623,6 +769,15 @@ public sealed class FixtureProjectBuilder
             File.Delete(temporaryPath);
         }
     }
+
+    private static void DeleteRepositoryState(string operationDirectory)
+        => File.Delete(Path.Combine(operationDirectory, RepositoryClaimFileName));
+
+    private static string GetRepositoryOperationMarker(string operationId)
+        => $"ghpmv fixture operation {operationId}";
+
+    private string GetApiHost()
+        => _rest.BaseUri.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
 
     private static string GetRepositoryId(JsonElement repository)
     {

@@ -28,6 +28,8 @@ public sealed class GitHubRestClient : IDisposable
         _httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
     }
 
+    internal Uri BaseUri => _httpClient.BaseAddress!;
+
     public static Uri ToRestBaseUri(Uri graphQlEndpoint)
     {
         ArgumentNullException.ThrowIfNull(graphQlEndpoint);
