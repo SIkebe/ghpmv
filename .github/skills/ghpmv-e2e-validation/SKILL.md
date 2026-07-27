@@ -26,7 +26,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 9. **token を設定した PowerShell session を維持する。** ユーザーが `Read-Host` を実行した terminal と、token を参照する preflight / fixture / export / GEI / import / verify command は同じ terminal session で実行する。agent の shell tool が毎回別 process を開始する環境では、ユーザー terminal に設定された `$env:*_TOKEN` を参照できると仮定してはならない。
 10. **terminal readiness を hard gate にする。** `read-only`、`api-only`、`browser-e2e` では、共有 terminal の起動と入出力を実測できるまで Step 2 以降へ進まない。terminal action が `Terminal not found or not running` などで失敗した場合、別の shell tool で baseline を続行してはならない。
 11. **観測可能な完了をユーザーに報告させない。** agent が起動した command は exit code、完了 sentinel、標準出力、生成物を agent 自身が監視する。「完了したら『完了』と返してください」「結果を教えてください」のような質問をしてはならない。
-12. **`ask_user` は一度に一問とする。** 現行 Copilot CLI は [changelog 0.0.407](https://github.com/github/copilot-cli/blob/main/changelog.md#00407---2026-02-11) のとおり、明確な対話のため一問ずつ表示する。複数カードの同時表示・事前キュー、複数項目を固定した migration preset、compound question を使わない。往復削減は、観測可能な質問の削除と、選択結果により不要になった後続質問のスキップで行う。
+12. **実行時の `ask_user` tool schema に従う。** 利用可能な schema が単一の `question` と任意の `choices` だけを受け取る場合は、一度に一問ずつ表示する。複数質問を受け取る正式な field がない限り、並列 tool call、複数カードの事前キュー、compound question、複数項目を固定した migration preset で回避しない。将来 schema に正式な複数質問 API が追加された場合だけ、その API を使って独立した質問をまとめてよい。往復削減は、観測可能な質問の削除と、選択結果により不要になった後続質問のスキップで行う。
 
 ## 自動完了検出
 
