@@ -7,6 +7,71 @@ namespace Ghpmv.Core.Tests;
 
 public class FixtureProjectBuilderTests
 {
+    [Fact]
+    public void Concurrent_fixture_ui_operation_is_rejected()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-ui-lock-").FullName;
+        try
+        {
+            using var operationLock = FixtureUiOperation.AcquireLock(directory);
+
+            var exception = Assert.Throws<InvalidOperationException>(
+                () => FixtureUiOperation.AcquireLock(directory));
+
+            Assert.Contains("Another fixture UI operation", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("7", 7, true)]
+    [InlineData(" 7\r\n", 7, true)]
+    [InlineData("", 7, false)]
+    [InlineData("8", 7, false)]
+    public void Fixture_ui_completion_marker_requires_the_expected_project_number(
+        string marker,
+        int projectNumber,
+        bool expected)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-ui-marker-").FullName;
+        try
+        {
+            var completionPath = Path.Combine(directory, "fixture-ui-complete");
+            File.WriteAllText(completionPath, marker);
+
+            Assert.Equal(expected, FixtureUiOperation.IsCompleted(completionPath, projectNumber));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Fixture_ui_completion_marker_is_published_without_temporary_files()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-ui-marker-").FullName;
+        try
+        {
+            var completionPath = Path.Combine(directory, "fixture-ui-complete");
+
+            await FixtureUiOperation.MarkCompletedAsync(
+                completionPath,
+                projectNumber: 7,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(FixtureUiOperation.IsCompleted(completionPath, projectNumber: 7));
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -129,6 +194,108 @@ public class FixtureProjectBuilderTests
 
         Assert.False(result.OwnedByOperation);
         Assert.True(result.ShouldSkipUiSetup(projectExplicitlySelected: false, uiSetupCompleted: false));
+    }
+
+    [Fact]
+    public void Completed_operation_requires_no_fixture_writes()
+    {
+        var projectLog = new ProjectImportLog
+        {
+            CreatedProjectId = "PVT_1",
+            ImportCompleted = true,
+        };
+        var itemLog = new ImportLog
+        {
+            ProjectId = "PVT_1",
+            SourceSnapshotFingerprint = "fingerprint",
+        };
+
+        Assert.True(FixtureProjectBuilder.IsCompletedOperation(projectLog, itemLog));
+    }
+
+    [Fact]
+    public void Pending_operation_still_requires_fixture_writes()
+    {
+        var projectLog = new ProjectImportLog
+        {
+            CreatedProjectId = "PVT_1",
+            ImportCompleted = true,
+            PendingViews =
+            {
+                [1] = new PendingViewOperation
+                {
+                    OperationId = "view",
+                    ProjectId = "PVT_1",
+                    SourceNumber = 1,
+                    Name = "View",
+                    Layout = "TABLE_LAYOUT",
+                    ExistingViewIds = [],
+                },
+            },
+        };
+        var itemLog = new ImportLog
+        {
+            ProjectId = "PVT_1",
+            SourceSnapshotFingerprint = "fingerprint",
+        };
+
+        Assert.False(FixtureProjectBuilder.IsCompletedOperation(projectLog, itemLog));
+    }
+
+    [Fact]
+    public async Task Successful_fixture_stages_mark_the_operation_complete()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-complete-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_1",
+                ImportCompleted = false,
+            }.SaveAsync(directory, TestContext.Current.CancellationToken);
+
+            var changed = await FixtureProjectBuilder.MarkOperationCompletedAsync(
+                directory,
+                warningCount: 0,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(changed);
+            Assert.True((await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken)).ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Fixture_item_warnings_keep_the_operation_incomplete()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-warning-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_1",
+                ImportCompleted = false,
+            }.SaveAsync(directory, TestContext.Current.CancellationToken);
+
+            var changed = await FixtureProjectBuilder.MarkOperationCompletedAsync(
+                directory,
+                warningCount: 1,
+                TestContext.Current.CancellationToken);
+
+            Assert.False(changed);
+            Assert.False((await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken)).ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -664,6 +831,39 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Require_new_resources_resumes_project_from_legacy_operation_key()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-project-resume-").FullName;
+        try
+        {
+            var operationDirectory = GetLegacyOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var restHandler = new RecordingHandler(JsonResponse("""{"id":1,"name":"fixture"}"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' already exists.", exception.Message);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Require_new_resources_rejects_unrelated_duplicate_of_owned_project()
     {
         var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-duplicate-").FullName;
@@ -1050,43 +1250,60 @@ public class FixtureProjectBuilderTests
     [Fact]
     public async Task Existing_empty_repository_reaches_fixture_writes()
     {
-        using var graphQlHandler = new RecordingHandler(
-            JsonResponse(
-                """
-                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                """),
-            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
-            JsonResponse(
-                """
-                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                """),
-            JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
-            JsonResponse(
-                """
-                {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
-                """),
-            JsonResponse(
-                """
-                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                """));
-        using var restHandler = new RecordingHandler(
-            JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
-            ErrorResponse(HttpStatusCode.Conflict),
-            JsonResponse("[]"),
-            NotFoundResponse(),
-            ErrorResponse(HttpStatusCode.UnprocessableEntity));
-        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
-        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
-        var builder = CreateRequireNewBuilder(graphQl, rest, allowExistingEmptyRepository: true);
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-fallback-write-").FullName;
+        try
+        {
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                    """),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """));
+            using var restHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
+                ErrorResponse(HttpStatusCode.Conflict),
+                JsonResponse("[]"),
+                NotFoundResponse(),
+                ErrorResponse(HttpStatusCode.UnprocessableEntity));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(
+                graphQl,
+                rest,
+                allowExistingEmptyRepository: true,
+                operationLogDirectory: logRoot);
 
-        await Assert.ThrowsAsync<HttpRequestException>(() =>
-            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
 
-        Assert.Equal(
-            [HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Put],
-            restHandler.RequestMethods);
-        Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^2]);
-        Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^1]);
+            Assert.Equal(
+                [HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Put],
+                restHandler.RequestMethods);
+            Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^2]);
+            Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^1]);
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            var state = await File.ReadAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                TestContext.Current.CancellationToken);
+            Assert.Equal("fallback-pending", state[2]);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -1508,6 +1725,19 @@ public class FixtureProjectBuilderTests
         var operationKey = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(
                 $"{apiHost.ToLowerInvariant()}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}")))[..16]
+            .ToLowerInvariant();
+        return Path.Combine(logRoot, operationKey);
+    }
+
+    private static string GetLegacyOperationDirectory(
+        string logRoot,
+        string organization,
+        string title,
+        string repositoryName)
+    {
+        var operationKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         return Path.Combine(logRoot, operationKey);
     }

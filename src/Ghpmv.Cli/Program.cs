@@ -961,6 +961,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
+    BrowserSession? authenticatedFixtureUiSession = null;
     int? createdFixtureProjectNumber = null;
     FixtureProjectSetupResult? fixtureResult = null;
     if (parseResult.GetValue(fixtureOption))
@@ -990,6 +991,37 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
+            BeforeWriteAsync = parseResult.GetValue(fixtureUiOption)
+                ? async token =>
+                {
+                    if (authenticatedFixtureUiSession is not null)
+                    {
+                        return;
+                    }
+
+                    var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                        ? parseResult.GetValue(baseUrlOption)
+                        : null;
+                    var session = new BrowserSession(new BrowserSessionOptions
+                    {
+                        BaseUrl = BrowserBaseUrl.Resolve(
+                            graphQlBaseUri,
+                            parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                        Profile = parseResult.GetValue(setupBrowserProfileOption),
+                    });
+                    try
+                    {
+                        var apiLogin = await graphQl.GetViewerLoginAsync(token);
+                        await session.ValidateAuthenticationAsync(apiLogin, token);
+                        authenticatedFixtureUiSession = session;
+                    }
+                    catch
+                    {
+                        await session.DisposeAsync();
+                        throw;
+                    }
+                }
+                : null,
         };
         try
         {
@@ -1008,8 +1040,14 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 $"Fixture project {fixtureDisposition}: #{fixtureResult.ProjectNumber}"));
             createdFixtureProjectNumber = fixtureResult.ProjectNumber;
         }
-        catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException or System.Text.Json.JsonException)
+        catch (Exception exception) when (exception is PlaywrightException or GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException or TimeoutException or ArgumentException or FormatException or System.Text.Json.JsonException)
         {
+            if (authenticatedFixtureUiSession is not null)
+            {
+                await authenticatedFixtureUiSession.DisposeAsync();
+                authenticatedFixtureUiSession = null;
+            }
+
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;
         }
@@ -1044,10 +1082,17 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             org.ToLowerInvariant(),
             projectNumber.Value.ToString(CultureInfo.InvariantCulture));
         var uiCompletionPath = Path.Combine(fixtureViewOperationDirectory, "fixture-ui-complete");
+        using var fixtureUiOperationLock = FixtureUiOperation.AcquireLock(fixtureViewOperationDirectory);
         if (fixtureResult?.ShouldSkipUiSetup(
                 projectExplicitlySelected: parseResult.GetValue(fixtureProjectOption) is not null,
-                uiSetupCompleted: File.Exists(uiCompletionPath)) is true)
+                uiSetupCompleted: FixtureUiOperation.IsCompleted(uiCompletionPath, projectNumber.Value)) is true)
         {
+            if (authenticatedFixtureUiSession is not null)
+            {
+                await authenticatedFixtureUiSession.DisposeAsync();
+                authenticatedFixtureUiSession = null;
+            }
+
             Console.Error.WriteLine(fixtureResult.OwnedByOperation
                 ? "Fixture UI setup already completed; skipping --fixture-ui to avoid duplicating workflows. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly."
                 : "Fixture project already existed and is not owned by this operation; skipping --fixture-ui to avoid modifying an unrelated Project. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly.");
@@ -1068,17 +1113,23 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             ? parseResult.GetValue(baseUrlOption)
             : null;
         var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-        await using var fixtureUiSession = new BrowserSession(new BrowserSessionOptions
-        {
-            BaseUrl = BrowserBaseUrl.Resolve(
-                graphQlBaseUri,
-                parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
-            Profile = parseResult.GetValue(setupBrowserProfileOption),
-        });
+        var fixtureUiSession = authenticatedFixtureUiSession
+            ?? new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+        await using var fixtureUiSessionScope = fixtureUiSession;
         using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
         fixtureUiClient.OnRetry = Console.Error.WriteLine;
-        var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
-        await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        if (authenticatedFixtureUiSession is null)
+        {
+            var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
+            await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
         File.Delete(uiCompletionPath);
 
         var apiViewImporter = new ProjectImporter(fixtureUiClient)
@@ -1119,10 +1170,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             && workflowImporter.Warnings.Count == 0;
         if (uiSetupSucceeded)
         {
-            Directory.CreateDirectory(fixtureViewOperationDirectory);
-            await File.WriteAllTextAsync(
+            await FixtureUiOperation.MarkCompletedAsync(
                 uiCompletionPath,
-                projectNumber.Value.ToString(CultureInfo.InvariantCulture),
+                projectNumber.Value,
                 CancellationToken.None);
         }
 

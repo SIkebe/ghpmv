@@ -36,6 +36,8 @@ public sealed class FixtureProjectBuilder
 
     public bool AllowExistingEmptyRepository { get; init; }
 
+    public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
+
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
         string title = "gpm-fixture",
@@ -47,11 +49,12 @@ public sealed class FixtureProjectBuilder
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryName);
 
         var apiHost = GetApiHost();
-        var operationKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(
-                $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}")))[..16]
-            .ToLowerInvariant();
-        var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
+        var operationDirectory = ResolveOperationDirectory(
+            OperationLogDirectory,
+            apiHost,
+            organization,
+            title,
+            repositoryName);
         // Keep this order consistent so overlapping operation and repository scopes cannot deadlock.
         using var operationLock = AcquireFixtureOperationLock(operationDirectory);
         var repositoryFullName = $"{organization}/{repositoryName}";
@@ -270,6 +273,8 @@ public sealed class FixtureProjectBuilder
             {
                 await templateWriteSession.RestoreAsync(CancellationToken.None).ConfigureAwait(false);
             }
+
+            operationWarningCount += itemResult.Warnings.Count;
         }
     }
 
@@ -476,6 +481,44 @@ public sealed class FixtureProjectBuilder
                 ? value.GetString()
                 : null;
 
+    internal static bool IsCompletedOperation(ProjectImportLog projectLog, ImportLog? itemLog)
+        => projectLog.ImportCompleted is true
+            && projectLog.PendingProject is null
+            && projectLog.PendingProjectDeletionId is null
+            && projectLog.PendingFields.Count == 0
+            && projectLog.PendingIssueFields.Count == 0
+            && projectLog.PendingIssueFieldLinks.Count == 0
+            && projectLog.PendingViews.Count == 0
+            && itemLog is not null
+            && !itemLog.HasIncompleteItems
+            && itemLog.PendingDrafts.Count == 0
+            && itemLog.PendingContents.Count == 0;
+
+    internal static async Task<bool> MarkOperationCompletedAsync(
+        string operationDirectory,
+        int warningCount,
+        CancellationToken cancellationToken)
+    {
+        if (warningCount > 0)
+        {
+            return false;
+        }
+
+        var projectLog = await ProjectImportLog.LoadAsync(
+            operationDirectory,
+            cancellationToken).ConfigureAwait(false);
+        if (!projectLog.TryMarkImportCompleted(
+                browserAutomationEnabled: false,
+                viewWarningCount: 0,
+                workflowWarningCount: 0))
+        {
+            return projectLog.ImportCompleted is true;
+        }
+
+        await projectLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     internal static void ValidateNewProjectRequirement(
         string organization,
         string title,
@@ -661,19 +704,19 @@ public sealed class FixtureProjectBuilder
             await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
-        {
-            repositoryState = repositoryState with { Status = ClaimedRepositoryStatus };
-            await SaveRepositoryClaimAsync(
-                operationDirectory,
-                repositoryState,
-                cancellationToken).ConfigureAwait(false);
-        }
-
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
         await EnsureIssuesAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         await EnsureBugLabelAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
-        return await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
+        var pullRequestNumber = await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
+        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
+        {
+            await SaveRepositoryClaimAsync(
+                operationDirectory,
+                repositoryState with { Status = ClaimedRepositoryStatus },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return pullRequestNumber;
     }
 
     private static (ProjectRef? Project, bool OwnedByOperation) SelectProjectForOperation(
@@ -738,6 +781,7 @@ public sealed class FixtureProjectBuilder
     private async Task ValidateClaimedRepositoryAsync(
         string repositoryFullName,
         string operationDirectory,
+        Func<CancellationToken, Task> beforeWriteAsync,
         CancellationToken cancellationToken)
     {
         var repositoryState = await LoadRepositoryClaimAsync(operationDirectory, cancellationToken).ConfigureAwait(false)
@@ -747,6 +791,7 @@ public sealed class FixtureProjectBuilder
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
         if (repositoryState.Status == PendingRepositoryStatus)
         {
+            await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
             var reconciled = await ReconcilePendingRepositoryAsync(
                 repositoryState,
                 repository,
@@ -935,6 +980,59 @@ public sealed class FixtureProjectBuilder
 
     private string GetApiHost()
         => _rest.BaseUri.GetLeftPart(UriPartial.Authority).ToLowerInvariant();
+
+    private static string ResolveOperationDirectory(
+        string root,
+        string apiHost,
+        string organization,
+        string title,
+        string repositoryName)
+    {
+        var current = GetOperationDirectory(
+            root,
+            $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}");
+        if (HasDurableOperationState(current))
+        {
+            return current;
+        }
+
+        var legacyInputs = new List<string>
+        {
+            $"{apiHost}\n{organization}\n{title}\n{repositoryName}",
+        };
+        if (string.Equals(apiHost, "https://api.github.com", StringComparison.Ordinal))
+        {
+            legacyInputs.Add($"{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}");
+            legacyInputs.Add($"{organization}\n{title}\n{repositoryName}");
+        }
+
+        var legacyDirectories = legacyInputs
+            .Select(input => GetOperationDirectory(root, input))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => !string.Equals(path, current, StringComparison.OrdinalIgnoreCase))
+            .Where(HasDurableOperationState)
+            .ToArray();
+        return legacyDirectories.Length switch
+        {
+            0 => current,
+            1 => legacyDirectories[0],
+            _ => throw new InvalidOperationException(
+                "Multiple legacy fixture operation logs match this fixture; refusing to choose an ownership record."),
+        };
+    }
+
+    private static string GetOperationDirectory(string root, string operationIdentity)
+    {
+        var operationKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(operationIdentity)))[..16]
+            .ToLowerInvariant();
+        return Path.Combine(root, operationKey);
+    }
+
+    private static bool HasDurableOperationState(string directory)
+        => File.Exists(Path.Combine(directory, ProjectImportLog.FileName))
+            || File.Exists(Path.Combine(directory, ImportLog.FileName))
+            || File.Exists(Path.Combine(directory, RepositoryClaimFileName));
 
     private static string GetRepositoryId(JsonElement repository)
     {
