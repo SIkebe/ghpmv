@@ -517,6 +517,37 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Require_new_resources_rejects_unrelated_duplicate_of_owned_project()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-duplicate-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog { CreatedProjectId = "PVT_owned" }
+                .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_other","number":2,"title":"Fixture","url":"https://github.com/orgs/example/projects/2"},{"id":"PVT_owned","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """));
+            using var restHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Contains("unrelated same-title Project", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            Assert.Empty(restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Require_new_resources_rejects_existing_repository_without_mutations()
     {
         using var graphQlHandler = new RecordingHandler(
@@ -746,6 +777,47 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Definitive_project_release_failure_preserves_claim_without_visibility_probe()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-release-forbidden-").FullName;
+        try
+        {
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(logRoot, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(JsonResponse(
+                """
+                {"errors":[{"type":"FORBIDDEN","message":"forbidden"}]}
+                """));
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl)
+            {
+                OperationLogDirectory = logRoot,
+            };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+                importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken));
+
+            var projectLog = await ProjectImportLog.LoadAsync(
+                logRoot,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("PVT_1", projectLog.CreatedProjectId);
+            Assert.Equal("PVT_1", projectLog.PendingProjectDeletionId);
+            Assert.Single(graphQlHandler.RequestBodies);
+            Assert.DoesNotContain(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("node(id:", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Existing_empty_repository_reaches_fixture_writes()
     {
         using var graphQlHandler = new RecordingHandler(
@@ -806,7 +878,7 @@ public class FixtureProjectBuilderTests
                            """)))
             using (var firstRestHandler = new RecordingHandler(
                        NotFoundResponse(),
-                       JsonResponse("""{"id":1,"name":"fixture"}"""),
+                       JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
                        NotFoundResponse(),
                        ErrorResponse(HttpStatusCode.UnprocessableEntity)))
             using (var firstGraphQl = new GitHubGraphQLClient("token", baseUrl: null, firstGraphQlHandler, (_, _) => Task.CompletedTask))
@@ -829,7 +901,7 @@ public class FixtureProjectBuilderTests
                     {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                     """));
             using var retryRestHandler = new RecordingHandler(
-                JsonResponse("""{"id":1,"name":"fixture"}"""),
+                JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
                 NotFoundResponse(),
                 ErrorResponse(HttpStatusCode.UnprocessableEntity));
             using var retryGraphQl = new GitHubGraphQLClient("token", baseUrl: null, retryGraphQlHandler, (_, _) => Task.CompletedTask);
@@ -899,7 +971,7 @@ public class FixtureProjectBuilderTests
                     {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
                     """));
             using var restHandler = new RecordingHandler(
-                JsonResponse("""{"id":1,"name":"fixture","description":"ghpmv fixture operation operation-id"}"""),
+                JsonResponse("""{"id":1,"name":"fixture","private":true,"description":"ghpmv fixture operation operation-id"}"""),
                 NotFoundResponse(),
                 ErrorResponse(HttpStatusCode.UnprocessableEntity));
             using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
@@ -950,6 +1022,83 @@ public class FixtureProjectBuilderTests
 
             Assert.Contains("does not match pending operation", exception.Message, StringComparison.Ordinal);
             Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Claimed_repository_that_became_public_is_rejected_before_fixture_writes()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-repository-public-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            Directory.CreateDirectory(operationDirectory);
+            await File.WriteAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                ["https://api.github.com", "example/fixture", "claimed", "1"],
+                TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var restHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture","private":false}"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' must be private.", exception.Message);
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Item_log_retry_rejects_claimed_repository_that_became_public()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-item-log-public-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            Directory.CreateDirectory(operationDirectory);
+            await File.WriteAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                ["https://api.github.com", "example/fixture", "claimed", "1"],
+                TestContext.Current.CancellationToken);
+            await new ImportLog
+            {
+                ProjectId = "PVT_1",
+                SourceSnapshotFingerprint = "fingerprint",
+            }.SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """));
+            using var restHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture","private":false}"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' must be private.", exception.Message);
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
         }
         finally
         {

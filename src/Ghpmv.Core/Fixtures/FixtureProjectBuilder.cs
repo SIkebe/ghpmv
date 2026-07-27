@@ -49,11 +49,17 @@ public sealed class FixtureProjectBuilder
             SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
-        var existing = await FindProjectByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
         var repositoryFullName = $"{organization}/{repositoryName}";
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-        var projectOwnedByOperation = IsProjectOwnedByOperation(existing, organization, title, projectLog, itemLog);
+        var projectMatches = await FindProjectsByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
+        var (existing, projectOwnedByOperation) = SelectProjectForOperation(
+            projectMatches,
+            organization,
+            title,
+            projectLog,
+            itemLog,
+            RequireNewResources);
         if (RequireNewResources)
         {
             ValidateNewProjectRequirement(
@@ -524,10 +530,12 @@ public sealed class FixtureProjectBuilder
                 repository,
                 operationDirectory,
                 cancellationToken).ConfigureAwait(false);
+            ValidatePrivateRepository(repositoryFullName, repository.Value);
         }
         else if (repositoryState?.Status == ClaimedRepositoryStatus)
         {
             ValidateClaimedRepository(repositoryState, repositoryFullName, repository);
+            ValidatePrivateRepository(repositoryFullName, repository!.Value);
         }
         else if (repository is null)
         {
@@ -637,28 +645,63 @@ public sealed class FixtureProjectBuilder
         return await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
     }
 
-    private static bool IsProjectOwnedByOperation(
-        ProjectRef? existing,
+    private static (ProjectRef? Project, bool OwnedByOperation) SelectProjectForOperation(
+        IReadOnlyList<ProjectRef> matches,
         string organization,
         string title,
         ProjectImportLog projectLog,
-        ImportLog? itemLog)
+        ImportLog? itemLog,
+        bool requireNewResources)
     {
-        if (existing is null)
+        var claimedProjectId = projectLog.CreatedProjectId ?? itemLog?.ProjectId;
+        if (claimedProjectId is not null)
         {
-            return false;
+            var claimed = matches.FirstOrDefault(
+                project => string.Equals(project.Id, claimedProjectId, StringComparison.Ordinal));
+            if (claimed is not null)
+            {
+                RejectUnownedDuplicateProjects(matches, claimed, title, organization, requireNewResources);
+                return (claimed, true);
+            }
+
+            return (matches.Count > 0 ? matches[0] : null, false);
         }
 
-        if (string.Equals(projectLog.CreatedProjectId, existing.Id, StringComparison.Ordinal)
-            || string.Equals(itemLog?.ProjectId, existing.Id, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return projectLog.PendingProject is { } pending
+        if (projectLog.PendingProject is { } pending
             && string.Equals(pending.OwnerLogin, organization, StringComparison.Ordinal)
-            && string.Equals(pending.Title, title, StringComparison.Ordinal)
-            && !pending.ExistingProjectIds.Contains(existing.Id, StringComparer.Ordinal);
+            && string.Equals(pending.Title, title, StringComparison.Ordinal))
+        {
+            var baseline = new HashSet<string>(pending.ExistingProjectIds, StringComparer.Ordinal);
+            var candidates = matches.Where(project => !baseline.Contains(project.Id)).ToArray();
+            if (candidates.Length > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Pending fixture Project operation '{pending.OperationId}' matches multiple same-title Projects.");
+            }
+
+            if (candidates.Length == 1)
+            {
+                RejectUnownedDuplicateProjects(matches, candidates[0], title, organization, requireNewResources);
+                return (candidates[0], true);
+            }
+        }
+
+        return (matches.Count > 0 ? matches[0] : null, false);
+    }
+
+    private static void RejectUnownedDuplicateProjects(
+        IReadOnlyList<ProjectRef> matches,
+        ProjectRef owned,
+        string title,
+        string organization,
+        bool requireNewResources)
+    {
+        if (requireNewResources
+            && matches.Any(project => !string.Equals(project.Id, owned.Id, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"Fixture project '{title}' has an unrelated same-title Project in organization '{organization}'.");
+        }
     }
 
     private async Task ValidateClaimedRepositoryAsync(
@@ -673,15 +716,17 @@ public sealed class FixtureProjectBuilder
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
         if (repositoryState.Status == PendingRepositoryStatus)
         {
-            await ReconcilePendingRepositoryAsync(
+            var reconciled = await ReconcilePendingRepositoryAsync(
                 repositoryState,
                 repository,
                 operationDirectory,
                 cancellationToken).ConfigureAwait(false);
+            ValidatePrivateRepository(repositoryFullName, reconciled);
             return;
         }
 
         ValidateClaimedRepository(repositoryState, repositoryFullName, repository);
+        ValidatePrivateRepository(repositoryFullName, repository!.Value);
     }
 
     private async Task<JsonElement> ReconcilePendingRepositoryAsync(
@@ -1414,8 +1459,9 @@ public sealed class FixtureProjectBuilder
     }
 
 
-    private async Task<ProjectRef?> FindProjectByTitleAsync(string organization, string title, CancellationToken cancellationToken)
+    private async Task<List<ProjectRef>> FindProjectsByTitleAsync(string organization, string title, CancellationToken cancellationToken)
     {
+        List<ProjectRef> matches = [];
         await foreach (var node in _graphQl.QueryPaginatedAsync(
             """
             query($login: String!, $after: String) {
@@ -1433,14 +1479,14 @@ public sealed class FixtureProjectBuilder
         {
             if (string.Equals(node.GetProperty("title").GetString(), title, StringComparison.Ordinal))
             {
-                return new ProjectRef(
+                matches.Add(new ProjectRef(
                     node.GetProperty("id").GetString() ?? string.Empty,
                     node.GetProperty("number").GetInt32(),
-                    node.GetProperty("url").GetString() ?? string.Empty);
+                    node.GetProperty("url").GetString() ?? string.Empty));
             }
         }
 
-        return null;
+        return matches;
     }
 
     private sealed record ProjectRef(string Id, int Number, string Url);

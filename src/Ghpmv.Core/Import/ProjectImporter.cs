@@ -164,7 +164,7 @@ public sealed class ProjectImporter
                 requiredResultPath: "projectV2.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-        catch (GitHubGraphQLException exception)
+        catch (AmbiguousMutationResultException exception)
         {
             bool projectStillExists;
             try
@@ -182,6 +182,10 @@ public sealed class ProjectImporter
             {
                 throw;
             }
+        }
+        catch (GitHubGraphQLException exception) when (
+            string.Equals(exception.ErrorType, "NOT_FOUND", StringComparison.Ordinal))
+        {
         }
     }
 
