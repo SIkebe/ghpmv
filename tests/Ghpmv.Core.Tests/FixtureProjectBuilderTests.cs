@@ -504,19 +504,90 @@ public class FixtureProjectBuilderTests
         Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
     }
 
+    [Theory]
+    [InlineData(true, "[]")]
+    [InlineData(false, """[{"number":1}]""")]
+    public async Task Existing_nonempty_repository_is_rejected_without_mutations(
+        bool hasContents,
+        string issuesBody)
+    {
+        using var graphQlHandler = new RecordingHandler(
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+        using var restHandler = new RecordingHandler(
+            JsonResponse("""{"id":1,"name":"fixture"}"""),
+            hasContents ? JsonResponse("""[{"name":"README.md"}]""") : NotFoundResponse(),
+            JsonResponse(issuesBody));
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest, allowExistingEmptyRepository: true);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        Assert.Equal([HttpMethod.Get, HttpMethod.Get, HttpMethod.Get], restHandler.RequestMethods);
+        Assert.Equal(
+            ["/repos/example/fixture", "/repos/example/fixture/contents", "/repos/example/fixture/issues?state=all&per_page=1"],
+            restHandler.RequestPaths);
+    }
+
+    [Fact]
+    public async Task Existing_empty_repository_reaches_fixture_writes()
+    {
+        using var graphQlHandler = new RecordingHandler(
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+        using var restHandler = new RecordingHandler(
+            JsonResponse("""{"id":1,"name":"fixture"}"""),
+            NotFoundResponse(),
+            JsonResponse("[]"),
+            NotFoundResponse(),
+            ErrorResponse(HttpStatusCode.UnprocessableEntity));
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest, allowExistingEmptyRepository: true);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.Equal(
+            [HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Get, HttpMethod.Put],
+            restHandler.RequestMethods);
+        Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^2]);
+        Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^1]);
+    }
+
     private static FixtureProjectBuilder CreateRequireNewBuilder(
         GitHubGraphQLClient graphQl,
-        GitHubRestClient rest)
+        GitHubRestClient rest,
+        bool allowExistingEmptyRepository = false)
         => new(graphQl, rest)
         {
             OperationLogDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-tests", Guid.NewGuid().ToString("N")),
             RequireNewResources = true,
+            AllowExistingEmptyRepository = allowExistingEmptyRepository,
         };
 
     private static HttpResponseMessage JsonResponse(string body)
         => new(HttpStatusCode.OK)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
+    private static HttpResponseMessage NotFoundResponse()
+        => new(HttpStatusCode.NotFound);
+
+    private static HttpResponseMessage ErrorResponse(HttpStatusCode statusCode)
+        => new(statusCode)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
         };
 
     private sealed class RecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
@@ -527,11 +598,14 @@ public class FixtureProjectBuilderTests
 
         public List<HttpMethod> RequestMethods { get; } = [];
 
+        public List<string> RequestPaths { get; } = [];
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
             RequestMethods.Add(request.Method);
+            RequestPaths.Add(request.RequestUri!.PathAndQuery);
             if (request.Content is not null)
             {
                 RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
