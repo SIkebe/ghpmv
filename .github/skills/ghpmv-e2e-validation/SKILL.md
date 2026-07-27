@@ -426,6 +426,8 @@ finally {
 
 fine-grained PAT の **Administration** または **All repositories** を付与できない場合だけ、空 repository を先に作成し、その repository を選択した token に Administration 以外の fixture 権限を付ける。
 
+この fallback を選んだ場合は、repository に commit / file / Issue がないことをユーザーに明示確認し、fixture command に `--fixture-require-new --fixture-allow-existing-empty-repo` を指定する。CLI は新規 Project title を必須のまま維持し、既存 repository の contents と Issue が空であることを読み取り確認してからだけ fixture write を許可する。通常経路では `--fixture-allow-existing-empty-repo` を付けない。
+
 ## Step 5: Source fixture
 
 `api-only` または `browser-e2e` で `fixture preparation` が `create` の場合だけ実行する。`read-only` と `existing` の経路ではスキップし、source resource を作成しない。
@@ -452,6 +454,12 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
 ```
 
 source が data residency の場合は `--api-base-url <source-api-url>` を追加する。`browser-e2e` の `--fixture-ui` にはさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
+
+空 repository fallback を選択済みの場合だけ、上記 command に次も追加する。
+
+```powershell
+--fixture-allow-existing-empty-repo
+```
 
 出力された source Project number を記録する。
 
@@ -555,6 +563,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
 ```
 
 target が data residency の場合は `--api-base-url <target-api-url>` を追加する。
+
+空 repository fallback を選択済みの場合だけ、上記 command に `--fixture-allow-existing-empty-repo` も追加する。
 
 target 側の `setup --fixture-ui` は不要。
 

@@ -28,6 +28,8 @@ public sealed class FixtureProjectBuilder
 
     public bool RequireNewResources { get; init; }
 
+    public bool AllowExistingEmptyRepository { get; init; }
+
     public async Task<FixtureProjectSetupResult> CreateAsync(
         string organization,
         string title = "gpm-fixture",
@@ -46,13 +48,7 @@ public sealed class FixtureProjectBuilder
         var repositoryFullName = $"{organization}/{repositoryName}";
         if (RequireNewResources)
         {
-            var repositoryExists = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false) is not null;
-            ValidateNewResourceRequirement(
-                organization,
-                title,
-                repositoryFullName,
-                projectExists: existing is not null,
-                repositoryExists);
+            ValidateNewProjectRequirement(organization, title, projectExists: existing is not null);
         }
 
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
@@ -453,25 +449,46 @@ public sealed class FixtureProjectBuilder
                 ? value.GetString()
                 : null;
 
-    internal static void ValidateNewResourceRequirement(
+    internal static void ValidateNewProjectRequirement(
         string organization,
         string title,
-        string repositoryFullName,
-        bool projectExists,
-        bool repositoryExists)
+        bool projectExists)
     {
         if (projectExists)
         {
             throw new InvalidOperationException($"Fixture project '{title}' already exists in organization '{organization}'.");
         }
+    }
 
-        if (repositoryExists)
+    internal static void ValidateRepositoryRequirement(
+        string repositoryFullName,
+        bool requireNewResources,
+        bool allowExistingEmptyRepository,
+        bool repositoryExists,
+        bool repositoryIsEmpty)
+    {
+        if (!requireNewResources || !repositoryExists)
+        {
+            return;
+        }
+
+        if (!allowExistingEmptyRepository)
         {
             throw new InvalidOperationException($"Fixture repository '{repositoryFullName}' already exists.");
         }
+
+        if (!repositoryIsEmpty)
+        {
+            throw new InvalidOperationException($"Fixture repository '{repositoryFullName}' is not empty.");
+        }
     }
 
-    private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
+    private async Task<int> EnsureRepositoryAsync(
+        string organization,
+        string repositoryName,
+        bool requireNewResources,
+        bool allowExistingEmptyRepository,
+        CancellationToken cancellationToken)
     {
         var repositoryFullName = $"{organization}/{repositoryName}";
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
@@ -480,11 +497,31 @@ public sealed class FixtureProjectBuilder
             OnProgress?.Invoke($"Creating private repository {repositoryFullName}...");
             repository = await _rest.PostAsync($"orgs/{organization}/repos", new { name = repositoryName, @private = true }, cancellationToken).ConfigureAwait(false);
         }
+        else if (requireNewResources)
+        {
+            var repositoryIsEmpty = allowExistingEmptyRepository
+                && await IsRepositoryEmptyAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
+            ValidateRepositoryRequirement(
+                repositoryFullName,
+                requireNewResources,
+                allowExistingEmptyRepository,
+                repositoryExists: true,
+                repositoryIsEmpty);
+        }
 
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
         await EnsureIssuesAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         await EnsureBugLabelAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         return await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<bool> IsRepositoryEmptyAsync(string repositoryFullName, CancellationToken cancellationToken)
+    {
+        var contents = await _rest.GetAsync($"repos/{repositoryFullName}/contents", cancellationToken).ConfigureAwait(false);
+        var issues = await _rest.GetAsync($"repos/{repositoryFullName}/issues?state=all&per_page=1", cancellationToken).ConfigureAwait(false);
+        return contents is null
+            && issues is { ValueKind: JsonValueKind.Array }
+            && issues.Value.GetArrayLength() == 0;
     }
 
     private async Task EnsureReadmeAsync(string repositoryFullName, string repositoryName, CancellationToken cancellationToken)

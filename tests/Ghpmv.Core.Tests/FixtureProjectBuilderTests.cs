@@ -443,4 +443,24 @@ public class FixtureProjectBuilderTests
             updates,
             update => !string.Equals(update.UpdatedAt, update.CreatedAt, StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Require_new_resources_allows_only_an_explicitly_empty_repository()
+    {
+        FixtureProjectBuilder.ValidateRepositoryRequirement(
+            "example/fixture",
+            requireNewResources: true,
+            allowExistingEmptyRepository: true,
+            repositoryExists: true,
+            repositoryIsEmpty: true);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            FixtureProjectBuilder.ValidateRepositoryRequirement(
+                "example/fixture",
+                requireNewResources: true,
+                allowExistingEmptyRepository: true,
+                repositoryExists: true,
+                repositoryIsEmpty: false));
+        Assert.Equal("Fixture repository 'example/fixture' is not empty.", exception.Message);
+    }
 }
