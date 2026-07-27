@@ -102,9 +102,9 @@ code block を本文へ表示した直後に対話用質問ツールを呼び、
 |---|---|---|
 | `build-only` | 2 | restore + build 成功後に終了する。test、CLI smoke、token、browser、fixture、実環境操作を案内しない。 |
 | `baseline-full` | 2 | build + deterministic tests + CLI smoke 完了後に終了する。token、browser、fixture、実環境操作を案内しない。 |
-| `read-only` | 2, 4, 6 | source token だけを準備し、Step 6 の browser option なしの export 完了後に終了する。Step 3, 5, 7-10 は実行しない。 |
-| `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | browser profile を準備せず、browser option をすべて外して実行する。 |
-| `browser-e2e` | 2-4, 必要な場合だけ 5, 6-10 | browser profile と source / target token を分けて実行する。 |
+| `read-only` | 2, 4, 6 | Step 2 は restore + build だけ実行する。source token だけを準備し、Step 6 の browser option なしの export 完了後に終了する。Step 3, 5, 7-10 は実行しない。 |
+| `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile を準備せず、browser option をすべて外して実行する。 |
+| `browser-e2e` | 2-4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile と source / target token を分け、fixture / GEI / browser enrichment を含む full flow を実行する。 |
 
 `api-only` または `browser-e2e` では、既存 source Project を使うか fixture を作るかを一問で確認し、`fixture preparation` として記録する。`existing` の場合は Step 5 を実行せず、fixture 作成用権限を要求しない。
 
@@ -147,7 +147,9 @@ dotnet build Ghpmv.slnx -c Release --no-restore -warnaserror
 
 `build-only` は build の exit code 0 を確認した時点で完了報告を行い、終了する。test と CLI smoke を実行しない。
 
-`baseline-full`、`read-only`、`api-only`、`browser-e2e` だけが続けて deterministic tests と CLI smoke を実行する。
+`read-only`、`api-only`、`browser-e2e` は build の exit code 0 を確認したら tests と CLI smoke を実行せず、それぞれの次の Step へ進む。browser enrichment、fixture 作成、GEI、export / import / verify は省略しない。
+
+`baseline-full` だけが続けて deterministic tests と CLI smoke を実行する。
 
 ```powershell
 dotnet test tests\Ghpmv.Core.Tests\Ghpmv.Core.Tests.csproj -c Release --no-build
