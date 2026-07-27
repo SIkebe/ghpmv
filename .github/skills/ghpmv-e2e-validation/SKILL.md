@@ -22,6 +22,33 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
 6. **既存変更を壊さない。** branch、working tree、snapshot directory、mapping CSV を勝手に reset、削除、上書きしない。
 7. **warning を成功扱いしない。** 対象 category と欠落情報を説明し、ユーザーが許容するか確認する。
+8. **実行するコマンドを省略しない。** 「次のコマンド」「次の 4 行」のように、実体を省略した案内をしてはならない。agent が対話 terminal へ入力できる場合は command を agent 自身が送信する。入力できずユーザーへ実行を依頼する場合は、質問カードより前の assistant 本文にコピー可能な `powershell` code block を掲載する。質問カードは実行結果の確認だけに使い、command の表示場所にしない。
+9. **token を設定した PowerShell session を維持する。** ユーザーが `Read-Host` を実行した terminal と、token を参照する preflight / fixture / export / GEI / import / verify command は同じ terminal session で実行する。agent の shell tool が毎回別 process を開始する環境では、ユーザー terminal に設定された `$env:*_TOKEN` を参照できると仮定してはならない。
+
+## 対話 terminal の扱い
+
+token が必要になる前に、ユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。terminal canvas に command 送信と出力取得の action がある場合は、次の流れを必須とする。
+
+1. agent が同じ terminal instance へ `Read-Host -AsSecureString` と環境変数への代入 command を送信する。
+2. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
+3. ユーザーが入力完了を返したら、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信し、同じ terminal の出力を読む。
+4. token を参照する command を、別 process で動く shell tool へ切り替えない。
+
+terminal を開く機能がある場合は agent が先に開く。agent が terminal に command を直接入力できない場合だけ、その制約を明示し、command をユーザーに貼り付けてもらう。この場合、質問カードを出す前の assistant 本文を必ず次の形式にする。
+
+````markdown
+同じ PowerShell terminal で次を実行してください。
+
+```powershell
+<実行する完全な command>
+```
+
+この command を実行してください。
+````
+
+code block を本文へ表示した直後に対話用質問ツールを呼び、質問カードでは「terminal での実行は完了しましたか？」のように結果だけを確認する。質問カード内に command を重複掲載しない。本文と質問カードの間に別の説明や tool call を挟まず、どの command に対する確認かが曖昧にならないようにする。agent が terminal へ command を送信済みの場合は、質問文に「terminal に表示された prompt へ PAT を手入力してください」と明記し、ユーザーに command の再実行を求めない。
+
+`Read-Host` 後は、その terminal を閉じたり新しい terminal に切り替えたりしない。terminal session が失われた場合は token 値を会話へ貼らせず、同じ `Read-Host -AsSecureString` command で必要な環境変数を再設定する。agent の別 process から `$env:SOURCE_TOKEN` などの存在確認を試みても、token 準備の確認にはならない。
 
 ## セッション状態
 
@@ -43,6 +70,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 | validation mode | `build-only`, `read-only`, `api-only`, `browser-e2e` |
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
+| token execution terminal | token を設定し、以後の live command を実行する同一 PowerShell session |
 
 ## Step 1: 確認範囲を決める
 
@@ -114,6 +142,8 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile targ
 ## Step 4: Token を準備する
 
 **PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらい、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
+
+agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
 mode ごとに必要な token だけを準備する。
 
