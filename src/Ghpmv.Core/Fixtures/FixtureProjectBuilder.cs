@@ -503,6 +503,7 @@ public sealed class FixtureProjectBuilder
         bool allowExistingEmptyRepository,
         string operationDirectory,
         Func<CancellationToken, Task>? beforeWriteAsync,
+        Func<CancellationToken, Task>? compensateBeforeWriteAsync,
         CancellationToken cancellationToken)
     {
         var repositoryFullName = $"{organization}/{repositoryName}";
@@ -569,6 +570,20 @@ public sealed class FixtureProjectBuilder
                 if (repositoryState is not null)
                 {
                     DeleteRepositoryState(operationDirectory);
+                }
+
+                if (compensateBeforeWriteAsync is not null)
+                {
+                    try
+                    {
+                        await compensateBeforeWriteAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception compensationException)
+                    {
+                        throw new InvalidOperationException(
+                            "Repository creation failed and the reserved fixture Project could not be removed automatically.",
+                            new AggregateException(exception, compensationException));
+                    }
                 }
 
                 throw;
@@ -1438,4 +1453,8 @@ public sealed class FixtureProjectBuilder
         bool LogChanged);
 }
 
-public sealed record FixtureProjectSetupResult(int ProjectNumber, string Url, bool Created);
+public sealed record FixtureProjectSetupResult(
+    int ProjectNumber,
+    string Url,
+    bool Created,
+    bool OwnedByOperation);

@@ -72,7 +72,7 @@ public sealed class ProjectImporter
     /// <summary>Target project required by pending item operations loaded before project-stage writes.</summary>
     public string? PendingItemProjectId { get; init; }
 
-    internal async Task ReserveProjectAsync(
+    internal async Task<bool> ReserveProjectAsync(
         string ownerLogin,
         string title,
         CancellationToken cancellationToken = default)
@@ -96,7 +96,7 @@ public sealed class ProjectImporter
             _operationLog.CreatedProjectId = reconciled.Id;
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            return;
+            return false;
         }
 
         var existing = SelectExistingProject(matches);
@@ -104,7 +104,7 @@ public sealed class ProjectImporter
         {
             if (string.Equals(_operationLog?.CreatedProjectId, existing.Id, StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
 
             throw new InvalidOperationException(
@@ -113,6 +113,39 @@ public sealed class ProjectImporter
         }
 
         await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    internal async Task ReleaseReservedProjectAsync(CancellationToken cancellationToken = default)
+    {
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        var projectId = _operationLog?.CreatedProjectId
+            ?? throw new InvalidOperationException("This operation has no reserved Project to release.");
+        if (_operationLog.PendingProject is not null
+            || _operationLog.PendingFields.Count > 0
+            || _operationLog.PendingIssueFields.Count > 0
+            || _operationLog.PendingIssueFieldLinks.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Project '{projectId}' has pending import operations and cannot be released automatically.");
+        }
+
+        await _client.MutationAsync(
+            "deleteProjectV2",
+            """
+            mutation($projectId: ID!) {
+              deleteProjectV2(input: { projectId: $projectId }) {
+                projectV2 { id }
+              }
+            }
+            """,
+            new { projectId },
+            MutationRetryPolicy.Idempotent,
+            target: projectId,
+            requiredResultPath: "projectV2.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        _operationLog.CreatedProjectId = null;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>

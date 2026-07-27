@@ -1047,10 +1047,15 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo",
                 cancellationToken);
             Console.WriteLine(result.Url);
+            var fixtureDisposition = result.Created
+                ? "created"
+                : result.OwnedByOperation
+                    ? "resumed"
+                    : "already existed";
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"Fixture project {(result.Created ? "created" : "already existed")}: #{result.ProjectNumber}"));
+                $"Fixture project {fixtureDisposition}: #{result.ProjectNumber}"));
             createdFixtureProjectNumber = result.ProjectNumber;
-            fixtureAlreadyExisted = !result.Created;
+            fixtureAlreadyExisted = !result.Created && !result.OwnedByOperation;
         }
         catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException or System.Text.Json.JsonException)
         {

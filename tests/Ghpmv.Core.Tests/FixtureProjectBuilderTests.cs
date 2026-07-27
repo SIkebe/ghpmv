@@ -618,6 +618,54 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Repository_creation_conflict_releases_project_reserved_by_this_call()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-compensation-").FullName;
+        try
+        {
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                    """),
+                JsonResponse("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_1"}}}}"""));
+            using var restHandler = new RecordingHandler(
+                NotFoundResponse(),
+                ErrorResponse(HttpStatusCode.UnprocessableEntity));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal([HttpMethod.Get, HttpMethod.Post], restHandler.RequestMethods);
+            Assert.Contains(graphQlHandler.RequestBodies, body => body.Contains("createProjectV2(", StringComparison.Ordinal));
+            Assert.Contains(graphQlHandler.RequestBodies, body => body.Contains("deleteProjectV2(", StringComparison.Ordinal));
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            var projectLog = await ProjectImportLog.LoadAsync(
+                operationDirectory,
+                TestContext.Current.CancellationToken);
+            Assert.Null(projectLog.CreatedProjectId);
+            Assert.False(File.Exists(Path.Combine(operationDirectory, "fixture-repository.txt")));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Existing_empty_repository_reaches_fixture_writes()
     {
         using var graphQlHandler = new RecordingHandler(
