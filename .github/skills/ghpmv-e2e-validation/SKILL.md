@@ -266,6 +266,15 @@ mode ごとに必要な token だけを準備する。
 
 ユーザーが fine-grained PAT を選んだ場合は、permission を手作業で列挙させるだけでなく、GitHub の [pre-filled fine-grained PAT URL](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters) を現在の経路に合わせて生成し、クリック可能な完全な URL として提示する。GitHub.com 側は `https://github.com/settings/personal-access-tokens/new`、data residency 側は `https://TENANT.ghe.com/settings/personal-access-tokens/new` を使う。`target_name` には確認済みの organization login を設定し、`name`、`description`、`expires_in=30` と次の permission query parameter を付ける。
 
+fine-grained を選択した直後は、次の state machine を厳守する。
+
+1. 新しい質問を出さず、確認済みの host / organization / fixture 経路から必要な source / target URL を内部で組み立てる。
+2. 次の assistant 本文に、必要な token ごとの label と placeholder のない完全な raw autolink を実際に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
+3. URL を含むその同じ assistant response で readiness 用 `ask_user` を一度だけ呼ぶ。
+4. source / target の両方が必要な場合、両 URL を同じ本文に表示し、`Source/target PAT を両方作成済み` という一つの確認カードにまとめる。source と target を別々の readiness card で確認しない。
+
+assistant response 本文に今回の完全な URL が一つも存在しない状態では、`PAT を準備できましたか？`、permission 確認、PAT terminal 入力のいずれにも進んではならない。URL を生成できない必須値がある場合だけ、その不足値を一つ質問する。
+
 | token / 経路 | 必須 query parameter | 条件付き query parameter |
 |---|---|---|
 | source: 既存 Project の export | `organization_projects=read`, `metadata=read` | organization Issue Field には `issue_fields=read`、private repository item には `issues=read`, `pull_requests=read` |
@@ -295,7 +304,7 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 <https://github.com/settings/personal-access-tokens/new?...>
 ```
 
-URL 内に literal `\n`、escaped newline、空白、Markdown link label を混ぜない。renderer 上で折り返されても href 自体は一つの URL になるようにする。URL を表示した assistant 本文の直後に `ask_user` を呼ぶ場合、質問カードには「Source fine-grained PAT を準備できましたか？」のような確認文と choices だけを渡し、URL や Markdown を重複させない。
+URL 内に literal `\n`、escaped newline、空白、Markdown link label を混ぜない。renderer 上で折り返されても href 自体は一つの URL になるようにする。URL を表示した assistant 本文の直後に `ask_user` を呼ぶ場合、質問カードには readiness の確認文と choices だけを渡し、URL や Markdown を重複させない。「URL を生成して確認します」という本文の後に URL なしで readiness card を表示することは禁止する。
 
 fine-grained PAT URL を表示した turn は、URL の表示だけで終了してはならない。同じ turn で直ちに `ask_user` を呼び、次を一つの readiness question として明示する。
 
