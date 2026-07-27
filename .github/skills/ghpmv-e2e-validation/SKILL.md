@@ -96,11 +96,11 @@ token 入力中または直後に session が idle / interrupted になった場
 ```powershell
 if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<recovery-id>" }
 if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Write-Output "GHPMV_TARGET_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_TARGET_TOKEN_READY:<recovery-id>" }
-if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<recovery-id>" }
-if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<recovery-id>" }
+if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_SOURCE_TOKEN)) { Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<recovery-id>" }
+if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_TARGET_TOKEN)) { Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<recovery-id>" }
 ```
 
-選択済み経路で必要な token がすべて ready なら再入力させず次へ進む。`read-only` では `SOURCE_TOKEN`、`api-only` / `browser-e2e` では `SOURCE_TOKEN` と `TARGET_TOKEN`、さらに `repository preparation mode` が `GEI` の場合は両方の `GEI_*_TOKEN` も必須とする。選択経路で不要な token の missing は blocker にしない。必要な token のうち missing のものだけを、上記の一 token 一 command の手順で再入力する。
+選択済み経路で必要な token がすべて ready なら再入力させず次へ進む。`read-only` では `SOURCE_TOKEN`、`api-only` / `browser-e2e` では `SOURCE_TOKEN` と `TARGET_TOKEN`、さらに `repository preparation mode` が `GEI` の場合は `GHPMV_GEI_SOURCE_TOKEN` と `GHPMV_GEI_TARGET_TOKEN` も必須とする。選択経路で不要な token の missing は blocker にしない。必要な token のうち missing のものだけを、上記の一 token 一 command の手順で再入力する。
 
 terminal を開く機能がある場合は agent が先に開く。agent が terminal に command を直接入力できない場合だけ、その制約を明示し、command をユーザーに貼り付けてもらう。この場合、質問カードを出す前の assistant 本文を必ず次の形式にする。
 
@@ -387,13 +387,13 @@ $targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (
 `GEI`:
 
 ```powershell
-$geiSourceSecureToken = Read-Host "GEI_SOURCE_TOKEN for <source-org> on <source-host> (classic PAT for GEI source)" -AsSecureString; $env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Remove-Item Env:GEI_SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<token-prompt-id>" }
+$geiSourceSecureToken = Read-Host "GHPMV_GEI_SOURCE_TOKEN for <source-org> on <source-host> (classic PAT for GEI source)" -AsSecureString; $env:GHPMV_GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_SOURCE_TOKEN)) { Remove-Item Env:GHPMV_GEI_SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<token-prompt-id>" }
 ```
 
 現在の `GHPMV_GEI_SOURCE_TOKEN_READY:<token-prompt-id>` を確認した後だけ、別の terminal input として destination を送信する。
 
 ```powershell
-$geiTargetSecureToken = Read-Host "GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Remove-Item Env:GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<token-prompt-id>" }
+$geiTargetSecureToken = Read-Host "GHPMV_GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GHPMV_GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_TARGET_TOKEN)) { Remove-Item Env:GHPMV_GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
 ### Fine-grained fixture token の preflight
@@ -537,7 +537,7 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 
 この経路へ入る前に source host が GitHub.com であることを再確認する。GHEC with data residency source では実行しない。
 
-`docs/MANUAL_TEST_PLAN.md` の §6 に従い、`GEI_SOURCE_TOKEN` / `GEI_TARGET_TOKEN` で repository migration を完了する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
+`docs/MANUAL_TEST_PLAN.md` の §6 に従い、`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN` で repository migration を完了する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
 
 target が data residency の場合は `gh gei migrate-repo --help` で extension の現在の引数を確認し、migration command に `--target-api-url <target-api-url>` を追加する。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
 
