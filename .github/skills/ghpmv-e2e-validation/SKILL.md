@@ -28,6 +28,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 11. **観測可能な完了をユーザーに報告させない。** agent が起動した command は exit code、完了 sentinel、標準出力、生成物を agent 自身が監視する。「完了したら『完了』と返してください」「結果を教えてください」のような質問をしてはならない。
 12. **実行時の `ask_user` tool schema に従う。** 利用可能な schema が単一の `question` と任意の `choices` だけを受け取る場合は、一度に一問ずつ表示する。複数質問を受け取る正式な field がない限り、並列 tool call、複数カードの事前キュー、compound question、複数項目を固定した migration preset で回避しない。将来 schema に正式な複数質問 API が追加された場合だけ、その API を使って独立した質問をまとめてよい。往復削減は、観測可能な質問の削除と、選択結果により不要になった後続質問のスキップで行う。
 13. **Cancel / Skipped は即時 pause とする。** `ask_user` が cancel、skip、空回答を返した場合、必須値が不足していても同じ turn で再質問、言い換え、別カード表示をしてはならない。不足値と現在の Step を blocked state として記録し、command を追加実行せず、その turn を終了する。ユーザーから明示的な再開メッセージが届いた場合だけ、一度だけ質問を再表示する。
+14. **遷移説明だけで停止しない。** 質問への回答で現在の Step に必要な値と同意がすべて揃った場合は、「準備できました」「次へ進めます」だけを返して turn を終了してはならない。同じ turn で次の必要な terminal command を送信し、その完了監視まで開始する。追加の user decision、secret 入力、warning 承認、削除同意が必要な場合だけ質問で停止する。
 
 ## 自動完了検出
 
@@ -407,7 +408,9 @@ source fixture title と repository name は一つずつ確認するが、空の
 - fixture title: `ghpmv E2E source <run-id>`
 - repository name: `ghpmv-e2e-source-<run-id>`
 
-質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。推奨値またはユーザー入力値が source organization 内で既存 resource と衝突しないことを API で確認してから実行する。
+質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。
+
+run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpoint (`/orgs/{org}/projects`) を使った title 衝突確認を行わない。この endpoint は Projects v2 の確認にならず、HTTP 4xx を「衝突なし」に変換してはならない。fixture command 自体が name conflict を返した場合だけ、resource が作成されていないことを確認し、新しい run ID の推奨値を提示する。任意の preflight command を追加した場合も、non-zero exit code や HTTP error を成功扱いせず、その command の成否を fixture 作成の成否と混同しない。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
@@ -507,7 +510,7 @@ target seed title と repository name も空の自由入力カードにしない
 - target seed title: `ghpmv E2E target seed <run-id>`
 - target repository name: `ghpmv-e2e-target-<run-id>`
 
-別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。target organization 内で既存 resource と衝突しないことを API で確認する。
+別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。衝突は fixture command の明示的な error で検出し、Projects (classic) REST endpoint による事前確認は行わない。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
