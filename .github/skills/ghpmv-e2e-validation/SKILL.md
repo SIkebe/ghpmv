@@ -231,7 +231,7 @@ fine-grained PAT を選んだ token は URL status を `pending` にする。sou
 - `Read-Host` による PAT 入力
 - preflight、fixture、export、GEI、import、verify
 
-source と target の両方が fine-grained の場合は、**Source fine-grained PAT** と **Target fine-grained PAT** の見出しを付け、同じ assistant 本文に両方の clickable URL を表示する。permission の文章だけを列挙して URL を省略してはならない。
+source と target の両方が fine-grained の場合は、**Source fine-grained PAT** と **Target fine-grained PAT** の見出しを付け、同じ assistant 本文に両方の clickable URL を表示する。permission の文章だけを列挙して URL を省略してはならない。URL を `ask_user.question` や `choices` に埋め込まない。
 
 agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
@@ -268,7 +268,15 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 4. 現在の fixture / import 経路に必要な必須 permission parameter がすべてあり、値が `read` または `write` である。
 5. source と target の URL を取り違えていない。
 
-検証後、Markdown link と完全な raw URL の少なくとも一方を、UI 上でクリック可能な形で assistant 本文に表示する。質問カード内だけに URL を書かない。
+検証後、完全な raw URL を assistant 本文で一行の autolink として表示する。
+
+```markdown
+**Source fine-grained PAT**
+
+<https://github.com/settings/personal-access-tokens/new?...>
+```
+
+URL 内に literal `\n`、escaped newline、空白、Markdown link label を混ぜない。renderer 上で折り返されても href 自体は一つの URL になるようにする。URL を表示した assistant 本文の直後に `ask_user` を呼ぶ場合、質問カードには「Source fine-grained PAT を準備できましたか？」のような確認文と choices だけを渡し、URL や Markdown を重複させない。
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
