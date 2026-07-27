@@ -77,10 +77,22 @@ ready になった terminal instance ID を `token execution terminal` として
 
 token 入力時は次の流れを必須とする。
 
-1. agent が同じ terminal instance へ `Read-Host -AsSecureString` と環境変数への代入 command を送信する。
-2. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
-3. PAT の terminal 手入力は agent が値を観測できないため、対話用質問ツールで入力を依頼する。ユーザーの応答後、token 値を表示せず readiness sentinel を確認し、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信する。
-4. token を参照する command を、別 process で動く shell tool へ切り替えない。
+1. token prompt は **一度に一つだけ**送信する。source / target / GEI source / GEI target の複数 `Read-Host` を同じ `send_terminal_input` call や同じ PowerShell block に入れない。
+2. prompt label には env var、organization、host、用途をすべて入れる。`Source PAT` / `Target PAT` や「1個目 / 2個目」だけで区別しない。
+3. `Read-Host`、環境変数代入、token ごとの一意な readiness sentinel を一行の PowerShell command として送信する。複数行 paste による順序反転を避ける。
+4. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で該当する PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
+5. terminal canvas は secret 入力完了時に agent を自動 wake しないため、この操作だけは `ask_user` で入力完了を確認する。質問カードには、現在入力する env var / organization / host / 用途と、terminal に表示される sentinel を明記する。
+6. 同じ token について待機メッセージ、出力 read、質問カードを繰り返さない。command を一度送信したら確認カードを一枚だけ表示し、ユーザーの応答を待つ。
+7. ユーザーの応答後、token 値を表示せず readiness sentinel を確認する。確認できた場合だけ次の token prompt へ進む。sentinel がなければ一度だけ状態を説明し、その token だけを再入力するか確認する。
+8. すべての token が ready になった後、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信する。token を参照する command を、別 process で動く shell tool へ切り替えない。
+
+token 入力中または直後に session が idle / interrupted になった場合は、再入力を求める前に同じ terminal instance で環境変数の有無だけを確認する。token 値や長さは表示しない。
+
+```powershell
+if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Write-Output "GHPMV_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY" }; if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Write-Output "GHPMV_TARGET_TOKEN_MISSING" } else { Write-Output "GHPMV_TARGET_TOKEN_READY" }
+```
+
+両方が ready なら再入力させず次へ進む。missing の token だけを、上記の一 token 一 command の手順で再入力する。
 
 terminal を開く機能がある場合は agent が先に開く。agent が terminal に command を直接入力できない場合だけ、その制約を明示し、command をユーザーに貼り付けてもらう。この場合、質問カードを出す前の assistant 本文を必ず次の形式にする。
 
@@ -332,26 +344,31 @@ source / destination の role status が `migrator-pending` の間は、次の s
 `read-only`:
 
 ```powershell
-$sourceSecureToken = Read-Host "Source PAT" -AsSecureString
-$env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password
+$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv read-only export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; Write-Output "GHPMV_SOURCE_TOKEN_READY"
 ```
 
 `api-only` と `browser-e2e`:
 
 ```powershell
-$sourceSecureToken = Read-Host "Source PAT" -AsSecureString
-$env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password
-$targetSecureToken = Read-Host "Target PAT" -AsSecureString
-$env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password
+$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv fixture/export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; Write-Output "GHPMV_SOURCE_TOKEN_READY"
+```
+
+`GHPMV_SOURCE_TOKEN_READY` を確認した後だけ、別の terminal input として target を送信する。
+
+```powershell
+$targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (ghpmv import/verify)" -AsSecureString; $env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password; Write-Output "GHPMV_TARGET_TOKEN_READY"
 ```
 
 `GEI`:
 
 ```powershell
-$geiSourceSecureToken = Read-Host "GEI source classic PAT" -AsSecureString
-$env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password
-$geiTargetSecureToken = Read-Host "GEI target classic PAT" -AsSecureString
-$env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password
+$geiSourceSecureToken = Read-Host "GEI_SOURCE_TOKEN for <source-org> on <source-host> (classic PAT for GEI source)" -AsSecureString; $env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password; Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY"
+```
+
+`GHPMV_GEI_SOURCE_TOKEN_READY` を確認した後だけ、別の terminal input として destination を送信する。
+
+```powershell
+$geiTargetSecureToken = Read-Host "GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; Write-Output "GHPMV_GEI_TARGET_TOKEN_READY"
 ```
 
 ### Fine-grained fixture token の preflight
