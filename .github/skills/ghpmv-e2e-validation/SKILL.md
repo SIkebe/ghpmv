@@ -16,7 +16,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 ## 最重要原則
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
-2. **質問は一つずつ行う。** 選択肢を提示できる場合は対話用質問ツールを使う。
+2. **質問は一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付け、login、organization、repository 名などの自由入力では choices なしの質問カードを使う。assistant 本文だけで質問してユーザー入力を待ってはならない。
 3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
@@ -24,10 +24,21 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 7. **warning を成功扱いしない。** 対象 category と欠落情報を説明し、ユーザーが許容するか確認する。
 8. **実行するコマンドを省略しない。** 「次のコマンド」「次の 4 行」のように、実体を省略した案内をしてはならない。agent が対話 terminal へ入力できる場合は command を agent 自身が送信する。入力できずユーザーへ実行を依頼する場合は、質問カードより前の assistant 本文にコピー可能な `powershell` code block を掲載する。質問カードは実行結果の確認だけに使い、command の表示場所にしない。
 9. **token を設定した PowerShell session を維持する。** ユーザーが `Read-Host` を実行した terminal と、token を参照する preflight / fixture / export / GEI / import / verify command は同じ terminal session で実行する。agent の shell tool が毎回別 process を開始する環境では、ユーザー terminal に設定された `$env:*_TOKEN` を参照できると仮定してはならない。
+10. **terminal readiness を hard gate にする。** `read-only`、`api-only`、`browser-e2e` では、共有 terminal の起動と入出力を実測できるまで Step 2 以降へ進まない。terminal action が `Terminal not found or not running` などで失敗した場合、別の shell tool で baseline を続行してはならない。
 
-## 対話 terminal の扱い
+## 対話 terminal の readiness gate
 
-token が必要になる前に、ユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。terminal canvas に command 送信と出力取得の action がある場合は、次の流れを必須とする。
+`build-only` 以外では、Step 1 で validation mode と経路を確定した直後、Step 2 より前にユーザーと agent の両方が操作できる PowerShell terminal を一つ開く。terminal canvas に command 送信と出力取得の action がある場合は、同じ terminal instance へ次を送信して readiness を確認する。
+
+```powershell
+Write-Output "GHPMV_TERMINAL_READY"
+```
+
+出力取得 action で `GHPMV_TERMINAL_READY` を実際に読めた場合だけ、terminal を ready と記録して Step 2 へ進む。canvas を開く action が成功しただけでは ready とみなさない。command 送信または出力取得が失敗した場合はそこで停止し、対話用質問ツールで terminal panel の起動・focus 後に再試行するかを一問で確認する。成功するまで build、test、browser setup、token、live resource の処理を一切実行しない。
+
+ready になった terminal instance ID を `token execution terminal` として記録し、`read-only`、`api-only`、`browser-e2e` の Step 2 以降の command はすべてその terminal へ送信する。別 process の shell tool へ切り替えない。
+
+token 入力時は次の流れを必須とする。
 
 1. agent が同じ terminal instance へ `Read-Host -AsSecureString` と環境変数への代入 command を送信する。
 2. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
@@ -107,6 +118,8 @@ browser automation を選んだ場合は、source / target が同じアカウン
 ## Step 2: ローカル baseline
 
 リポジトリ root で .NET SDK と branch / working tree を確認する。既存変更は報告するだけで触らない。
+
+`build-only` は通常の shell tool で実行してよい。`read-only`、`api-only`、`browser-e2e` は readiness gate を通過した `token execution terminal` に以下の command を送り、出力も同じ terminal から取得する。terminal が失われた場合は readiness gate へ戻り、成功するまで baseline を開始または再開しない。
 
 ```powershell
 dotnet --version
