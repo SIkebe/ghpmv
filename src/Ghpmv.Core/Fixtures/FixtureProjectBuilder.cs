@@ -502,6 +502,7 @@ public sealed class FixtureProjectBuilder
         bool requireNewResources,
         bool allowExistingEmptyRepository,
         string operationDirectory,
+        Func<CancellationToken, Task>? beforeWriteAsync,
         CancellationToken cancellationToken)
     {
         var repositoryFullName = $"{organization}/{repositoryName}";
@@ -514,6 +515,7 @@ public sealed class FixtureProjectBuilder
         }
 
         var repository = await _rest.GetAsync($"repos/{repositoryFullName}", cancellationToken).ConfigureAwait(false);
+        var beforeWriteInvoked = false;
         if (repositoryState?.Status == PendingRepositoryStatus)
         {
             repository = await ReconcilePendingRepositoryAsync(
@@ -528,6 +530,12 @@ public sealed class FixtureProjectBuilder
         }
         else if (repository is null)
         {
+            if (beforeWriteAsync is not null)
+            {
+                await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                beforeWriteInvoked = true;
+            }
+
             if (requireNewResources)
             {
                 repositoryState = new RepositoryOperationState(
@@ -580,6 +588,11 @@ public sealed class FixtureProjectBuilder
         }
         else if (requireNewResources)
         {
+            if (allowExistingEmptyRepository)
+            {
+                ValidatePrivateRepository(repositoryFullName, repository.Value);
+            }
+
             var repositoryIsEmpty = allowExistingEmptyRepository
                 && await IsRepositoryEmptyAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
             ValidateRepositoryRequirement(
@@ -596,6 +609,11 @@ public sealed class FixtureProjectBuilder
                     ClaimedRepositoryStatus,
                     GetRepositoryId(repository.Value)),
                 cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!beforeWriteInvoked && beforeWriteAsync is not null)
+        {
+            await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
@@ -788,6 +806,21 @@ public sealed class FixtureProjectBuilder
         }
 
         return id.ToString();
+    }
+
+    private static void ValidatePrivateRepository(string repositoryFullName, JsonElement repository)
+    {
+        if (!repository.TryGetProperty("private", out var isPrivate)
+            || isPrivate.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new InvalidDataException("GitHub repository response did not contain a private visibility value.");
+        }
+
+        if (!isPrivate.GetBoolean())
+        {
+            throw new InvalidOperationException(
+                $"Fixture repository '{repositoryFullName}' must be private.");
+        }
     }
 
     private async Task<bool> IsRepositoryEmptyAsync(string repositoryFullName, CancellationToken cancellationToken)

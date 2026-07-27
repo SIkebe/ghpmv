@@ -72,6 +72,49 @@ public sealed class ProjectImporter
     /// <summary>Target project required by pending item operations loaded before project-stage writes.</summary>
     public string? PendingItemProjectId { get; init; }
 
+    internal async Task ReserveProjectAsync(
+        string ownerLogin,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+
+        OnProgress?.Invoke($"Reserving project title '{title}' in {OwnerDescription} '{ownerLogin}'...");
+        var matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
+        if (_operationLog?.PendingProject is { } pendingProject)
+        {
+            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+                || !string.Equals(pendingProject.Title, title, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending project operation '{pendingProject.OperationId}' does not match the current import target.");
+            }
+
+            var reconciled = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
+            _operationLog.CreatedProjectId = reconciled.Id;
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var existing = SelectExistingProject(matches);
+        if (existing is not null)
+        {
+            if (string.Equals(_operationLog?.CreatedProjectId, existing.Id, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                string.Create(CultureInfo.InvariantCulture,
+                    $"A project titled '{title}' already exists in {OwnerDescription} '{ownerLogin}' (#{existing.Number})."));
+        }
+
+        await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
     public async Task<ImportResult> ImportAsync(ProjectSnapshot snapshot, string ownerLogin, CancellationToken cancellationToken = default)
     {
@@ -112,7 +155,7 @@ public sealed class ProjectImporter
             return resumedResult;
         }
 
-        existing = matches.FirstOrDefault();
+        existing = SelectExistingProject(matches);
 
         if (existing is not null)
         {
@@ -142,57 +185,13 @@ public sealed class ProjectImporter
         ValidatePendingItemProject(projectId: null);
         ValidatePendingFieldOperations(snapshot, projectId: null);
         ValidatePendingViewOperations(snapshot, projectId: null);
-        var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
-        OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
-        var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        if (_operationLog is not null)
-        {
-            _operationLog.PendingProject = new PendingProjectOperation
-            {
-                OperationId = operationId,
-                OwnerLogin = ownerLogin,
-                Title = title,
-                ExistingProjectIds = [.. matches.Select(project => project.Id)],
-            };
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        JsonElement createData;
-        try
-        {
-            createData = await CreateProjectAsync(ownerId, title, operationId, cancellationToken).ConfigureAwait(false);
-        }
-        catch (AmbiguousMutationResultException)
-        {
-            throw;
-        }
-        catch
-        {
-            if (_operationLog is not null)
-            {
-                _operationLog.PendingProject = null;
-                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-
-            throw;
-        }
-
-        var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
-        if (_operationLog is not null)
-        {
-            _operationLog.CreatedProjectId = project.Id;
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
-        if (_operationLog is not null)
-        {
-            _operationLog.PendingProject = null;
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        return result;
+        var project = await CreateAndRecordProjectAsync(
+            ownerLogin,
+            title,
+            matches,
+            cancellationToken,
+            invokeBeforeWrite: true).ConfigureAwait(false);
+        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -279,6 +278,76 @@ public sealed class ProjectImporter
                 $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
                 "GitHub requires at least one option when creating the field and ignores empty option updates.");
         }
+    }
+
+    private ProjectRef? SelectExistingProject(IReadOnlyList<ProjectRef> matches)
+    {
+        if (_operationLog?.CreatedProjectId is not { } createdProjectId)
+        {
+            return matches.Count > 0 ? matches[0] : null;
+        }
+
+        return matches.FirstOrDefault(project => string.Equals(project.Id, createdProjectId, StringComparison.Ordinal))
+            ?? throw new InvalidOperationException(
+                $"The project '{createdProjectId}' created by this operation was not found.");
+    }
+
+    private async Task<ProjectRef> CreateAndRecordProjectAsync(
+        string ownerLogin,
+        string title,
+        IReadOnlyList<ProjectRef> matches,
+        CancellationToken cancellationToken,
+        bool invokeBeforeWrite = false)
+    {
+        var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        if (invokeBeforeWrite)
+        {
+            await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
+        var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingProject = new PendingProjectOperation
+            {
+                OperationId = operationId,
+                OwnerLogin = ownerLogin,
+                Title = title,
+                ExistingProjectIds = [.. matches.Select(project => project.Id)],
+            };
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        JsonElement createData;
+        try
+        {
+            createData = await CreateProjectAsync(ownerId, title, operationId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (AmbiguousMutationResultException)
+        {
+            throw;
+        }
+        catch
+        {
+            if (_operationLog is not null)
+            {
+                _operationLog.PendingProject = null;
+                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+
+        var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        if (_operationLog is not null)
+        {
+            _operationLog.CreatedProjectId = project.Id;
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+        return project;
+        return project;
     }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)

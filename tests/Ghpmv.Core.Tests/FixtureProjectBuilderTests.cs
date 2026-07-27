@@ -551,7 +551,7 @@ public class FixtureProjectBuilderTests
                 """),
             JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
         using var restHandler = new RecordingHandler(
-            JsonResponse("""{"id":1,"name":"fixture"}"""),
+            JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
             hasContents ? JsonResponse("""[{"name":"README.md"}]""") : NotFoundResponse(),
             JsonResponse(issuesBody));
         using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
@@ -569,7 +569,7 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public async Task Existing_empty_repository_reaches_fixture_writes()
+    public async Task Existing_public_empty_repository_is_rejected_before_writes()
     {
         using var graphQlHandler = new RecordingHandler(
             JsonResponse(
@@ -578,7 +578,65 @@ public class FixtureProjectBuilderTests
                 """),
             JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
         using var restHandler = new RecordingHandler(
-            JsonResponse("""{"id":1,"name":"fixture"}"""),
+            JsonResponse("""{"id":1,"name":"fixture","private":false}"""));
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest, allowExistingEmptyRepository: true);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.Equal("Fixture repository 'example/fixture' must be private.", exception.Message);
+        Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+    }
+
+    [Fact]
+    public async Task Concurrent_project_title_is_rejected_before_repository_writes()
+    {
+        using var graphQlHandler = new RecordingHandler(
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_other","number":2,"title":"Fixture","url":"https://github.com/orgs/example/projects/2"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """));
+        using var restHandler = new RecordingHandler(NotFoundResponse());
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.Contains("already exists", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+    }
+
+    [Fact]
+    public async Task Existing_empty_repository_reaches_fixture_writes()
+    {
+        using var graphQlHandler = new RecordingHandler(
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
+            JsonResponse(
+                """
+                {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                """));
+        using var restHandler = new RecordingHandler(
+            JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
             NotFoundResponse(),
             JsonResponse("[]"),
             NotFoundResponse(),
@@ -608,7 +666,16 @@ public class FixtureProjectBuilderTests
                            """
                            {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                            """),
-                       JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}""")))
+                       JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                       JsonResponse(
+                           """
+                           {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                           """),
+                       JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
+                       JsonResponse(
+                           """
+                           {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                           """)))
             using (var firstRestHandler = new RecordingHandler(
                        NotFoundResponse(),
                        JsonResponse("""{"id":1,"name":"fixture"}"""),
@@ -626,9 +693,13 @@ public class FixtureProjectBuilderTests
             using var retryGraphQlHandler = new RecordingHandler(
                 JsonResponse(
                     """
-                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                     """),
-                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """));
             using var retryRestHandler = new RecordingHandler(
                 JsonResponse("""{"id":1,"name":"fixture"}"""),
                 NotFoundResponse(),
@@ -689,7 +760,16 @@ public class FixtureProjectBuilderTests
                     """
                     {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                     """),
-                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"organization":{"id":"O_example"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                    """));
             using var restHandler = new RecordingHandler(
                 JsonResponse("""{"id":1,"name":"fixture","description":"ghpmv fixture operation operation-id"}"""),
                 NotFoundResponse(),
