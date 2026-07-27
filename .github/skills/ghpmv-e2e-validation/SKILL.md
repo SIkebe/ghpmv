@@ -36,10 +36,13 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 対話 terminal へ送る非対話 command は、送信直前に agent が command ごとの一意な `<command-id>` を生成し、可能な限り次の形で完了 sentinel と exit code を出す。`<command>` 自体の出力だけを見て早期に成功判定しない。一つの wrapper には native command を一つだけ入れる。restore と build など複数の native command は別々に送り、前の command の成功を確認するまで次を送らない。
 
 ```powershell
+$global:LASTEXITCODE = 0
 & {
     <command>
 }
-$ghpmvExitCode = $LASTEXITCODE
+$ghpmvInvocationSucceeded = $?
+$ghpmvNativeExitCode = $LASTEXITCODE
+$ghpmvExitCode = if ($ghpmvInvocationSucceeded -and $ghpmvNativeExitCode -eq 0) { 0 } elseif ($ghpmvNativeExitCode -ne 0) { $ghpmvNativeExitCode } else { 1 }
 Write-Output "GHPMV_COMMAND_DONE:<command-id>:$ghpmvExitCode"
 ```
 
@@ -81,20 +84,20 @@ token 入力時は次の流れを必須とする。
 
 1. token prompt は **一度に一つだけ**送信する。source / target / GEI source / GEI target の複数 `Read-Host` を同じ `send_terminal_input` call や同じ PowerShell block に入れない。
 2. prompt label には env var、organization、host、用途をすべて入れる。`Source PAT` / `Target PAT` や「1個目 / 2個目」だけで区別しない。
-3. `Read-Host`、環境変数代入、token ごとの一意な readiness sentinel を一行の PowerShell command として送信する。複数行 paste による順序反転を避ける。
+3. token prompt を送る直前に一意な `<token-prompt-id>` を生成して記録する。`Read-Host`、環境変数代入、`GHPMV_<token>_(READY|MISSING):<token-prompt-id>` sentinel を一行の PowerShell command として送信する。複数行 paste による順序反転を避ける。
 4. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で該当する PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
 5. terminal canvas は secret 入力完了時に agent を自動 wake しないため、この操作だけは `ask_user` で入力完了を確認する。質問カードには、現在入力する env var / organization / host / 用途と、terminal に表示される sentinel を明記する。
 6. 同じ token について待機メッセージ、出力 read、質問カードを繰り返さない。command を一度送信したら確認カードを一枚だけ表示し、ユーザーの応答を待つ。
-7. ユーザーの応答後、token 値を表示せず readiness sentinel を確認する。確認できた場合だけ次の token prompt へ進む。sentinel がなければ一度だけ状態を説明し、その token だけを再入力するか確認する。
+7. ユーザーの応答後、token 値を表示せず、現在記録している `<token-prompt-id>` と完全一致する readiness sentinel を確認する。scrollback 内の過去の固定 marker は成功扱いしない。確認できた場合だけ次の token prompt へ進む。sentinel がなければ一度だけ状態を説明し、その token だけを再入力するか確認する。
 8. すべての token が ready になった後、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信する。token を参照する command を、別 process で動く shell tool へ切り替えない。
 
-token 入力中または直後に session が idle / interrupted になった場合は、再入力を求める前に同じ terminal instance で環境変数の有無だけを確認する。token 値や長さは表示しない。
+token 入力中または直後に session が idle / interrupted になった場合は、再入力を求める前に一意な `<recovery-id>` を生成し、同じ terminal instance で環境変数の有無だけを確認する。token 値や長さは表示せず、今回の `<recovery-id>` と完全一致する marker だけを採用する。
 
 ```powershell
-if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Write-Output "GHPMV_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY" }
-if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Write-Output "GHPMV_TARGET_TOKEN_MISSING" } else { Write-Output "GHPMV_TARGET_TOKEN_READY" }
-if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY" }
-if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY" }
+if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<recovery-id>" }
+if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Write-Output "GHPMV_TARGET_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_TARGET_TOKEN_READY:<recovery-id>" }
+if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<recovery-id>" }
+if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<recovery-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<recovery-id>" }
 ```
 
 選択済み経路で必要な token がすべて ready なら再入力させず次へ進む。`read-only` では `SOURCE_TOKEN`、`api-only` / `browser-e2e` では `SOURCE_TOKEN` と `TARGET_TOKEN`、さらに `repository preparation mode` が `GEI` の場合は両方の `GEI_*_TOKEN` も必須とする。選択経路で不要な token の missing は blocker にしない。必要な token のうち missing のものだけを、上記の一 token 一 command の手順で再入力する。
@@ -360,50 +363,55 @@ source / destination の role status が `migrator-pending` の間は、次の s
 `read-only`:
 
 ```powershell
-$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv read-only export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY" }
+$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv read-only export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>" }
 ```
 
 `api-only` と `browser-e2e`:
 
 ```powershell
-$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv fixture/export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY" }
+$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv fixture/export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>" }
 ```
 
-`GHPMV_SOURCE_TOKEN_READY` を確認した後だけ、別の terminal input として target を送信する。
+現在の `GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>` を確認した後だけ、別の terminal input として target を送信する。
 
 ```powershell
-$targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (ghpmv import/verify)" -AsSecureString; $env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Remove-Item Env:TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_TARGET_TOKEN_MISSING" } else { Write-Output "GHPMV_TARGET_TOKEN_READY" }
+$targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (ghpmv import/verify)" -AsSecureString; $env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Remove-Item Env:TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
 `GEI`:
 
 ```powershell
-$geiSourceSecureToken = Read-Host "GEI_SOURCE_TOKEN for <source-org> on <source-host> (classic PAT for GEI source)" -AsSecureString; $env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Remove-Item Env:GEI_SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY" }
+$geiSourceSecureToken = Read-Host "GEI_SOURCE_TOKEN for <source-org> on <source-host> (classic PAT for GEI source)" -AsSecureString; $env:GEI_SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $geiSourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_SOURCE_TOKEN)) { Remove-Item Env:GEI_SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_SOURCE_TOKEN_READY:<token-prompt-id>" }
 ```
 
-`GHPMV_GEI_SOURCE_TOKEN_READY` を確認した後だけ、別の terminal input として destination を送信する。
+現在の `GHPMV_GEI_SOURCE_TOKEN_READY:<token-prompt-id>` を確認した後だけ、別の terminal input として destination を送信する。
 
 ```powershell
-$geiTargetSecureToken = Read-Host "GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Remove-Item Env:GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY" }
+$geiTargetSecureToken = Read-Host "GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GEI_TARGET_TOKEN)) { Remove-Item Env:GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
 ### Fine-grained fixture token の preflight
 
-`fixture preparation` が `create` で source に fine-grained PAT を選んだ場合、`setup --fixture` より先に次を実行する。target の `fixture-seed` でも organization と token を置き換えて同じ確認を行う。
+`fixture preparation` が `create` で source に fine-grained PAT を選んだ場合、`setup --fixture` より先に次の preflight 専用 wrapper を endpoint ごとに別々に実行する。送信直前に一意な `<preflight-id>` を生成する。target の `fixture-seed` でも organization と token を置き換えて同じ確認を行う。
 
 ```powershell
 $previousGhToken = $env:GH_TOKEN
 $env:GH_TOKEN = $env:SOURCE_TOKEN
 try {
-    gh api --include --method POST "orgs/<source-org>/repos"
-    gh api --include --method POST "orgs/<source-org>/issue-fields"
+    $preflightResponse = gh api --include --method POST "orgs/<source-org>/<repos-or-issue-fields>" 2>&1
+    $preflightNativeExitCode = $LASTEXITCODE
+    $preflightText = $preflightResponse | Out-String
+    Write-Output $preflightResponse
+    $preflightExpected422 = $preflightNativeExitCode -ne 0 -and $preflightText -match '(HTTP(?:/\S+)?\s+422\b|\(HTTP 422\))' -and $preflightText -match 'Validation Failed'
+    $preflightExitCode = if ($preflightExpected422) { 0 } elseif ($preflightNativeExitCode -ne 0) { $preflightNativeExitCode } else { 1 }
+    Write-Output "GHPMV_PREFLIGHT_DONE:<preflight-id>:$preflightExitCode"
 }
 finally {
     $env:GH_TOKEN = $previousGhToken
 }
 ```
 
-data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。GitHub.com source → data residency target の source preflight には追加せず、target preflight だけに target tenant hostname を追加する。
+`repos` と `issue-fields` を一つの wrapper にまとめず、それぞれ異なる `<preflight-id>` で送り、今回の ID と完全一致する `GHPMV_PREFLIGHT_DONE:<preflight-id>:0` を確認する。期待どおりの 422 だけを semantic success とし、transport error、403、422 以外、または `Validation Failed` のない response は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。GitHub.com source → data residency target の source preflight には追加せず、target preflight だけに target tenant hostname を追加する。
 
 どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が `422 Validation Failed` なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) を確認する。token owner の organization role、member の repository creation policy、organization の PAT restriction も別に確認する。原因を一つに断定しない。再作成しても 403 の場合は `setup --fixture` を実行せず、次のどちらかを選んでもらう。
 
