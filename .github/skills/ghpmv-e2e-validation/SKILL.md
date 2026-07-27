@@ -170,6 +170,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
 
+GEI 経路は source host が GitHub.com の場合だけ選択可能とする。repository preparation mode を先に `GEI` と記録した後で source host が GHEC with data residency と確定した場合は、その組み合わせを unsupported と説明し、`repository preparation mode` を未確定へ戻して `fixture-seed` を選び直す。現行 `gh gei migrate-repo` の `--target-api-url` は data-residency target 用であり、data-residency source endpoint の指定には使えない。source host を GitHub.com として偽って続行してはならない。
+
 `GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
 
 1. Organization owner
@@ -368,14 +370,18 @@ $sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (
 
 `api-only` と `browser-e2e`:
 
+`fixture preparation=create` では source purpose を `ghpmv fixture creation/export`、`fixture preparation=existing` では `ghpmv export only` とする。placeholder の `<source-purpose>` を選択済み経路の実値へ置き換える。
+
 ```powershell
-$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (ghpmv fixture/export)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>" }
+$sourceSecureToken = Read-Host "SOURCE_TOKEN for <source-org> on <source-host> (<source-purpose>)" -AsSecureString; $env:SOURCE_TOKEN = [System.Net.NetworkCredential]::new("", $sourceSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:SOURCE_TOKEN)) { Remove-Item Env:SOURCE_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_SOURCE_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>" }
 ```
 
 現在の `GHPMV_SOURCE_TOKEN_READY:<token-prompt-id>` を確認した後だけ、別の terminal input として target を送信する。
 
+`repository preparation mode=fixture-seed` では target purpose を `ghpmv fixture seed/import/verify`、`GEI` では `ghpmv import/verify after GEI` とする。placeholder の `<target-purpose>` を選択済み経路の実値へ置き換える。
+
 ```powershell
-$targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (ghpmv import/verify)" -AsSecureString; $env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Remove-Item Env:TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_TARGET_TOKEN_READY:<token-prompt-id>" }
+$targetSecureToken = Read-Host "TARGET_TOKEN for <target-org> on <target-host> (<target-purpose>)" -AsSecureString; $env:TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $targetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:TARGET_TOKEN)) { Remove-Item Env:TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
 `GEI`:
@@ -518,6 +524,8 @@ warning がある場合、どの UI-only field が欠落したかを示して続
 Step 1 で記録した `repository preparation mode` の経路だけを実行する。
 
 ### GEI
+
+この経路へ入る前に source host が GitHub.com であることを再確認する。GHEC with data residency source では実行しない。
 
 `docs/MANUAL_TEST_PLAN.md` の §6 に従い、`GEI_SOURCE_TOKEN` / `GEI_TARGET_TOKEN` で repository migration を完了する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
 
