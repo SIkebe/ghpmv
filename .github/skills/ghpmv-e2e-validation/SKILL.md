@@ -113,6 +113,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | validation mode | `build-only`, `baseline-full`, `read-only`, `api-only`, `browser-e2e` |
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
+| source / target fine-grained PAT URL status | `not-required`, `pending`, `shown-and-validated` |
 | token execution terminal | token を設定し、以後の live command を実行する同一 PowerShell session |
 | source host type / web URL / API URL | `github.com`, `https://github.com`, `https://api.github.com/graphql` |
 | target host type / web URL / API URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com` |
@@ -219,6 +220,14 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 **PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらい、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
 
+fine-grained PAT を選んだ token は URL status を `pending` にする。source / target organization login、host、fixture preparation、repository preparation mode が未確定なら、先に不足値を質問する。該当 token の完全な pre-filled URL を assistant 本文へ表示して検証し、status を `shown-and-validated` に更新するまで、次の操作を禁止する。
+
+- 「必要な権限を準備できましたか」という質問
+- `Read-Host` による PAT 入力
+- preflight、fixture、export、GEI、import、verify
+
+source と target の両方が fine-grained の場合は、**Source fine-grained PAT** と **Target fine-grained PAT** の見出しを付け、同じ assistant 本文に両方の clickable URL を表示する。permission の文章だけを列挙して URL を省略してはならない。
+
 agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
 mode ごとに必要な token だけを準備する。
@@ -245,6 +254,16 @@ mode ごとに必要な token だけを準備する。
 ```text
 https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&description=Export+an+organization+Project+with+ghpmv&target_name=octo-org&expires_in=30&organization_projects=read&metadata=read
 ```
+
+表示前に token ごとに次を検証する。
+
+1. URL host がその token の GitHub host と一致する。
+2. `target_name` が確認済み organization login で、`TENANT`、`octo-org`、`<source-org>` などの placeholder が残っていない。
+3. `name`、`description`、`target_name` が URL encode され、`expires_in=30` がある。
+4. 現在の fixture / import 経路に必要な必須 permission parameter がすべてあり、値が `read` または `write` である。
+5. source と target の URL を取り違えていない。
+
+検証後、Markdown link と完全な raw URL の少なくとも一方を、UI 上でクリック可能な形で assistant 本文に表示する。質問カード内だけに URL を書かない。
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
