@@ -48,13 +48,13 @@ Write-Output "GHPMV_COMMAND_DONE:<command-id>:$ghpmvExitCode"
 
 terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として監視を継続し、ユーザーへ完了報告を求めない。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
 
-browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で sign in を行ってください」と通知するだけで、質問カードや「完了したら返答」を表示しない。command が `Signed in as '<expected-login>'` を出力して exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で sign in を行ってください」と通知するだけで、質問カードや「完了したら返答」を表示しない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
 | Step / 処理 | agent が自動確認するもの |
 |---|---|
 | terminal readiness | `GHPMV_TERMINAL_READY` |
 | restore / build / browser setup | exit code または完了 sentinel |
-| browser login | `Signed in as '<expected-login>'` と exit code 0 |
+| browser login | 出力された login と期待 login の case-insensitive 一致、および exit code 0 |
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
@@ -243,7 +243,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 `github.com-to-ghec-dr` では source login に `--base-url` を付けず、target login に `--base-url <target-web-url>` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
 
-各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへログイン完了の返信を求めない。`Signed in as '<expected-login>'` と exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
+各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへログイン完了の返信を求めない。`Signed in as '<reported-login>'` から login を取り出し、期待 login と大文字小文字を区別せず一致すること、および exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
 
 ## Step 4: Token を準備する
 
