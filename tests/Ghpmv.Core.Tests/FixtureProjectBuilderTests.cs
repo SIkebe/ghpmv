@@ -484,6 +484,39 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Require_new_resources_resumes_project_owned_by_operation()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-resume-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var restHandler = new RecordingHandler(JsonResponse("""{"id":1,"name":"fixture"}"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' already exists.", exception.Message);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Require_new_resources_rejects_existing_repository_without_mutations()
     {
         using var graphQlHandler = new RecordingHandler(
@@ -564,16 +597,101 @@ public class FixtureProjectBuilderTests
         Assert.Equal("/repos/example/fixture/contents/README.md", restHandler.RequestPaths[^1]);
     }
 
+    [Fact]
+    public async Task Repository_created_by_operation_is_reused_on_retry()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-repository-resume-").FullName;
+        try
+        {
+            using (var firstGraphQlHandler = new RecordingHandler(
+                       JsonResponse(
+                           """
+                           {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                           """),
+                       JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}""")))
+            using (var firstRestHandler = new RecordingHandler(
+                       NotFoundResponse(),
+                       JsonResponse("""{"id":1,"name":"fixture"}"""),
+                       NotFoundResponse(),
+                       ErrorResponse(HttpStatusCode.UnprocessableEntity)))
+            using (var firstGraphQl = new GitHubGraphQLClient("token", baseUrl: null, firstGraphQlHandler, (_, _) => Task.CompletedTask))
+            using (var firstRest = new GitHubRestClient("token", baseUri: null, firstRestHandler))
+            {
+                var builder = CreateRequireNewBuilder(firstGraphQl, firstRest, operationLogDirectory: logRoot);
+
+                await Assert.ThrowsAsync<HttpRequestException>(() =>
+                    builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+            }
+
+            using var retryGraphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var retryRestHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture"}"""),
+                NotFoundResponse(),
+                ErrorResponse(HttpStatusCode.UnprocessableEntity));
+            using var retryGraphQl = new GitHubGraphQLClient("token", baseUrl: null, retryGraphQlHandler, (_, _) => Task.CompletedTask);
+            using var retryRest = new GitHubRestClient("token", baseUri: null, retryRestHandler);
+            var retryBuilder = CreateRequireNewBuilder(retryGraphQl, retryRest, operationLogDirectory: logRoot);
+
+            await Assert.ThrowsAsync<HttpRequestException>(() =>
+                retryBuilder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal(
+                ["/repos/example/fixture", "/repos/example/fixture/contents/README.md", "/repos/example/fixture/contents/README.md"],
+                retryRestHandler.RequestPaths);
+            Assert.Equal([HttpMethod.Get, HttpMethod.Get, HttpMethod.Put], retryRestHandler.RequestMethods);
+
+            using var replacedGraphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var replacedRestHandler = new RecordingHandler(JsonResponse("""{"id":2,"name":"fixture"}"""));
+            using var replacedGraphQl = new GitHubGraphQLClient("token", baseUrl: null, replacedGraphQlHandler, (_, _) => Task.CompletedTask);
+            using var replacedRest = new GitHubRestClient("token", baseUri: null, replacedRestHandler);
+            var replacedBuilder = CreateRequireNewBuilder(replacedGraphQl, replacedRest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                replacedBuilder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Contains("no longer matches", exception.Message, StringComparison.Ordinal);
+            Assert.Equal([HttpMethod.Get], replacedRestHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
     private static FixtureProjectBuilder CreateRequireNewBuilder(
         GitHubGraphQLClient graphQl,
         GitHubRestClient rest,
-        bool allowExistingEmptyRepository = false)
+        bool allowExistingEmptyRepository = false,
+        string? operationLogDirectory = null)
         => new(graphQl, rest)
         {
-            OperationLogDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-tests", Guid.NewGuid().ToString("N")),
+            OperationLogDirectory = operationLogDirectory
+                ?? Path.Combine(Path.GetTempPath(), "ghpmv-tests", Guid.NewGuid().ToString("N")),
             RequireNewResources = true,
             AllowExistingEmptyRepository = allowExistingEmptyRepository,
         };
+
+    private static string GetOperationDirectory(
+        string logRoot,
+        string organization,
+        string title,
+        string repositoryName)
+    {
+        var operationKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{organization}\n{title}\n{repositoryName}")))[..16]
+            .ToLowerInvariant();
+        return Path.Combine(logRoot, operationKey);
+    }
 
     private static HttpResponseMessage JsonResponse(string body)
         => new(HttpStatusCode.OK)

@@ -95,6 +95,8 @@ public sealed class ProjectImporter
             }
 
             existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
+            _operationLog.CreatedProjectId = existing.Id;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
             ValidatePendingFieldOperations(snapshot, existing.Id);
             ValidatePendingViewOperations(snapshot, existing.Id);
@@ -177,6 +179,12 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        if (_operationLog is not null)
+        {
+            _operationLog.CreatedProjectId = project.Id;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
         if (_operationLog is not null)
         {

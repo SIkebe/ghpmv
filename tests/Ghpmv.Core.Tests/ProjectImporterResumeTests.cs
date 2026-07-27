@@ -43,7 +43,9 @@ public class ProjectImporterResumeTests
             Assert.Equal("PVT_created", result.ProjectId);
             Assert.Equal(1, handler.CreateMutationCount);
             Assert.Equal(2, prewriteCount);
-            Assert.Null((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingProject);
+            var completed = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Null(completed.PendingProject);
+            Assert.Equal("PVT_created", completed.CreatedProjectId);
         }
         finally
         {

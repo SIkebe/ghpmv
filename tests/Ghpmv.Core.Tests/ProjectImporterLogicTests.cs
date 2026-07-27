@@ -75,11 +75,12 @@ public class ProjectImporterLogicTests
             new Uri("https://example.test/graphql"),
             handler,
             delayAsync: null);
+        var operationLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-project-import-{Guid.NewGuid():N}");
         var importer = new ProjectImporter(client)
         {
             OnConflict = ConflictAction.Update,
             BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
-            OperationLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-project-import-{Guid.NewGuid():N}"),
+            OperationLogDirectory = operationLogDirectory,
         };
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -95,6 +96,9 @@ public class ProjectImporterLogicTests
             "mutation",
             document.RootElement.GetProperty("query").GetString()!,
             StringComparison.OrdinalIgnoreCase);
+        Assert.Null((await ProjectImportLog.LoadAsync(
+            operationLogDirectory,
+            TestContext.Current.CancellationToken)).CreatedProjectId);
     }
 
     [Fact]
