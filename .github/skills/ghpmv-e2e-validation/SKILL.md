@@ -29,6 +29,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 12. **実行時の `ask_user` tool schema に従う。** 利用可能な schema が単一の `question` と任意の `choices` だけを受け取る場合は、一度に一問ずつ表示する。複数質問を受け取る正式な field がない限り、並列 tool call、複数カードの事前キュー、compound question、複数項目を固定した migration preset で回避しない。将来 schema に正式な複数質問 API が追加された場合だけ、その API を使って独立した質問をまとめてよい。往復削減は、観測可能な質問の削除と、選択結果により不要になった後続質問のスキップで行う。
 13. **Cancel / Skipped は即時 pause とする。** `ask_user` が cancel、skip、空回答を返した場合、必須値が不足していても同じ turn で再質問、言い換え、別カード表示をしてはならない。不足値と現在の Step を blocked state として記録し、command を追加実行せず、その turn を終了する。ユーザーから明示的な再開メッセージが届いた場合だけ、一度だけ質問を再表示する。
 14. **遷移説明だけで停止しない。** 質問への回答で現在の Step に必要な値と同意がすべて揃った場合は、「準備できました」「次へ進めます」だけを返して turn を終了してはならない。同じ turn で次の必要な terminal command を送信し、その完了監視まで開始する。追加の user decision、secret 入力、warning 承認、削除同意が必要な場合だけ質問で停止する。
+15. **内部 ID だけの選択肢を出さない。** `build-only`、`api-only` などの記録用 ID を choice に単独表示せず、各 choice に「何を実行するか」「実 resource を読み書きするか」を日本語で含める。ユーザーの依頼から推奨できる choice には `(Recommended)` を付ける。選択後は説明文ではなく対応する内部 ID を state に記録する。
 
 ## 自動完了検出
 
@@ -139,13 +140,15 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 ## Step 1: 確認範囲を決める
 
-次から一つ選んでもらう。
+次から一つ選んでもらう。質問文にも「実 resource への影響」を判断基準として示す。choice は次のように、内部 ID だけでなく実行範囲を表示する。
 
-1. build のみ
-2. build + deterministic tests + CLI smoke test
-3. 実 Project の read-only export
-4. API-only export / import / verify
-5. browser automation を含む end-to-end test
+1. `build-only — restore + build のみ（GitHub 実 resource へのアクセスなし）`
+2. `baseline-full — build + deterministic tests + CLI smoke（GitHub 実 resource へのアクセスなし）`
+3. `read-only — 実 Project を export のみ（source を読み取り、target への作成・変更なし）`
+4. `api-only — API で export → import → verify（fixture / target resource を作成・変更）`
+5. `browser-e2e — browser automation、fixture、export → import → verify の完全 E2E（Recommended、source / target resource を作成・変更）`
+
+依頼が browser automation を含む実環境 E2E 検証である場合は 5 に `(Recommended)` を表示する。別目的で起動された場合は、その依頼に最も直接対応する choice だけを推奨する。質問文または choice 内で、`api-only` と `browser-e2e` は実 resource を作成・変更するが、この時点ではまだ実行せず、後続 Step で作成物と削除同意を確認することを示す。
 
 1 は `build-only`、2 は `baseline-full` として記録する。選択結果を `validation mode` として記録し、次の経路以外へ進めない。
 
