@@ -441,13 +441,15 @@ source fixture title と repository name は一つずつ確認するが、空の
 
 質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
 
+fixture title は PowerShell の single-quoted argument として渡す。ユーザーが別名を入力した場合は、値に含まれる `'` を `''` に置換してから single quotes で囲む。未 quote の title を command に展開しない。
+
 run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpoint (`/orgs/{org}/projects`) を使った title 衝突確認を行わない。この endpoint は Projects v2 の確認にならず、HTTP 4xx を「衝突なし」に変換してはならない。fixture command 自体が name conflict を返した場合だけ、resource が作成されていないことを確認し、新しい run ID の推奨値を提示する。任意の preflight command を追加した場合も、non-zero exit code や HTTP error を成功扱いせず、その command の成否を fixture 作成の成否と混同しない。
 
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture `
   --fixture-org <source-org> `
-  --fixture-title <unique-title> `
+  --fixture-title '<escaped-unique-title>' `
   --fixture-repo <unique-repo> `
   --fixture-require-new `
   --token $env:SOURCE_TOKEN
@@ -552,11 +554,13 @@ target seed title と repository name も空の自由入力カードにしない
 
 別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
 
+target seed title も `'` を `''` に置換したうえで PowerShell single-quoted argument として渡す。
+
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture `
   --fixture-org <target-org> `
-  --fixture-title <unique-target-seed-title> `
+  --fixture-title '<escaped-unique-target-seed-title>' `
   --fixture-repo <target-repo> `
   --fixture-require-new `
   --token $env:TARGET_TOKEN

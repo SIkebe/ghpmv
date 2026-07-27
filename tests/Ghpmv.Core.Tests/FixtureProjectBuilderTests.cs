@@ -463,4 +463,94 @@ public class FixtureProjectBuilderTests
                 repositoryIsEmpty: false));
         Assert.Equal("Fixture repository 'example/fixture' is not empty.", exception.Message);
     }
+
+    [Fact]
+    public async Task Require_new_resources_rejects_existing_project_without_mutations()
+    {
+        using var graphQlHandler = new RecordingHandler(JsonResponse(
+            """
+            {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """));
+        using var restHandler = new RecordingHandler();
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        Assert.Empty(restHandler.RequestMethods);
+    }
+
+    [Fact]
+    public async Task Require_new_resources_rejects_existing_repository_without_mutations()
+    {
+        using var graphQlHandler = new RecordingHandler(
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """),
+            JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+        using var restHandler = new RecordingHandler(JsonResponse("""{"id":1,"name":"fixture"}"""));
+        using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+        using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+        var builder = CreateRequireNewBuilder(graphQl, rest);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+    }
+
+    private static FixtureProjectBuilder CreateRequireNewBuilder(
+        GitHubGraphQLClient graphQl,
+        GitHubRestClient rest)
+        => new(graphQl, rest)
+        {
+            OperationLogDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-tests", Guid.NewGuid().ToString("N")),
+            RequireNewResources = true,
+        };
+
+    private static HttpResponseMessage JsonResponse(string body)
+        => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
+    private sealed class RecordingHandler(params HttpResponseMessage[] responses) : HttpMessageHandler
+    {
+        private readonly Queue<HttpResponseMessage> _responses = new(responses);
+
+        public List<string> RequestBodies { get; } = [];
+
+        public List<HttpMethod> RequestMethods { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestMethods.Add(request.Method);
+            if (request.Content is not null)
+            {
+                RequestBodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            }
+
+            return _responses.Dequeue();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                while (_responses.Count > 0)
+                {
+                    _responses.Dequeue().Dispose();
+                }
+            }
+
+            base.Dispose(disposing);
+        }
+    }
 }
