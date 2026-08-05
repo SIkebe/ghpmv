@@ -704,6 +704,15 @@ public sealed class FixtureProjectBuilder
             await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
+        {
+            repositoryState = repositoryState with { Status = ClaimedRepositoryStatus };
+            await SaveRepositoryClaimAsync(
+                operationDirectory,
+                repositoryState,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
         await EnsureIssuesAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         await EnsureBugLabelAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
