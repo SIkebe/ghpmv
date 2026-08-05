@@ -753,6 +753,12 @@ public sealed class ItemImporter
 
                 valueInput = new { iterationId };
             }
+            else if (value.MultiSelectOptionNames is not null)
+            {
+                Warn(warnings, $"{label}: Project multi-select field '{value.FieldName}' cannot be imported because GitHub's Project field APIs do not support applying its values; skipping the value.");
+                allApplied = false;
+                continue;
+            }
             else
             {
                 continue; // Empty value: nothing to set.
