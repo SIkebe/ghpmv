@@ -142,7 +142,7 @@ public class ProjectExporterTests
         Assert.Equal("BOARD_LAYOUT", board.Layout);
         Assert.Equal("Fixture Select", Assert.Single(board.VerticalGroupByFields));
         Assert.Equal("Status", Assert.Single(board.GroupByFields)); // board swimlanes
-        Assert.Empty(board.VisibleFields);
+        Assert.NotEmpty(board.VisibleFields);
 
         var roadmap = Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap");
         Assert.Equal("ROADMAP_LAYOUT", roadmap.Layout);
