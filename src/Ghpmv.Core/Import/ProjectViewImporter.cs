@@ -90,7 +90,9 @@ internal sealed class ProjectViewImporter
 
             if (!BrowserEnrichmentPlanned)
             {
-                WarnAboutBrowserOnlySettings(source, initiallyExistingTargetIds.Contains(target.Id));
+                var targetWasReused = projectOutcome == ProjectImportOutcome.Updated
+                    && initiallyExistingTargetIds.Contains(target.Id);
+                WarnAboutBrowserOnlySettings(source, targetWasReused);
             }
         }
 

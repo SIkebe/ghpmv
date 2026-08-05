@@ -211,6 +211,33 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Api_only_created_project_does_not_warn_that_the_default_view_preexisted()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-created-warning-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
+
+            await importer.ImportAsync(
+                [View(1, "Backlog", "TABLE_LAYOUT", filter: null, visibleFields: [])],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(importer.Warnings, warning =>
+                warning.Contains("existing browser-only settings", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 

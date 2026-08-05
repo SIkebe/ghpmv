@@ -201,6 +201,11 @@ public sealed class ViewUiImporter
 
         if (view.SortByFields.Count > 0)
         {
+            await TryEnsureSortFieldVisibleAsync(
+                page,
+                view.SortByFields[0].Field,
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
             await TrySetSortAsync(page, view.SortByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
         }
         else
@@ -345,6 +350,42 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': sort direction could not be applied — {exception.Message}");
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task TryEnsureSortFieldVisibleAsync(
+        IPage page,
+        string field,
+        string viewName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+            var item = Sel.ConfigurationMenuItem(menu, "Fields");
+            if (await item.CountAsync().ConfigureAwait(false) == 0)
+            {
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await item.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var option = await FindOptionAsync(page, field).ConfigureAwait(false);
+            if (option is not null
+                && !string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
+                && !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                await option.ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
