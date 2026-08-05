@@ -1092,7 +1092,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             "ghpmv",
             "fixture-view-operations",
             deployment,
-            org,
+            org.ToLowerInvariant(),
             projectNumber.Value.ToString(CultureInfo.InvariantCulture));
         var uiCompletionPath = Path.Combine(fixtureViewOperationDirectory, "fixture-ui-complete");
         if (fixtureResult?.ShouldSkipUiSetup(
