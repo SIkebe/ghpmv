@@ -200,9 +200,10 @@ ghpmv verify --org target-org --project 12 --in ./snapshot --enable-browser-auto
 ```
 
 Browser-assisted export and verify also read the complete server-rendered Project field
-catalog. This avoids a current GitHub GraphQL failure on Projects containing linked
-multi-select Issue Fields and retains hidden or unset fields. If the public field connection
-fails in API-only mode, `ghpmv` exits without writing or comparing a partial snapshot.
+catalog. GraphQL now enumerates multi-select Project fields, but does not expose the
+underlying organization `issueFieldId`; the browser catalog preserves exact linked-field
+identity for hidden, unset, or same-name fields. If the public field connection fails in
+API-only mode, `ghpmv` exits without writing or comparing a partial snapshot.
 
 ### Cross-account migration (e.g. non-EMU source → EMU target)
 

@@ -7,9 +7,9 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Core.Browser;
 
 /// <summary>
-/// Reads the complete field catalog embedded by the Projects web UI. GitHub's public
-/// GraphQL field connection cannot enumerate projects containing linked multi-select
-/// Issue Fields, while this page data includes every field and the underlying linkage.
+/// Reads the complete field catalog embedded by the Projects web UI. GraphQL enumerates
+/// multi-select Project fields but does not expose their underlying organization Issue Field
+/// identity, while this page data includes every field and its <c>issueFieldId</c> linkage.
 /// </summary>
 public sealed class ProjectFieldUiExporter
 {

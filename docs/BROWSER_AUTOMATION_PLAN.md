@@ -14,10 +14,11 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 
 **大原則: 読み書きできるものは GraphQL を使う。UI 操作は API に無い読み取り・書き込みだけ。**
 
-Project fields are the exception while GitHub's public schema cannot resolve linked
-multi-select Issue Fields. Browser-assisted export reads the complete server-rendered
-`#memex-columns-data` catalog before API item export; API-only export fails closed when the
-public field connection cannot prove completeness.
+Project fields remain an exception for exact organization Issue Field linkage. Since
+2026-07-27, GraphQL can enumerate multi-select Project fields and their data type/options.
+However, `ProjectV2FieldConfiguration` does not expose the underlying organization
+`issueFieldId`, so browser-assisted export reads `#memex-columns-data` when exact linked
+versus ordinary field identity must be preserved.
 
 ### View のプロパティ別ソースマップ
 
