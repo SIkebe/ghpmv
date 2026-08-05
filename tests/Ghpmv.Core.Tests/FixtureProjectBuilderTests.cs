@@ -706,6 +706,10 @@ public class FixtureProjectBuilderTests
                     """
                     {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
                     """),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
                 JsonResponse("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_1"}}}}"""));
             using var restHandler = new RecordingHandler(
                 NotFoundResponse(),
@@ -871,6 +875,10 @@ public class FixtureProjectBuilderTests
             JsonResponse(
                 """
                 {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                """),
+            JsonResponse(
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                 """));
         using var restHandler = new RecordingHandler(
             JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
@@ -912,6 +920,10 @@ public class FixtureProjectBuilderTests
                        JsonResponse(
                            """
                            {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                           """),
+                       JsonResponse(
+                           """
+                           {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                            """)))
             using (var firstRestHandler = new RecordingHandler(
                        NotFoundResponse(),
@@ -1006,6 +1018,10 @@ public class FixtureProjectBuilderTests
                 JsonResponse(
                     """
                     {"data":{"createProjectV2":{"projectV2":{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1","public":false}}}}
+                    """),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                     """));
             using var restHandler = new RecordingHandler(
                 JsonResponse("""{"id":1,"name":"fixture","private":true,"description":"ghpmv fixture operation operation-id"}"""),

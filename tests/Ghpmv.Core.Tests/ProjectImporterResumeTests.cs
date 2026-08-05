@@ -124,6 +124,37 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Strict_reservation_compensates_when_duplicate_appears_after_create()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-strict-project-race-").FullName;
+        try
+        {
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                CreateSucceeds = true,
+                ReturnDuplicateAfterCreate = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ReserveProjectAsync("target", "Project", cancellationToken));
+
+            Assert.Contains("unrelated same-title Project", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
+            var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Null(log.CreatedProjectId);
+            Assert.Null(log.PendingProjectDeletionId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Project_created_before_apply_failure_reuses_default_view_on_resume()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -539,6 +570,10 @@ public class ProjectImporterResumeTests
 
         public bool FailFirstProjectUpdate { get; init; }
 
+        public bool ReturnDuplicateAfterCreate { get; init; }
+
+        public List<string> DeletedProjectIds { get; } = [];
+
         public int ViewCreateMutationCount { get; private set; }
 
         public string? UpdatedViewId { get; private set; }
@@ -552,6 +587,17 @@ public class ProjectImporterResumeTests
             var (query, variables) = await ReadAsync(request, cancellationToken);
             if (query.Contains("projectsV2(first:", StringComparison.Ordinal))
             {
+                if (ReturnDuplicateAfterCreate && CreateMutationCount > 0)
+                {
+                    return Json(
+                        """
+                        {"data":{"organization":{"projectsV2":{"nodes":[
+                          {"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"},
+                          {"id":"PVT_other","number":8,"title":"Project","url":"https://github.com/orgs/target/projects/8"}
+                        ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                        """);
+                }
+
                 return Resume
                     ? Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""")
                     : Json("""{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
@@ -574,6 +620,12 @@ public class ProjectImporterResumeTests
                 }
 
                 throw new HttpRequestException("Response ended prematurely.");
+            }
+
+            if (query.Contains("deleteProjectV2", StringComparison.Ordinal))
+            {
+                DeletedProjectIds.Add(variables.GetProperty("projectId").GetString() ?? string.Empty);
+                return Json("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_created"}}}}""");
             }
 
             if (query.Contains("updateProjectV2(input:", StringComparison.Ordinal))

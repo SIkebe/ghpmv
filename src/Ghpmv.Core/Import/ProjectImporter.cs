@@ -139,6 +139,17 @@ public sealed class ProjectImporter
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        var reservedProjectId = _operationLog?.CreatedProjectId
+            ?? throw new InvalidOperationException("The reserved Project ID was not recorded.");
+        var confirmedMatches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
+        if (confirmedMatches.Any(project => !string.Equals(project.Id, reservedProjectId, StringComparison.Ordinal)))
+        {
+            await ReleaseReservedProjectAsync(CancellationToken.None).ConfigureAwait(false);
+            throw new InvalidOperationException(
+                $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'. The Project created by this operation was removed.");
+        }
+
         return true;
     }
 
