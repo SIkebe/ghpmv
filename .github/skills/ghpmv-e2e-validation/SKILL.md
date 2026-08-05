@@ -548,31 +548,47 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 `gh gei migrate-repo --help` で extension の現在の引数を確認した後、target host に対応する次の command を実行する。GitHub.com target:
 
 ```powershell
-gh gei migrate-repo `
-  --github-source-org <source-org> `
-  --source-repo <source-repo> `
-  --github-target-org <target-org> `
-  --target-repo <target-repo> `
-  --github-source-pat $env:GHPMV_GEI_SOURCE_TOKEN `
-  --github-target-pat $env:GHPMV_GEI_TARGET_TOKEN `
-  --target-repo-visibility private
+$previousGeiSourcePat = [Environment]::GetEnvironmentVariable("GH_SOURCE_PAT", [EnvironmentVariableTarget]::Process)
+$previousGeiTargetPat = [Environment]::GetEnvironmentVariable("GH_PAT", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $env:GHPMV_GEI_SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GH_PAT", $env:GHPMV_GEI_TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    gh gei migrate-repo `
+      --github-source-org <source-org> `
+      --source-repo <source-repo> `
+      --github-target-org <target-org> `
+      --target-repo <target-repo> `
+      --target-repo-visibility private
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $previousGeiSourcePat, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GH_PAT", $previousGeiTargetPat, [EnvironmentVariableTarget]::Process)
+}
 ```
 
 data residency target:
 
 ```powershell
-gh gei migrate-repo `
-  --github-source-org <source-org> `
-  --source-repo <source-repo> `
-  --github-target-org <target-org> `
-  --target-repo <target-repo> `
-  --github-source-pat $env:GHPMV_GEI_SOURCE_TOKEN `
-  --github-target-pat $env:GHPMV_GEI_TARGET_TOKEN `
-  --target-repo-visibility private `
-  --target-api-url <target-api-url>
+$previousGeiSourcePat = [Environment]::GetEnvironmentVariable("GH_SOURCE_PAT", [EnvironmentVariableTarget]::Process)
+$previousGeiTargetPat = [Environment]::GetEnvironmentVariable("GH_PAT", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $env:GHPMV_GEI_SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GH_PAT", $env:GHPMV_GEI_TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    gh gei migrate-repo `
+      --github-source-org <source-org> `
+      --source-repo <source-repo> `
+      --github-target-org <target-org> `
+      --target-repo <target-repo> `
+      --target-repo-visibility private `
+      --target-api-url <target-api-url>
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $previousGeiSourcePat, [EnvironmentVariableTarget]::Process)
+    [Environment]::SetEnvironmentVariable("GH_PAT", $previousGeiTargetPat, [EnvironmentVariableTarget]::Process)
+}
 ```
 
-選択した command の placeholder を記録済みの実値へ置き換え、command ごとの一意な ID を付けた wrapper で同じ terminal session に送信し、exit code と migration completion を監視する。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
+選択した command の placeholder を記録済みの実値へ置き換え、command ごとの一意な ID を付けた wrapper で同じ terminal session に送信し、exit code と migration completion を監視する。PAT option は追加せず、`GH_SOURCE_PAT` と `GH_PAT` の process environment 経由だけで渡す。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
 
 target repository full name を記録し、target の Issue / PR number が source と一致することを確認する。downloadable migration log は完了後 24 時間以内に保存する。target repository の Issues が無効なら `Migration Log` Issue は作成されない。migration 成功と number 維持を確認できるまで Step 8 へ進まない。
 

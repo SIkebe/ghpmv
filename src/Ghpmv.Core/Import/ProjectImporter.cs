@@ -93,9 +93,22 @@ public sealed class ProjectImporter
                     $"Pending project operation '{pendingProject.OperationId}' does not match the current import target.");
             }
 
-            var reconciled = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
-            _operationLog.CreatedProjectId = reconciled.Id;
-            _operationLog.ImportCompleted = false;
+            if (_operationLog.CreatedProjectId is not { } createdProjectId)
+            {
+                throw new InvalidOperationException(
+                    $"Pending project operation '{pendingProject.OperationId}' has no recorded Project ID and cannot be reconciled safely for strict fixture setup.");
+            }
+
+            var reconciled = matches.FirstOrDefault(
+                project => string.Equals(project.Id, createdProjectId, StringComparison.Ordinal))
+                ?? throw new InvalidOperationException(
+                    $"The project '{createdProjectId}' created by this operation was not found.");
+            if (matches.Any(project => !string.Equals(project.Id, reconciled.Id, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException(
+                    $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'.");
+            }
+
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             return false;

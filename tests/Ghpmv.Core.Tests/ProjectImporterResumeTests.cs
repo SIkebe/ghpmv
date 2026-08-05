@@ -54,6 +54,76 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Strict_reservation_does_not_adopt_unrecorded_ambiguous_project_candidate()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-strict-project-resume-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "ambiguous-project",
+                    OwnerLogin = "target",
+                    Title = "Project",
+                    ExistingProjectIds = [],
+                },
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory) { Resume = true };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ReserveProjectAsync("target", "Project", cancellationToken));
+
+            Assert.Contains("no recorded Project ID", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, handler.CreateMutationCount);
+            Assert.NotNull((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingProject);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Strict_reservation_resumes_recorded_project_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-strict-recorded-project-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "recorded-project",
+                    OwnerLogin = "target",
+                    Title = "Project",
+                    ExistingProjectIds = [],
+                },
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory) { Resume = true };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var created = await importer.ReserveProjectAsync("target", "Project", cancellationToken);
+
+            Assert.False(created);
+            var completed = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_created", completed.CreatedProjectId);
+            Assert.Null(completed.PendingProject);
+            Assert.Equal(0, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Project_created_before_apply_failure_reuses_default_view_on_resume()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
