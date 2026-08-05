@@ -10,7 +10,7 @@ namespace Ghpmv.Core.Tests;
 public class ProjectImporterResumeTests
 {
     [Fact]
-    public async Task Ambiguous_project_create_is_adopted_without_resending()
+    public async Task Ambiguous_project_create_is_adopted_with_mixed_case_owner_without_resending()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-resume-").FullName;
@@ -38,7 +38,7 @@ public class ProjectImporterResumeTests
             Assert.True(handler.PendingWasPresentAtMutation);
 
             handler.Resume = true;
-            var result = await importer.ImportAsync(Snapshot(), "target", cancellationToken);
+            var result = await importer.ImportAsync(Snapshot(), "TARGET", cancellationToken);
 
             Assert.Equal("PVT_created", result.ProjectId);
             Assert.Equal(1, handler.CreateMutationCount);
@@ -165,7 +165,7 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
-    public async Task Strict_reservation_resumes_recorded_project_id()
+    public async Task Strict_reservation_resumes_recorded_project_id_with_mixed_case_owner()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-strict-recorded-project-").FullName;
@@ -186,7 +186,7 @@ public class ProjectImporterResumeTests
             using var client = CreateClient(handler);
             var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
 
-            var created = await importer.ReserveProjectAsync("target", "Project", cancellationToken);
+            var created = await importer.ReserveProjectAsync("TARGET", "Project", cancellationToken);
 
             Assert.False(created);
             var completed = await ProjectImportLog.LoadAsync(directory, cancellationToken);
@@ -559,7 +559,7 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
-    public async Task Ambiguous_issue_field_create_is_adopted_without_resending()
+    public async Task Ambiguous_issue_field_create_is_adopted_with_mixed_case_owner_without_resending()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-resume-").FullName;
@@ -593,7 +593,7 @@ public class ProjectImporterResumeTests
             };
             var result = await importer.ImportIntoAsync(
                 resumedSnapshot,
-                "target",
+                "TARGET",
                 7,
                 cancellationToken);
 

@@ -699,7 +699,7 @@ public sealed class FixtureProjectBuilder
         }
 
         if (projectLog.PendingProject is { } pending
-            && string.Equals(pending.OwnerLogin, organization, StringComparison.Ordinal)
+            && string.Equals(pending.OwnerLogin, organization, StringComparison.OrdinalIgnoreCase)
             && string.Equals(pending.Title, title, StringComparison.Ordinal))
         {
             var baseline = new HashSet<string>(pending.ExistingProjectIds, StringComparer.Ordinal);

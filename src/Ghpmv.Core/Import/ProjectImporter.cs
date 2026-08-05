@@ -87,7 +87,7 @@ public sealed class ProjectImporter
         var matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
         if (_operationLog?.PendingProject is { } pendingProject)
         {
-            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(pendingProject.Title, title, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -353,7 +353,7 @@ public sealed class ProjectImporter
         ProjectRef? existing;
         if (_operationLog?.PendingProject is { } pendingProject)
         {
-            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+            if (!string.Equals(pendingProject.OwnerLogin, ownerLogin, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(pendingProject.Title, title, StringComparison.Ordinal))
             {
                 throw new InvalidOperationException(
@@ -976,7 +976,7 @@ public sealed class ProjectImporter
             if (_operationLog?.PendingIssueFields.TryGetValue(field.Name, out var pendingField) == true)
             {
                 if (!string.Equals(pendingField.ProjectId, projectId, StringComparison.Ordinal)
-                    || !string.Equals(pendingField.OwnerLogin, ownerLogin, StringComparison.Ordinal)
+                    || !string.Equals(pendingField.OwnerLogin, ownerLogin, StringComparison.OrdinalIgnoreCase)
                     || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException(
