@@ -125,6 +125,43 @@ public class ProjectViewImporterTests
     }
 
     [Fact]
+    public async Task Unmatched_view_is_created_updated_mapped_and_clears_pending_operation()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-create-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                BrowserEnrichmentPlanned = true,
+            };
+
+            var result = await importer.ImportAsync(
+                [View(2, "Board", "BOARD_LAYOUT", filter: null, visibleFields: [])],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Updated,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(8, result[2]);
+            Assert.Equal(1, handler.CreateCount);
+            Assert.True(handler.PendingWasPresentAtCreate);
+            var update = Assert.Single(handler.RequestBodies, body => body.Contains("updateProjectV2View", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(update);
+            Assert.Equal(
+                "PVTV_created",
+                document.RootElement.GetProperty("variables").GetProperty("viewId").GetString());
+            Assert.Empty(log.PendingViews);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_visible_field_is_omitted_with_a_warning()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-view-missing-field-").FullName;

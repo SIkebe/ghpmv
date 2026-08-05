@@ -985,10 +985,17 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         System.Diagnostics.Debug.Assert(fixtureUiSession is not null);
         System.Diagnostics.Debug.Assert(fixtureUiClient is not null);
+        var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+        var deployment = apiBaseUrl is null
+            ? "api.github.com"
+            : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl).Host;
         var fixtureViewOperationDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ghpmv",
-            "fixture-view-operations");
+            "fixture-view-operations",
+            deployment,
+            org,
+            projectNumber.Value.ToString(CultureInfo.InvariantCulture));
         var apiViewImporter = new ProjectImporter(fixtureUiClient)
         {
             OperationLogDirectory = fixtureViewOperationDirectory,

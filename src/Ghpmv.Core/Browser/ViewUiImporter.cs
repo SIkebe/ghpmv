@@ -267,10 +267,10 @@ public sealed class ViewUiImporter
 
     }
 
-    private async Task TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
+    private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
         => await TrySetSingleAsync(page, label, [value], value, viewName, cancellationToken).ConfigureAwait(false);
 
-    private async Task TrySetSingleAsync(
+    private async Task<bool> TrySetSingleAsync(
         IPage page,
         string label,
         IReadOnlyList<string> candidates,
@@ -286,7 +286,7 @@ public sealed class ViewUiImporter
             {
                 _warnings.Add($"view '{viewName}': '{label}' is not available in this layout");
                 await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-                return;
+                return false;
             }
 
             await item.First.ClickAsync().ConfigureAwait(false);
@@ -306,23 +306,28 @@ public sealed class ViewUiImporter
             {
                 _warnings.Add($"view '{viewName}': {label} value '{expectedValue}' is not available on the target");
                 await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-                return;
+                return false;
             }
 
             await option.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return true;
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': {label} could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return false;
         }
     }
 
     private async Task TrySetSortAsync(IPage page, SortByFieldSnapshot sort, string viewName, CancellationToken cancellationToken)
     {
-        await TrySetSingleAsync(page, "Sort by", sort.Field, viewName, cancellationToken).ConfigureAwait(false);
+        if (!await TrySetSingleAsync(page, "Sort by", sort.Field, viewName, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
 
         try
         {
