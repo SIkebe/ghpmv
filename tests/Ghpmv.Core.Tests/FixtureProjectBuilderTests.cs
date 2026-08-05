@@ -778,6 +778,48 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Pending_view_prevents_project_release()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-pending-view-").FullName;
+        try
+        {
+            var log = new ProjectImportLog { CreatedProjectId = "PVT_1" };
+            log.PendingViews[2] = new PendingViewOperation
+            {
+                OperationId = "pending-view",
+                ProjectId = "PVT_1",
+                SourceNumber = 2,
+                Name = "Board",
+                Layout = "BOARD_LAYOUT",
+                ExistingViewIds = [],
+            };
+            await log.SaveAsync(logRoot, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl) { OperationLogDirectory = logRoot };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken));
+
+            Assert.Contains("pending import operations", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(graphQlHandler.RequestBodies);
+            var persisted = await ProjectImportLog.LoadAsync(
+                logRoot,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("PVT_1", persisted.CreatedProjectId);
+            Assert.Single(persisted.PendingViews);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Pending_project_release_is_cleared_when_exact_project_is_already_absent()
     {
         var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-pending-release-").FullName;

@@ -130,6 +130,41 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Owned_project_update_resets_completed_state_before_metadata_mutation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-project-update-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                ImportCompleted = true,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                Resume = true,
+                FailFirstProjectUpdate = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                OnConflict = ConflictAction.Update,
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(Snapshot(), "target", cancellationToken));
+
+            Assert.False((await ProjectImportLog.LoadAsync(directory, cancellationToken)).ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Strict_reservation_resumes_recorded_project_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -332,6 +367,34 @@ public class ProjectImporterResumeTests
 
             Assert.Contains("incomplete import for project 'PVT_owned'", exception.Message, StringComparison.Ordinal);
             Assert.Equal(0, handler.ProjectUpdateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_into_owned_project_resets_completed_state_before_metadata_mutation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-project-import-into-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_existing",
+                ImportCompleted = true,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new FieldResumeHandler(directory) { FailProjectUpdate = true };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken));
+
+            Assert.False((await ProjectImportLog.LoadAsync(directory, cancellationToken)).ImportCompleted);
+            Assert.Equal(1, handler.ProjectUpdateMutationCount);
         }
         finally
         {
@@ -718,6 +781,8 @@ public class ProjectImporterResumeTests
     {
         public bool ReturnDuplicateFields { get; set; }
 
+        public bool FailProjectUpdate { get; init; }
+
         public int ProjectUpdateMutationCount { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
@@ -733,6 +798,11 @@ public class ProjectImporterResumeTests
             if (query.Contains("updateProjectV2", StringComparison.Ordinal))
             {
                 ProjectUpdateMutationCount++;
+                if (FailProjectUpdate)
+                {
+                    throw new InvalidOperationException("Apply failed during project update.");
+                }
+
                 return Json("""{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""");
             }
 

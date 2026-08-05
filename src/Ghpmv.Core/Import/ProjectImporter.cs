@@ -167,7 +167,8 @@ public sealed class ProjectImporter
         if (_operationLog.PendingProject is not null
             || _operationLog.PendingFields.Count > 0
             || _operationLog.PendingIssueFields.Count > 0
-            || _operationLog.PendingIssueFieldLinks.Count > 0)
+            || _operationLog.PendingIssueFieldLinks.Count > 0
+            || _operationLog.PendingViews.Count > 0)
         {
             throw new InvalidOperationException(
                 $"Project '{projectId}' has pending import operations and cannot be released automatically.");
@@ -344,6 +345,7 @@ public sealed class ProjectImporter
                 case ConflictAction.Update:
                     ValidatePendingFieldOperations(snapshot, existing.Id);
                     ValidatePendingViewOperations(snapshot, existing.Id);
+                    await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -406,6 +408,7 @@ public sealed class ProjectImporter
         ValidatePendingItemProject(project.Id);
         ValidatePendingFieldOperations(snapshot, project.Id);
         ValidatePendingViewOperations(snapshot, project.Id);
+        await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -462,6 +465,18 @@ public sealed class ProjectImporter
                 $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
                 "GitHub requires at least one option when creating the field and ignores empty option updates.");
         }
+    }
+
+    private async Task MarkOwnedImportIncompleteAsync(string projectId, CancellationToken cancellationToken)
+    {
+        if (_operationLog?.CreatedProjectId is not { } createdProjectId
+            || !string.Equals(createdProjectId, projectId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _operationLog.ImportCompleted = false;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private ProjectRef? SelectExistingProject(IReadOnlyList<ProjectRef> matches)
