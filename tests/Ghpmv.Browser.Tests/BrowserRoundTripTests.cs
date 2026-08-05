@@ -9,7 +9,7 @@ using System.Text.Json;
 namespace Ghpmv.Browser.Tests;
 
 /// <summary>
-/// M6 E2E: exports the fixture project (gpm-source #3) including browser-scraped UI
+/// M6 E2E: exports the configured fixture project including browser-scraped UI
 /// settings, imports it into the target org (project + fields via GraphQL, views via
 /// browser automation), re-exports the target and asserts the views round-trip
 /// (name / layout / UI settings). Requires GHPMV_BROWSER_STATE (a storage-state file
@@ -19,12 +19,23 @@ namespace Ghpmv.Browser.Tests;
 [Trait("Category", "E2E")]
 public class BrowserRoundTripTests
 {
-    private const int FixtureProjectNumber = 3;
-    private const string ExplicitCollaboratorLogin = "ravel-maurice-uo_sde";
-
     private static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG") ?? "gpm-source";
 
     private static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG") ?? "gpm-target";
+
+    private static int FixtureProjectNumber =>
+        int.TryParse(Environment.GetEnvironmentVariable("GHPMV_TEST_PROJECT_NUMBER"), out var number)
+            ? number
+            : 3;
+
+    private static string SourceFixtureRepository =>
+        Environment.GetEnvironmentVariable("GHPMV_TEST_FIXTURE_REPO") ?? "fixture-repo";
+
+    private static string TargetFixtureRepository =>
+        Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_FIXTURE_REPO") ?? "fixture-repo";
+
+    private static string ExplicitCollaboratorLogin =>
+        Environment.GetEnvironmentVariable("GHPMV_TEST_COLLABORATOR_LOGIN") ?? "ravel-maurice-uo_sde";
 
     private static string CreateOperationLogDirectory()
         => Path.Combine(Path.GetTempPath(), $"ghpmv-browser-project-import-{Guid.NewGuid():N}");
@@ -330,9 +341,10 @@ public class BrowserRoundTripTests
         Assert.Equal(2, source.Workflows.Count(w => w.Ui!.Repository is not null));
         var sourceSecondary = Assert.Single(source.Workflows, w => w.Name == "Auto-add secondary");
         Assert.True(sourceSecondary.Enabled);
-        Assert.Equal("fixture-repo", sourceSecondary.Ui!.Repository);
+        Assert.Equal(SourceFixtureRepository, sourceSecondary.Ui!.Repository);
         Assert.Equal("is:issue label:bug", sourceSecondary.Ui.Filter);
-        var sourceDisabled = Assert.Single(source.Workflows, w => !w.Enabled);
+        var sourceDisabled = Assert.Single(source.Workflows, w => w.Name == "Code changes requested");
+        Assert.False(sourceDisabled.Enabled);
         Assert.Equal("Code changes requested", sourceDisabled.Name);
         Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
 
@@ -350,11 +362,13 @@ public class BrowserRoundTripTests
             {
                 RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
-                    [$"{SourceOrg}/fixture-repo"] = $"{TargetOrg}/fixture-repo",
+                    [$"{SourceOrg}/{SourceFixtureRepository}"] = $"{TargetOrg}/{TargetFixtureRepository}",
                 },
             };
             await workflowImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Empty(workflowImporter.Warnings);
+            Assert.True(
+                workflowImporter.Warnings.Count == 0,
+                string.Join(Environment.NewLine, workflowImporter.Warnings));
             Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
 
             var reExportUi = new WorkflowUiExporter(session);
@@ -393,7 +407,11 @@ public class BrowserRoundTripTests
                 Assert.Equal(expected.Ui!.ContentTypes ?? [], actual.Ui!.ContentTypes ?? []);
                 Assert.Equal(expected.Ui.StatusValue, actual.Ui.StatusValue);
                 Assert.Equal(expected.Ui.Filter, actual.Ui.Filter);
-                Assert.Equal(expected.Ui.Repository, actual.Ui.Repository); // short names ("fixture-repo" on both sides)
+                Assert.Equal(
+                    expected.Ui.Repository == SourceFixtureRepository
+                        ? TargetFixtureRepository
+                        : expected.Ui.Repository,
+                    actual.Ui.Repository);
             }
 
             var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
