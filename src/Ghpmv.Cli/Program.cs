@@ -1099,7 +1099,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 projectExplicitlySelected: parseResult.GetValue(fixtureProjectOption) is not null,
                 uiSetupCompleted: File.Exists(uiCompletionPath)) is true)
         {
-            Console.Error.WriteLine("Fixture UI setup already completed; skipping --fixture-ui to avoid duplicating workflows. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly.");
+            Console.Error.WriteLine(fixtureResult.OwnedByOperation
+                ? "Fixture UI setup already completed; skipping --fixture-ui to avoid duplicating workflows. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly."
+                : "Fixture project already existed and is not owned by this operation; skipping --fixture-ui to avoid modifying an unrelated Project. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly.");
             return 0;
         }
 
