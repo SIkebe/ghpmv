@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
@@ -201,15 +202,15 @@ public sealed class WorkflowUiImporter
         await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
         await WorkflowUiExporter.OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
 
-        if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
+        if (await Sel.SaveWorkflowButton(page, workflow.Name).CountAsync().ConfigureAwait(false) == 0)
         {
-            await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+            await Sel.EditWorkflowButton(page, workflow.Name).First.ClickAsync().ConfigureAwait(false);
         }
 
-        await Sel.SaveWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.SaveWorkflowButton(page, workflow.Name).First.WaitForAsync().ConfigureAwait(false);
         await Sel.WorkflowFiltersCombobox(page).First.FillAsync(filter).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
-        await SaveWorkflowAsync(page, cancellationToken).ConfigureAwait(false);
+        await SaveWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
     }
 
     // ----- built-in workflows (matched by name) -----
@@ -245,7 +246,7 @@ public sealed class WorkflowUiImporter
         {
             if (ShouldSaveAndTurnOn(current.Enabled, current.IsSaved))
             {
-                await SaveAndTurnOnAsync(page, cancellationToken).ConfigureAwait(false);
+                await SaveAndTurnOnAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -297,8 +298,8 @@ public sealed class WorkflowUiImporter
     private async Task EditAndSaveAsync(IPage page, WorkflowSnapshot workflow, WorkflowUiState current, CancellationToken cancellationToken)
     {
         var ui = workflow.Ui!;
-        await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
-        await Sel.SaveWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.EditWorkflowButton(page, workflow.Name).First.ClickAsync().ConfigureAwait(false);
+        await Sel.SaveWorkflowButton(page, workflow.Name).First.WaitForAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
 
         if (ui.ContentTypes is { Count: > 0 } contentTypes && !ContentTypesEqual(contentTypes, current.ContentTypes))
@@ -318,7 +319,7 @@ public sealed class WorkflowUiImporter
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await SaveWorkflowAsync(page, cancellationToken).ConfigureAwait(false);
+        await SaveWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
     }
 
     // ----- Auto-add workflows -----
@@ -341,14 +342,15 @@ public sealed class WorkflowUiImporter
         }
 
         var ui = workflow.Ui!;
+        var currentName = isFirst ? AutoAddDefaultName : workflow.Name;
         // A freshly duplicated workflow opens directly in edit mode (no "Edit" button,
         // E2E discovery 2026-07-06); only click "Edit" when still in viewing mode.
-        if (await Sel.SaveWorkflowButton(page).CountAsync().ConfigureAwait(false) == 0)
+        if (await Sel.SaveWorkflowButton(page, currentName).CountAsync().ConfigureAwait(false) == 0)
         {
-            await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
+            await Sel.EditWorkflowButton(page, currentName).First.ClickAsync().ConfigureAwait(false);
         }
 
-        await Sel.SaveWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.SaveWorkflowButton(page, currentName).First.WaitForAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
 
         // Repository picker: search by the mapped short name and pick the exact option.
@@ -356,7 +358,7 @@ public sealed class WorkflowUiImporter
         if (resolution.Status == RepositoryResolutionStatus.Ambiguous)
         {
             _warnings.Add($"workflow '{workflow.Name}': repository '{ui.Repository}' has ambiguous mappings; skipped");
-            await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
+            await DiscardEditAsync(page, currentName, cancellationToken).ConfigureAwait(false);
             return false;
         }
 
@@ -377,7 +379,7 @@ public sealed class WorkflowUiImporter
         {
             _warnings.Add($"workflow '{workflow.Name}': repository '{targetRepository}' was not found on the target; skipped");
             await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
-            await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
+            await DiscardEditAsync(page, currentName, cancellationToken).ConfigureAwait(false);
             return false;
         }
 
@@ -390,7 +392,7 @@ public sealed class WorkflowUiImporter
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        await SaveWorkflowAsync(page, cancellationToken).ConfigureAwait(false);
+        await SaveWorkflowAsync(page, currentName, cancellationToken).ConfigureAwait(false);
 
         if (isFirst && !string.Equals(workflow.Name, AutoAddDefaultName, StringComparison.Ordinal))
         {
@@ -504,50 +506,79 @@ public sealed class WorkflowUiImporter
         await CloseSelectDialogAsync(page, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task SaveWorkflowAsync(IPage page, CancellationToken cancellationToken)
+    private static async Task SaveWorkflowAsync(IPage page, string workflowName, CancellationToken cancellationToken)
     {
         // M7 discovery: when the applied values end up identical to the current state
         // (e.g. the "When"/"Set value" defaults already match the snapshot) the save
         // button stays disabled. Nothing to persist — leave edit mode via Discard.
-        var save = Sel.SaveWorkflowButton(page).First;
+        var save = Sel.SaveWorkflowButton(page, workflowName).First;
         if (await save.IsDisabledAsync().ConfigureAwait(false))
         {
-            await DiscardEditAsync(page, cancellationToken).ConfigureAwait(false);
+            await DiscardEditAsync(page, workflowName, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         await save.ClickAsync().ConfigureAwait(false);
         // Saving returns to viewing mode ("Edit" reappears).
-        await Sel.EditWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.EditWorkflowButton(page, workflowName).First.WaitForAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task DiscardEditAsync(IPage page, CancellationToken cancellationToken)
+    private static async Task DiscardEditAsync(IPage page, string workflowName, CancellationToken cancellationToken)
     {
-        var discard = page.GetByRole(AriaRole.Button, new() { Name = "Discard", Exact = true });
+        var discard = Sel.WorkflowHeader(page, workflowName)
+            .GetByRole(AriaRole.Button, new() { Name = "Discard", Exact = true });
         if (await discard.CountAsync().ConfigureAwait(false) > 0)
         {
             await discard.First.ClickAsync().ConfigureAwait(false);
+            await Sel.EditWorkflowButton(page, workflowName).First
+                .WaitForAsync(new() { Timeout = 10_000 })
+                .ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static async Task SaveAndTurnOnAsync(IPage page, CancellationToken cancellationToken)
+    private static async Task SaveAndTurnOnAsync(IPage page, string workflowName, CancellationToken cancellationToken)
     {
-        await Sel.EditWorkflowButton(page).First.ClickAsync().ConfigureAwait(false);
-        var save = Sel.SaveAndTurnOnWorkflowButton(page).First;
+        await Sel.EditWorkflowButton(page, workflowName).First.ClickAsync().ConfigureAwait(false);
+        var save = Sel.SaveWorkflowButton(page, workflowName).First;
         await save.WaitForAsync().ConfigureAwait(false);
         await save.ClickAsync().ConfigureAwait(false);
-        await Sel.EditWorkflowButton(page).First.WaitForAsync().ConfigureAwait(false);
+        await Sel.EditWorkflowButton(page, workflowName).First.WaitForAsync().ConfigureAwait(false);
+        var toggle = Sel.WorkflowToggle(page, workflowName).First;
+        await toggle.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
+        await WaitForToggleStateAsync(toggle, enabled: true, cancellationToken).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task ToggleAsync(IPage page, string name, CancellationToken cancellationToken)
     {
-        // The toggle applies immediately (no confirmation, M7 discovery).
+        // The toggle has no confirmation; its state change is the completion signal.
         var toggle = Sel.WorkflowToggle(page, name).First;
+        var current = await WorkflowUiExporter.ReadToggleStateAsync(toggle).ConfigureAwait(false);
         await toggle.ClickAsync().ConfigureAwait(false);
+        await WaitForToggleStateAsync(toggle, !current, cancellationToken).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task WaitForToggleStateAsync(
+        ILocator toggle,
+        bool enabled,
+        CancellationToken cancellationToken)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await WorkflowUiExporter.ReadToggleStateAsync(toggle).ConfigureAwait(false) == enabled)
+            {
+                return;
+            }
+
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+
+        throw new TimeoutException($"Workflow toggle did not become {(enabled ? "enabled" : "disabled")}.");
     }
 
     private static async Task CloseSelectDialogAsync(IPage page, CancellationToken cancellationToken)

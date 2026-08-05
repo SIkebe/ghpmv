@@ -82,7 +82,8 @@ internal static class Sel
     // line breaks that defeat a "$"-anchored pattern.
     private static readonly Regex WhenButtonName = new("^When ");
 
-    // Auto-add repository picker button: "When the filter matches a new or updated item : <repo>".
+    // Auto-add trigger heading. The repository button's accessible name differs between
+    // empty and configured workflows, so locate it relative to this stable heading.
     private static readonly Regex RepositoryButtonName = new("^When the filter matches a new or updated item");
 
     // "Set value : <status>" button (text "Status: <status>"). With a cleared binding the
@@ -104,6 +105,10 @@ internal static class Sel
     public static ILocator WorkflowHeading(IPage page, string name)
         => page.GetByRole(AriaRole.Heading, new() { Name = name, Exact = true, Level = 2 });
 
+    /// <summary>Header controls belonging to the detail pane identified by its workflow heading.</summary>
+    public static ILocator WorkflowHeader(IPage page, string name)
+        => WorkflowHeading(page, name).Locator("xpath=../..");
+
     /// <summary>
     /// Enable/disable control. The accessible name is not stable, so fall back to the
     /// single stateful control in the workflow detail pane.
@@ -116,25 +121,24 @@ internal static class Sel
                 "button[aria-pressed]:visible, [role='switch'][aria-checked]:visible, " +
                 "[role='checkbox'][aria-checked]:visible, input[type='checkbox']:visible"));
 
-    /// <summary>"Edit" button (view mode). Exact match — "Edit workflow name" also starts with "Edit".</summary>
-    public static ILocator EditWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Edit", Exact = true });
+    /// <summary>"Edit" button scoped to a specific workflow detail pane.</summary>
+    public static ILocator EditWorkflowButton(IPage page, string name)
+        => WorkflowHeader(page, name).GetByRole(AriaRole.Button, new() { Name = "Edit", Exact = true });
 
-    /// <summary>Edit-mode save button ("Save workflow" or "Save and turn on workflow").</summary>
-    public static ILocator SaveWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
-
-    /// <summary>Save button for an unsaved, disabled workflow; saving also enables it.</summary>
-    public static ILocator SaveAndTurnOnWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Save and turn on workflow", Exact = true });
+    /// <summary>Edit-mode save button scoped to a specific workflow detail pane.</summary>
+    public static ILocator SaveWorkflowButton(IPage page, string name)
+        => WorkflowHeader(page, name).GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
 
     /// <summary>"When ... : &lt;value&gt;" buttons (content types, Auto-close status, Auto-add repository).</summary>
     public static ILocator WorkflowWhenButtons(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = WhenButtonName });
 
-    /// <summary>Auto-add repository picker button (disabled in view mode; text = repo short name).</summary>
+    /// <summary>Auto-add repository picker button in the block identified by its trigger heading.</summary>
     public static ILocator WorkflowRepositoryButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { NameRegex = RepositoryButtonName });
+        => WhenFilterMatchesHeading(page)
+            .Locator("xpath=../..")
+            .GetByRole(AriaRole.Button)
+            .First;
 
     /// <summary>Auto-add "When the filter matches..." section heading (h3) — marks Auto-add pages.</summary>
     public static ILocator WhenFilterMatchesHeading(IPage page)
