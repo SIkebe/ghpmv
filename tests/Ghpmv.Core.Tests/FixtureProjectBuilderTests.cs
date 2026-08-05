@@ -548,6 +548,43 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Require_new_resources_rejects_duplicate_raced_after_initial_project_lookup()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-project-race-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog { CreatedProjectId = "PVT_owned" }
+                .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_owned","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_other","number":2,"title":"Fixture","url":"https://github.com/orgs/example/projects/2"},{"id":"PVT_owned","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """));
+            using var restHandler = new RecordingHandler(NotFoundResponse());
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Contains("unrelated same-title Project", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Require_new_resources_rejects_existing_repository_without_mutations()
     {
         using var graphQlHandler = new RecordingHandler(

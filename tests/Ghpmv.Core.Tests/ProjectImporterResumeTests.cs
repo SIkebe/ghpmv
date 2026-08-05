@@ -169,6 +169,34 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Import_into_rejects_incomplete_owned_project_mismatch_before_mutating()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-project-target-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_owned",
+                ImportCompleted = false,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new FieldResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken));
+
+            Assert.Contains("incomplete import for project 'PVT_owned'", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, handler.ProjectUpdateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_into_rejects_pending_field_omitted_from_snapshot_before_mutating()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -519,6 +547,8 @@ public class ProjectImporterResumeTests
     {
         public bool ReturnDuplicateFields { get; set; }
 
+        public int ProjectUpdateMutationCount { get; private set; }
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -531,6 +561,7 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("updateProjectV2", StringComparison.Ordinal))
             {
+                ProjectUpdateMutationCount++;
                 return Json("""{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""");
             }
 

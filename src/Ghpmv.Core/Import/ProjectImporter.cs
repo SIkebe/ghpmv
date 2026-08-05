@@ -106,6 +106,12 @@ public sealed class ProjectImporter
         {
             if (string.Equals(_operationLog?.CreatedProjectId, existing.Id, StringComparison.Ordinal))
             {
+                if (matches.Any(project => !string.Equals(project.Id, existing.Id, StringComparison.Ordinal)))
+                {
+                    throw new InvalidOperationException(
+                        $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'.");
+                }
+
                 return false;
             }
 
@@ -350,6 +356,13 @@ public sealed class ProjectImporter
         {
             throw new InvalidOperationException(
                 $"Pending project operation '{pendingProject.OperationId}' must be resumed by project title before importing into project #{projectNumber}.");
+        }
+
+        if (_operationLog is { CreatedProjectId: { } createdProjectId, ImportCompleted: false }
+            && !string.Equals(createdProjectId, project.Id, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"{ProjectImportLog.FileName} contains an incomplete import for project '{createdProjectId}', but project #{projectNumber} has id '{project.Id}'. Resume the recorded project or use a separate import directory.");
         }
 
         ValidatePendingItemProject(project.Id);
