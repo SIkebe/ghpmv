@@ -503,7 +503,7 @@ public sealed class ProjectImporter
         {
             _operationLog.CreatedProjectId = project.Id;
             _operationLog.ImportCompleted = false;
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
         }
         return project;
         return project;
