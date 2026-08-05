@@ -46,6 +46,17 @@ public class ViewUiLogicTests
         => Assert.Null(ViewUiExporter.ParseListValue("Markers: none"));
 
     [Theory]
+    [InlineData("Sort by: Fixture Number, ascending", "Ascending", true)]
+    [InlineData("Sort by:\nFixture Number\nDescending", "Descending", true)]
+    [InlineData("Sort by: Fixture Number, ascending", "Descending", false)]
+    [InlineData(null, "Ascending", false)]
+    public void HasSortDirection_detects_the_current_direction(
+        string? menuText,
+        string directionName,
+        bool expected)
+        => Assert.Equal(expected, ViewUiImporter.HasSortDirection(menuText, directionName));
+
+    [Theory]
     [InlineData("  Fixture   Sprint\nend ", "Fixture Sprint end")]
     [InlineData("   ", null)]
     public void NormalizeUiText_collapses_whitespace(string text, string? expected)

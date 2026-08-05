@@ -276,6 +276,13 @@ public sealed class ViewUiImporter
                 return false;
             }
 
+            if (string.Equals(expectedValue, "none", StringComparison.Ordinal)
+                && ViewUiExporter.ParseMenuValue(await item.First.InnerTextAsync().ConfigureAwait(false)) is null)
+            {
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
 
@@ -320,12 +327,18 @@ public sealed class ViewUiImporter
         {
             var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
             var item = Sel.ConfigurationMenuItem(menu, "Sort by");
-            await item.First.ClickAsync().ConfigureAwait(false);
-            await PauseAsync(cancellationToken).ConfigureAwait(false);
-
             var directionName = string.Equals(sort.Direction, "DESC", StringComparison.Ordinal)
                 ? "Descending"
                 : "Ascending";
+            if (HasSortDirection(await item.First.InnerTextAsync().ConfigureAwait(false), directionName))
+            {
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            await item.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+
             var direction = await FindOptionAsync(page, directionName).ConfigureAwait(false);
             if (direction is null)
             {
@@ -345,6 +358,9 @@ public sealed class ViewUiImporter
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
+
+    internal static bool HasSortDirection(string? menuText, string directionName)
+        => menuText?.Contains(directionName, StringComparison.OrdinalIgnoreCase) == true;
 
     private async Task TryEnsureSortFieldVisibleAsync(
         IPage page,
