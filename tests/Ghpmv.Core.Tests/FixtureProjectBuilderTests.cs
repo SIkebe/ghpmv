@@ -54,6 +54,51 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Concurrent_fixture_repository_operation_with_different_title_is_rejected_before_network_writes()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-repository-lock-").FullName;
+        try
+        {
+            var repositoryLockPath = GetRepositoryLockPath(logRoot, "example/fixture");
+            Directory.CreateDirectory(Path.GetDirectoryName(repositoryLockPath)!);
+            using var repositoryLock = new FileStream(
+                repositoryLockPath,
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            using var graphQlHandler = new RecordingHandler();
+            using var restHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = true,
+                AllowExistingEmptyRepository = true,
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => builder.CreateAsync(
+                    "example",
+                    "Different Fixture",
+                    "fixture",
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("repository 'example/fixture'", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(graphQlHandler.RequestBodies);
+            Assert.Empty(restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Completed_owned_fixture_skips_implicit_ui_setup()
     {
         var result = new FixtureProjectSetupResult(1, "https://github.com/orgs/example/projects/1", Created: false, OwnedByOperation: true);
@@ -1394,6 +1439,17 @@ public class FixtureProjectBuilderTests
             SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         return Path.Combine(logRoot, operationKey);
+    }
+
+    private static string GetRepositoryLockPath(
+        string logRoot,
+        string repositoryFullName,
+        string apiHost = "https://api.github.com")
+    {
+        var repositoryKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{repositoryFullName}")))[..16]
+            .ToLowerInvariant();
+        return Path.Combine(logRoot, "repository-locks", repositoryKey + ".lock");
     }
 
     private static HttpResponseMessage JsonResponse(string body)

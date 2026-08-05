@@ -50,8 +50,13 @@ public sealed class FixtureProjectBuilder
             SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
+        // Keep this order consistent so overlapping operation and repository scopes cannot deadlock.
         using var operationLock = AcquireFixtureOperationLock(operationDirectory);
         var repositoryFullName = $"{organization}/{repositoryName}";
+        using var repositoryLock = AcquireFixtureRepositoryLock(
+            OperationLogDirectory,
+            apiHost,
+            repositoryFullName);
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var projectMatches = await FindProjectsByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
@@ -868,6 +873,32 @@ public sealed class FixtureProjectBuilder
         {
             throw new InvalidOperationException(
                 $"Another fixture operation is already using '{operationDirectory}'.",
+                exception);
+        }
+    }
+
+    private static FileStream AcquireFixtureRepositoryLock(
+        string operationLogDirectory,
+        string apiHost,
+        string repositoryFullName)
+    {
+        var repositoryLockDirectory = Path.Combine(operationLogDirectory, "repository-locks");
+        Directory.CreateDirectory(repositoryLockDirectory);
+        var repositoryKey = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{repositoryFullName}")))[..16]
+            .ToLowerInvariant();
+        try
+        {
+            return new FileStream(
+                Path.Combine(repositoryLockDirectory, repositoryKey + ".lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"Another fixture operation is already using repository '{repositoryFullName}'.",
                 exception);
         }
     }
