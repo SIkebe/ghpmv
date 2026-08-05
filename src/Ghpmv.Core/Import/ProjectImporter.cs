@@ -439,6 +439,7 @@ public sealed class ProjectImporter
                 case ConflictAction.Update:
                     ValidatePendingFieldOperations(snapshot, existing.Id);
                     ValidatePendingViewOperations(snapshot, existing.Id);
+                    await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     if (!beforeWriteInvoked)
@@ -508,6 +509,7 @@ public sealed class ProjectImporter
         ValidatePendingItemProject(project.Id);
         ValidatePendingFieldOperations(snapshot, project.Id);
         ValidatePendingViewOperations(snapshot, project.Id);
+        await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         if (!beforeWriteInvoked)
