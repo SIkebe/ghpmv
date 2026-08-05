@@ -95,6 +95,7 @@ public sealed class ProjectImporter
 
             var reconciled = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
             _operationLog.CreatedProjectId = reconciled.Id;
+            _operationLog.ImportCompleted = false;
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             return false;
@@ -146,6 +147,7 @@ public sealed class ProjectImporter
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         await DeleteProjectAndReconcileAsync(projectId, cancellationToken).ConfigureAwait(false);
         _operationLog.CreatedProjectId = null;
+        _operationLog.ImportCompleted = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -231,6 +233,7 @@ public sealed class ProjectImporter
         }
 
         _operationLog.CreatedProjectId = null;
+        _operationLog.ImportCompleted = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -260,6 +263,7 @@ public sealed class ProjectImporter
 
             existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
             _operationLog.CreatedProjectId = existing.Id;
+            _operationLog.ImportCompleted = false;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
             ValidatePendingFieldOperations(snapshot, existing.Id);
@@ -472,6 +476,7 @@ public sealed class ProjectImporter
         if (_operationLog is not null)
         {
             _operationLog.CreatedProjectId = project.Id;
+            _operationLog.ImportCompleted = false;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         }
         return project;

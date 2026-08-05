@@ -451,7 +451,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             || projectLog.PendingFields.Count > 0
             || projectLog.PendingIssueFields.Count > 0
             || projectLog.PendingIssueFieldLinks.Count > 0
-            || projectLog.PendingViews.Count > 0;
+            || projectLog.PendingViews.Count > 0
+            || (projectLog.CreatedProjectId is not null && projectLog.ImportCompleted is false);
         var pendingItemProjectId = itemLog?.ProjectId;
         var importer = new ProjectImporter(client)
         {
