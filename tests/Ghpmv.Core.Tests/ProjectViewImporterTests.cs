@@ -184,6 +184,33 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Api_only_board_without_a_column_warns_about_the_default_column()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-board-column-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
+
+            await importer.ImportAsync(
+                [View(2, "Board", "BOARD_LAYOUT", filter: null, visibleFields: [])],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Updated,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains(importer.Warnings, warning =>
+                warning.Contains("column-by", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 

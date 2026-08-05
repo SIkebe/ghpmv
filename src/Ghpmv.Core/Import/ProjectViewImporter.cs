@@ -355,10 +355,13 @@ internal sealed class ProjectViewImporter
             settings.Add("group-by/swimlanes");
         }
 
-        if (view.VerticalGroupByFields.Count > 0
-            && (targetWasReused
-                || !(view.VerticalGroupByFields.Count == 1
-                && string.Equals(view.VerticalGroupByFields[0], "Status", StringComparison.Ordinal))))
+        var boardWithoutColumn = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            && view.VerticalGroupByFields.Count == 0;
+        if (boardWithoutColumn
+            || (view.VerticalGroupByFields.Count > 0
+                && (targetWasReused
+                    || !(view.VerticalGroupByFields.Count == 1
+                    && string.Equals(view.VerticalGroupByFields[0], "Status", StringComparison.Ordinal)))))
         {
             settings.Add("column-by");
         }
