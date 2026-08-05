@@ -14,6 +14,7 @@ public sealed class FixtureProjectBuilder
 {
     private const string RepositoryClaimFileName = "fixture-repository.txt";
     private const string PendingRepositoryStatus = "pending";
+    private const string FallbackPendingRepositoryStatus = "fallback-pending";
     private const string ClaimedRepositoryStatus = "claimed";
 
     private readonly GitHubGraphQLClient _graphQl;
@@ -540,10 +541,22 @@ public sealed class FixtureProjectBuilder
                 cancellationToken).ConfigureAwait(false);
             ValidatePrivateRepository(repositoryFullName, repository.Value);
         }
-        else if (repositoryState?.Status == ClaimedRepositoryStatus)
+        else if (repositoryState?.Status is ClaimedRepositoryStatus or FallbackPendingRepositoryStatus)
         {
             ValidateClaimedRepository(repositoryState, repositoryFullName, repository);
             ValidatePrivateRepository(repositoryFullName, repository!.Value);
+            if (repositoryState.Status == FallbackPendingRepositoryStatus)
+            {
+                var repositoryIsEmpty = await IsRepositoryEmptyAsync(
+                    repositoryFullName,
+                    cancellationToken).ConfigureAwait(false);
+                ValidateRepositoryRequirement(
+                    repositoryFullName,
+                    requireNewResources: true,
+                    allowExistingEmptyRepository: true,
+                    repositoryExists: true,
+                    repositoryIsEmpty);
+            }
         }
         else if (repository is null)
         {
@@ -632,19 +645,29 @@ public sealed class FixtureProjectBuilder
                 allowExistingEmptyRepository,
                 repositoryExists: true,
                 repositoryIsEmpty);
+            repositoryState = new RepositoryOperationState(
+                GetApiHost(),
+                repositoryFullName,
+                FallbackPendingRepositoryStatus,
+                GetRepositoryId(repository.Value));
             await SaveRepositoryClaimAsync(
                 operationDirectory,
-                new RepositoryOperationState(
-                    GetApiHost(),
-                    repositoryFullName,
-                    ClaimedRepositoryStatus,
-                    GetRepositoryId(repository.Value)),
+                repositoryState,
                 cancellationToken).ConfigureAwait(false);
         }
 
         if (!beforeWriteInvoked && beforeWriteAsync is not null)
         {
             await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
+        {
+            repositoryState = repositoryState with { Status = ClaimedRepositoryStatus };
+            await SaveRepositoryClaimAsync(
+                operationDirectory,
+                repositoryState,
+                cancellationToken).ConfigureAwait(false);
         }
 
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
@@ -820,7 +843,9 @@ public sealed class FixtureProjectBuilder
             .Where(line => !string.IsNullOrWhiteSpace(line))
             .ToArray();
         if (lines.Length != 4
-            || (lines[2] != PendingRepositoryStatus && lines[2] != ClaimedRepositoryStatus))
+            || (lines[2] != PendingRepositoryStatus
+                && lines[2] != FallbackPendingRepositoryStatus
+                && lines[2] != ClaimedRepositoryStatus))
         {
             throw new InvalidDataException($"{RepositoryClaimFileName} is malformed.");
         }
