@@ -465,6 +465,39 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Import_into_authentication_failure_preserves_completed_state_before_metadata_mutation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-project-import-into-auth-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_existing",
+                ImportCompleted = true,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new FieldResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken));
+
+            Assert.Equal("authentication failed", exception.Message);
+            Assert.True((await ProjectImportLog.LoadAsync(directory, cancellationToken)).ImportCompleted);
+            Assert.Equal(0, handler.ProjectUpdateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_into_rejects_pending_field_omitted_from_snapshot_before_mutating()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

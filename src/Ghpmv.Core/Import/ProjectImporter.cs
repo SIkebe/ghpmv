@@ -413,10 +413,10 @@ public sealed class ProjectImporter
                 case ConflictAction.Update:
                     ValidatePendingFieldOperations(snapshot, existing.Id);
                     ValidatePendingViewOperations(snapshot, existing.Id);
-                    await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                    await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
             }
         }
@@ -476,10 +476,10 @@ public sealed class ProjectImporter
         ValidatePendingItemProject(project.Id);
         ValidatePendingFieldOperations(snapshot, project.Id);
         ValidatePendingViewOperations(snapshot, project.Id);
-        await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
     }
 

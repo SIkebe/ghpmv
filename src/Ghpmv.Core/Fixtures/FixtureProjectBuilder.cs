@@ -1533,7 +1533,7 @@ public sealed record FixtureProjectSetupResult(
     int ProjectNumber,
     string Url,
     bool Created,
-    bool OwnedByOperation)
+    bool OwnedByOperation = false)
 {
     public bool ShouldSkipUiSetup(bool projectExplicitlySelected, bool uiSetupCompleted)
         => !projectExplicitlySelected

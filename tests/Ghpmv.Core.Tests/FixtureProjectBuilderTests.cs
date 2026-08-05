@@ -78,6 +78,15 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public void Three_argument_result_constructor_preserves_unowned_existing_behavior()
+    {
+        var result = new FixtureProjectSetupResult(1, "https://github.com/orgs/example/projects/1", Created: false);
+
+        Assert.False(result.OwnedByOperation);
+        Assert.True(result.ShouldSkipUiSetup(projectExplicitlySelected: false, uiSetupCompleted: false));
+    }
+
+    [Fact]
     public void Demo_fixture_exercises_every_snapshot_field_pattern()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(

@@ -60,7 +60,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Conflict_update_runs_prewrite_hook_before_sending_mutations()
+    public async Task Conflict_update_authentication_failure_preserves_completed_state_and_sends_no_mutations()
     {
         const string response =
             """
@@ -69,36 +69,49 @@ public class ProjectImporterLogicTests
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}
             """;
-        using var handler = new StubHandler(response);
-        using var client = new GitHubGraphQLClient(
-            "dummy-token",
-            new Uri("https://example.test/graphql"),
-            handler,
-            delayAsync: null);
-        var operationLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-project-import-{Guid.NewGuid():N}");
-        var importer = new ProjectImporter(client)
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var operationLogDirectory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
         {
-            OnConflict = ConflictAction.Update,
-            BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
-            OperationLogDirectory = operationLogDirectory,
-        };
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_existing",
+                ImportCompleted = true,
+            }.SaveAsync(operationLogDirectory, cancellationToken);
+            using var handler = new StubHandler(response);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var importer = new ProjectImporter(client)
+            {
+                OnConflict = ConflictAction.Update,
+                BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
+                OperationLogDirectory = operationLogDirectory,
+            };
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => importer.ImportAsync(
-                MinimalSnapshot("Roadmap"),
-                "target",
-                TestContext.Current.CancellationToken));
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(
+                    MinimalSnapshot("Roadmap"),
+                    "target",
+                    cancellationToken));
 
-        Assert.Equal("authentication failed", exception.Message);
-        var request = Assert.Single(handler.RequestBodies);
-        using var document = JsonDocument.Parse(request);
-        Assert.DoesNotContain(
-            "mutation",
-            document.RootElement.GetProperty("query").GetString()!,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.Null((await ProjectImportLog.LoadAsync(
-            operationLogDirectory,
-            TestContext.Current.CancellationToken)).CreatedProjectId);
+            Assert.Equal("authentication failed", exception.Message);
+            var request = Assert.Single(handler.RequestBodies);
+            using var document = JsonDocument.Parse(request);
+            Assert.DoesNotContain(
+                "mutation",
+                document.RootElement.GetProperty("query").GetString()!,
+                StringComparison.OrdinalIgnoreCase);
+            var operationLog = await ProjectImportLog.LoadAsync(operationLogDirectory, cancellationToken);
+            Assert.Equal("PVT_existing", operationLog.CreatedProjectId);
+            Assert.True(operationLog.ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(operationLogDirectory, recursive: true);
+        }
     }
 
     [Fact]
