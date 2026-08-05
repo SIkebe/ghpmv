@@ -7,8 +7,10 @@ namespace Ghpmv.Core.Tests;
 
 public class FixtureProjectBuilderTests
 {
-    [Fact]
-    public async Task Concurrent_strict_fixture_operation_is_rejected_before_network_writes()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Concurrent_fixture_operation_is_rejected_before_network_writes(bool requireNewResources)
     {
         var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-lock-").FullName;
         try
@@ -16,7 +18,7 @@ public class FixtureProjectBuilderTests
             var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
             Directory.CreateDirectory(operationDirectory);
             using var operationLock = new FileStream(
-                Path.Combine(operationDirectory, "strict-fixture-operation.lock"),
+                Path.Combine(operationDirectory, "fixture-operation.lock"),
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,
                 FileShare.None);
@@ -28,7 +30,11 @@ public class FixtureProjectBuilderTests
                 graphQlHandler,
                 (_, _) => Task.CompletedTask);
             using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
-            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = requireNewResources,
+            };
 
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => builder.CreateAsync(
@@ -37,7 +43,7 @@ public class FixtureProjectBuilderTests
                     "fixture",
                     TestContext.Current.CancellationToken));
 
-            Assert.Contains("Another strict fixture operation", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("Another fixture operation", exception.Message, StringComparison.Ordinal);
             Assert.Empty(graphQlHandler.RequestBodies);
             Assert.Empty(restHandler.RequestMethods);
         }

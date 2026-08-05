@@ -50,9 +50,7 @@ public sealed class FixtureProjectBuilder
             SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
-        using var operationLock = RequireNewResources
-            ? AcquireStrictOperationLock(operationDirectory)
-            : null;
+        using var operationLock = AcquireFixtureOperationLock(operationDirectory);
         var repositoryFullName = $"{organization}/{repositoryName}";
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
@@ -855,13 +853,13 @@ public sealed class FixtureProjectBuilder
     private static void DeleteRepositoryState(string operationDirectory)
         => File.Delete(Path.Combine(operationDirectory, RepositoryClaimFileName));
 
-    private static FileStream AcquireStrictOperationLock(string operationDirectory)
+    private static FileStream AcquireFixtureOperationLock(string operationDirectory)
     {
         Directory.CreateDirectory(operationDirectory);
         try
         {
             return new FileStream(
-                Path.Combine(operationDirectory, "strict-fixture-operation.lock"),
+                Path.Combine(operationDirectory, "fixture-operation.lock"),
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,
                 FileShare.None);
@@ -869,7 +867,7 @@ public sealed class FixtureProjectBuilder
         catch (IOException exception)
         {
             throw new InvalidOperationException(
-                $"Another strict fixture operation is already using '{operationDirectory}'.",
+                $"Another fixture operation is already using '{operationDirectory}'.",
                 exception);
         }
     }
