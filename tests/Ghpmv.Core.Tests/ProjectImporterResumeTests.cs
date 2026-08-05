@@ -88,6 +88,48 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Recorded_project_id_is_not_replaced_by_same_title_candidate_on_resume()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-recorded-project-replacement-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "recorded-project",
+                    OwnerLogin = "target",
+                    Title = "Project",
+                    ExistingProjectIds = [],
+                },
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                Resume = true,
+                ReturnReplacementOnResume = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(Snapshot(), "target", cancellationToken));
+
+            Assert.Contains("PVT_created", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("was not found", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, handler.CreateMutationCount);
+            var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_created", log.CreatedProjectId);
+            Assert.NotNull(log.PendingProject);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Strict_reservation_resumes_recorded_project_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -572,6 +614,8 @@ public class ProjectImporterResumeTests
 
         public bool ReturnDuplicateAfterCreate { get; init; }
 
+        public bool ReturnReplacementOnResume { get; init; }
+
         public List<string> DeletedProjectIds { get; } = [];
 
         public int ViewCreateMutationCount { get; private set; }
@@ -598,9 +642,14 @@ public class ProjectImporterResumeTests
                         """);
                 }
 
-                return Resume
-                    ? Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""")
-                    : Json("""{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+                if (!Resume)
+                {
+                    return Json("""{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+                }
+
+                return ReturnReplacementOnResume
+                    ? Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_replacement","number":8,"title":"Project","url":"https://github.com/orgs/target/projects/8"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""")
+                    : Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
             }
 
             if (query.Contains("organization(login:", StringComparison.Ordinal))

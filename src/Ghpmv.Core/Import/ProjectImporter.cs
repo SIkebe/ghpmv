@@ -291,8 +291,22 @@ public sealed class ProjectImporter
                     $"Pending project operation '{pendingProject.OperationId}' does not match the current import target.");
             }
 
-            existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
-            _operationLog.CreatedProjectId = existing.Id;
+            if (_operationLog.CreatedProjectId is { } createdProjectId)
+            {
+                existing = matches.FirstOrDefault(
+                    project => string.Equals(project.Id, createdProjectId, StringComparison.Ordinal))
+                    ?? throw new InvalidOperationException(
+                        $"The project '{createdProjectId}' created by this operation was not found.");
+            }
+            else
+            {
+                existing = await ReconcilePendingProjectAsync(
+                    pendingProject,
+                    matches,
+                    cancellationToken).ConfigureAwait(false);
+                _operationLog.CreatedProjectId = existing.Id;
+            }
+
             _operationLog.ImportCompleted = false;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
