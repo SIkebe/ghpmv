@@ -9,6 +9,50 @@ namespace Ghpmv.Core.Tests;
 public class ProjectExporterTests
 {
     [Fact]
+    public async Task Export_prefers_configured_visible_fields_from_view_configuration()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                "configuration":{"visibleFields":{"nodes":[{"name":"Status"},{"name":"Title"}]}},
+                "fields":{"nodes":[{"name":"Legacy field"}]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Entries =
+            [
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Status", DataType = "SINGLE_SELECT" }, false),
+            ],
+        };
+
+        var snapshot = await new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        }.ExportAsync("source", 1, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Status", "Title"], Assert.Single(snapshot.Views).VisibleFields);
+        Assert.Contains("configuration", handler.RequestBodies[0], StringComparison.Ordinal);
+        Assert.Contains("visibleFields", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_reads_projected_multi_select_issue_fields()
     {
         using var handler = new StubHandler(

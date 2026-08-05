@@ -669,11 +669,24 @@ public sealed class ProjectExporter
                 GroupByFields = ParseFieldNameConnection(node, "groupByFields"),
                 SortByFields = ParseSortByFields(node),
                 VerticalGroupByFields = ParseFieldNameConnection(node, "verticalGroupByFields"),
-                VisibleFields = ParseFieldNameConnection(node, "fields"),
+                VisibleFields = ParseVisibleFields(node),
             });
         }
 
         return views;
+    }
+
+    private static List<string> ParseVisibleFields(JsonElement view)
+    {
+        if (view.TryGetProperty("configuration", out var configuration)
+            && configuration.ValueKind == JsonValueKind.Object)
+        {
+            return ParseFieldNameConnection(configuration, "visibleFields");
+        }
+
+        // Backward compatibility for snapshots produced from responses captured
+        // before ProjectV2View.configuration was added on 2026-07-30.
+        return ParseFieldNameConnection(view, "fields");
     }
 
     private static List<string> ParseFieldNameConnection(JsonElement view, string propertyName)
@@ -973,7 +986,9 @@ public sealed class ProjectExporter
                   groupByFields(first: 10) { nodes { ... on ProjectV2FieldCommon { name } } }
                   verticalGroupByFields(first: 10) { nodes { ... on ProjectV2FieldCommon { name } } }
                   sortByFields(first: 10) { nodes { direction field { ... on ProjectV2FieldCommon { name } } } }
-                  fields(first: 50) { nodes { ... on ProjectV2FieldCommon { name } } }
+                  configuration {
+                    visibleFields(first: 50) { nodes { ... on ProjectV2FieldCommon { name } } }
+                  }
                 }
               }
               workflows(first: 50) {

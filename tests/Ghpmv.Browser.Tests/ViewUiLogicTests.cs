@@ -6,8 +6,8 @@ namespace Ghpmv.Browser.Tests;
 
 /// <summary>
 /// Pure-logic unit tests for the browser module (no Playwright required):
-/// menu-value parsing, default-view reuse, layout mapping, pre-flight warning
-/// collection and the verifier's UI-settings comparison.
+/// menu-value parsing, pre-flight warning collection and the verifier's
+/// UI-settings comparison.
 /// </summary>
 public class ViewUiLogicTests
 {
@@ -50,31 +50,6 @@ public class ViewUiLogicTests
     [InlineData("   ", null)]
     public void NormalizeUiText_collapses_whitespace(string text, string? expected)
         => Assert.Equal(expected, ViewUiExporter.NormalizeUiText(text));
-
-    // ----- ViewUiImporter static logic -----
-
-    [Fact]
-    public void ShouldReuseDefaultView_is_true_when_the_first_view_is_a_table()
-        => Assert.True(ViewUiImporter.ShouldReuseDefaultView([View("View 1", "TABLE_LAYOUT")]));
-
-    [Fact]
-    public void ShouldReuseDefaultView_is_false_when_the_first_view_is_a_board()
-        => Assert.False(ViewUiImporter.ShouldReuseDefaultView([View("Board", "BOARD_LAYOUT"), View("Table", "TABLE_LAYOUT")]));
-
-    [Fact]
-    public void ShouldReuseDefaultView_is_false_for_an_empty_list()
-        => Assert.False(ViewUiImporter.ShouldReuseDefaultView([]));
-
-    [Theory]
-    [InlineData("TABLE_LAYOUT", "Table")]
-    [InlineData("BOARD_LAYOUT", "Board")]
-    [InlineData("ROADMAP_LAYOUT", "Roadmap")]
-    public void LayoutMenuName_maps_graphql_layouts_to_menu_items(string layout, string expected)
-        => Assert.Equal(expected, ViewUiImporter.LayoutMenuName(layout));
-
-    [Fact]
-    public void LayoutMenuName_throws_for_unknown_layouts()
-        => Assert.Throws<ArgumentException>(() => ViewUiImporter.LayoutMenuName("LIST_LAYOUT"));
 
     // ----- pre-flight warning collection -----
 
@@ -152,6 +127,10 @@ public class ViewUiLogicTests
         var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
 
         Assert.Equal(["View 1", "Fixture Board", "Fixture Roadmap"], snapshot.Views.Select(v => v.Name));
+        Assert.Contains(snapshot.Fields, field =>
+            field.Name == "Fixture Teams"
+            && field.DataType == "MULTI_SELECT"
+            && field.IssueField is not null);
         Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add to project" && w.Ui?.Repository == "fixture-repo");
         Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add secondary" && w.Ui?.Filter == "is:issue label:bug");
         Assert.Empty(ViewUiImporter.CollectPreflightWarnings(snapshot));

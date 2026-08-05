@@ -1,25 +1,17 @@
-using System.Collections.ObjectModel;
 using System.Globalization;
-using Ghpmv.Core.Import;
+using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
 
 namespace Ghpmv.Core.Browser;
 
 /// <summary>
-/// UI import of views (B3/B4). Views are created in snapshot order via the "New view"
-/// tab (D0: picking a layout menu item creates and activates the view immediately),
-/// renamed by double-clicking the tab, configured through the "View" menu
-/// (GraphQL-derived settings: filter/group-by/sort-by/visible fields; UI-only settings:
-/// Dates/Zoom level/Slice by), then saved with "Save view" + the confirmation
-/// alertdialog. The default "View 1" is reused when the first snapshot view is a table,
-/// otherwise it is deleted at the end. Settings that cannot be applied are collected
-/// as warnings and the import continues.
+/// Browser import of View settings not writable through GraphQL. <see cref="EnrichAsync"/>
+/// applies those settings to API-created Views. Settings that cannot be applied are
+/// collected as warnings.
 /// </summary>
 public sealed class ViewUiImporter
 {
-    private const string DefaultViewName = "View 1";
-
     private static readonly AriaRole[] OptionRoles =
     [
         AriaRole.Menuitemradio,
@@ -41,30 +33,8 @@ public sealed class ViewUiImporter
     /// <summary>Invoked with a human-readable progress message per view.</summary>
     public Action<string>? OnProgress { get; set; }
 
-    public IReadOnlyDictionary<string, string> RepositoryMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
-
-    public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
-
-    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
-
     /// <summary>Warnings collected while importing (settings that could not be applied).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
-
-    /// <summary>True when the default "View 1" can be reused for the first snapshot view (a table).</summary>
-    public static bool ShouldReuseDefaultView(IReadOnlyList<ViewSnapshot> views)
-    {
-        ArgumentNullException.ThrowIfNull(views);
-        return views.Count > 0 && string.Equals(views[0].Layout, "TABLE_LAYOUT", StringComparison.Ordinal);
-    }
-
-    /// <summary>Maps a GraphQL layout enum value to the "New view" layout menu item name.</summary>
-    public static string LayoutMenuName(string layout) => layout switch
-    {
-        "TABLE_LAYOUT" => "Table",
-        "BOARD_LAYOUT" => "Board",
-        "ROADMAP_LAYOUT" => "Roadmap",
-        _ => throw new ArgumentException($"Unknown view layout '{layout}'.", nameof(layout)),
-    };
 
     /// <summary>
     /// Pure pre-flight check: warns about view settings that reference fields missing from
@@ -135,196 +105,129 @@ public sealed class ViewUiImporter
         return warnings;
     }
 
-    /// <summary>Creates and configures all snapshot views on the target project.</summary>
-    public async Task ImportAsync(ProjectSnapshot snapshot, string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Applies only settings that the GraphQL View mutations cannot write. Views must
+    /// already exist and be mapped from source to target numbers by the API import stage.
+    /// </summary>
+    public async Task EnrichAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        IReadOnlyDictionary<int, int> viewNumbers,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentNullException.ThrowIfNull(viewNumbers);
 
-        var views = snapshot.Views.OrderBy(v => v.Number).ToList();
-        if (views.Count == 0)
+        if (snapshot.Views.Count == 0)
         {
             return;
         }
 
         _warnings.AddRange(CollectPreflightWarnings(snapshot));
-
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-        var url = string.Create(CultureInfo.InvariantCulture,
-            $"{_session.BaseUrl}/orgs/{orgLogin}/projects/{projectNumber}");
-        await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-        await Sel.ViewTab(page, DefaultViewName).First.WaitForAsync().ConfigureAwait(false);
-
-        var reuseDefault = ShouldReuseDefaultView(views);
-        for (var i = 0; i < views.Count; i++)
+        foreach (var view in snapshot.Views.OrderBy(candidate => candidate.Number))
         {
-            var view = views[i];
-            OnProgress?.Invoke($"Creating view '{view.Name}' ({view.Layout})...");
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!viewNumbers.TryGetValue(view.Number, out var targetNumber))
+            {
+                _warnings.Add($"view '{view.Name}': API import did not return a target view number; browser-only settings were skipped");
+                continue;
+            }
+
+            OnProgress?.Invoke($"Applying browser-only settings for view '{view.Name}' ({view.Layout})...");
             try
             {
-                if (i == 0 && reuseDefault)
-                {
-                    await Sel.ViewTab(page, DefaultViewName).First.ClickAsync().ConfigureAwait(false);
-                    await PauseAsync(cancellationToken).ConfigureAwait(false);
-                    if (!string.Equals(view.Name, DefaultViewName, StringComparison.Ordinal))
-                    {
-                        await RenameSelectedTabAsync(page, view.Name, cancellationToken).ConfigureAwait(false);
-                    }
-                }
-                else
-                {
-                    await CreateViewAsync(page, view, cancellationToken).ConfigureAwait(false);
-                }
-
-                await ApplySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+                var url = BrowserProjectUrl.Build(
+                    _session.BaseUrl,
+                    ownerLogin,
+                    ownerType,
+                    projectNumber,
+                    string.Create(CultureInfo.InvariantCulture, $"views/{targetNumber}"));
+                await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+                await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
                 await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
-                _warnings.Add($"view '{view.Name}': import failed — {exception.Message}");
+                _warnings.Add($"view '{view.Name}': browser-only settings could not be applied — {exception.Message}");
             }
-        }
-
-        if (!reuseDefault)
-        {
-            try
-            {
-                await DeleteDefaultViewAsync(page, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-            {
-                _warnings.Add($"default view '{DefaultViewName}' could not be deleted — {exception.Message}");
-            }
-        }
-    }
-
-    // ----- view creation -----
-
-    private static async Task CreateViewAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
-    {
-        // Under load the layout menuitem click can misfire (menu re-render race) and
-        // silently create nothing — verify a new tab actually appeared and retry.
-        var tabs = page.GetByRole(AriaRole.Tab);
-        for (var attempt = 1; ; attempt++)
-        {
-            var before = await tabs.CountAsync().ConfigureAwait(false);
-            await Sel.NewViewTab(page).ClickAsync().ConfigureAwait(false);
-            var menu = Sel.OpenMenu(page);
-            await menu.WaitForAsync().ConfigureAwait(false);
-            await menu.GetByRole(AriaRole.Menuitem, new() { Name = LayoutMenuName(view.Layout), Exact = true })
-                .First.ClickAsync().ConfigureAwait(false);
-
-            if (await WaitForTabCountAsync(tabs, before + 1, cancellationToken).ConfigureAwait(false))
-            {
-                break;
-            }
-
-            if (attempt >= 3)
-            {
-                throw new InvalidOperationException($"Creating view '{view.Name}' did not add a new tab after {attempt} attempts.");
-            }
-
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-        await RenameSelectedTabAsync(page, view.Name, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task<bool> WaitForTabCountAsync(ILocator tabs, int expected, CancellationToken cancellationToken)
-    {
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTimeOffset.UtcNow < deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (await tabs.CountAsync().ConfigureAwait(false) >= expected)
-            {
-                return true;
-            }
-
-            await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-        }
-
-        return false;
-    }
-
-    private static async Task EnsureLayoutAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
-    {
-        await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
-        var layoutButton = Sel.ViewLayoutButton(page, LayoutMenuName(view.Layout));
-        await layoutButton.First.ClickAsync().ConfigureAwait(false);
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task RenameSelectedTabAsync(IPage page, string name, CancellationToken cancellationToken)
-    {
-        // The double-click occasionally lands while the freshly created tab is still
-        // settling and no rename textbox appears — retry a few times.
-        var textbox = Sel.ViewNameTextbox(page);
-        for (var attempt = 1; ; attempt++)
-        {
-            await Sel.SelectedViewTab(page).First.DblClickAsync().ConfigureAwait(false);
-            try
-            {
-                await textbox.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
-                break;
-            }
-            catch (Exception exception) when (exception is PlaywrightException or TimeoutException && attempt < 3)
-            {
-                await PauseAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        await textbox.FillAsync(name).ConfigureAwait(false);
-        await textbox.PressAsync("Enter").ConfigureAwait(false);
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-
-        // Verify the rename actually took (the Enter can race the SPA re-render).
-        if (await Sel.ViewTab(page, name).CountAsync().ConfigureAwait(false) == 0)
-        {
-            throw new InvalidOperationException($"Renaming the selected view tab to '{name}' did not take effect.");
         }
     }
 
     // ----- settings -----
 
-    private async Task ApplySettingsAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
+    private async Task ApplyBrowserOnlySettingsAsync(
+        IPage page,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
     {
-        // The layout menuitem click during creation occasionally misfires and leaves a
-        // Table view behind — enforce the layout via the View menu before any
-        // layout-specific settings (clicking the already-active layout is a no-op).
-        await EnsureLayoutAsync(page, view, cancellationToken).ConfigureAwait(false);
-
         // GraphQL-derived settings. Boards expose their horizontal grouping as the
         // "Swimlanes" menu item (E2E discovery, 2026-07-06) while tables/roadmaps use
         // "Group by"; GraphQL reports both as groupByFields.
         var isBoard = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal);
+        var groupingLabel = isBoard ? "Swimlanes" : "Group by";
         if (view.GroupByFields.Count > 0)
         {
-            await TrySetSingleAsync(page, isBoard ? "Swimlanes" : "Group by", view.GroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            await TrySetSingleAsync(page, groupingLabel, view.GroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await TrySetSingleAsync(
+                page,
+                groupingLabel,
+                ["None", "No grouping"],
+                "none",
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
         }
 
-        // A new board defaults to "Column by: Status"; only deviations need a click.
-        if (view.VerticalGroupByFields.Count > 0
-            && !(view.VerticalGroupByFields.Count == 1 && string.Equals(view.VerticalGroupByFields[0], "Status", StringComparison.Ordinal)))
+        if (isBoard && view.VerticalGroupByFields.Count > 0)
         {
             await TrySetSingleAsync(page, "Column by", view.VerticalGroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
         }
-
-        // Some layouts only offer custom fields in the Sort by menu after they are
-        // visible on the view, so fields are applied before sorting.
-        await TrySetVisibleFieldsAsync(page, view, cancellationToken).ConfigureAwait(false);
+        else if (isBoard)
+        {
+            await TrySetSingleAsync(
+                page,
+                "Column by",
+                ["None", "No field"],
+                "none",
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
+        }
 
         if (view.SortByFields.Count > 0)
         {
             await TrySetSortAsync(page, view.SortByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await TrySetSingleAsync(
+                page,
+                "Sort by",
+                ["None", "No sorting"],
+                "none",
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
         }
 
         // UI-only settings.
         if (view.Ui?.SliceBy is { } sliceBy)
         {
             await TrySetSingleAsync(page, "Slice by", sliceBy, view.Name, cancellationToken).ConfigureAwait(false);
+        }
+        else if (view.Ui is not null)
+        {
+            await TrySetSingleAsync(
+                page,
+                "Slice by",
+                ["None", "No field"],
+                "none",
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
         }
 
         // The scraped Swimlanes value usually duplicates groupByFields (already applied
@@ -336,10 +239,10 @@ public sealed class ViewUiImporter
         }
 
         // "Field sum" is a checkbox overlay (Count + number fields). A fresh board
-        // defaults to ["Count"], so identical snapshots produce no clicks.
-        if (view.Ui?.FieldSum is { Count: > 0 } fieldSum)
+        // defaults to ["Count"], so apply the complete desired set, including empty.
+        if (isBoard && view.Ui is not null)
         {
-            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, view.Name, cancellationToken).ConfigureAwait(false);
+            await TrySetCheckboxesAsync(page, "Field sum", view.Ui.FieldSum ?? [], view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         if (view.Ui?.Roadmap is { } roadmap)
@@ -354,25 +257,21 @@ public sealed class ViewUiImporter
                 await TrySetSingleAsync(page, "Zoom level", zoom, view.Name, cancellationToken).ConfigureAwait(false);
             }
 
-            if (roadmap.Markers is { Count: > 0 } markers)
-            {
-                await TrySetCheckboxesAsync(page, "Markers", markers, view.Name, cancellationToken).ConfigureAwait(false);
-            }
+            await TrySetCheckboxesAsync(page, "Markers", roadmap.Markers ?? [], view.Name, cancellationToken).ConfigureAwait(false);
         }
 
-        // Filter last: it is typed into the filter bar, not the View menu.
-        if (!string.IsNullOrWhiteSpace(view.Filter))
-        {
-            var transformed = ProjectFilterTransformer.Transform(
-                view.Filter,
-                UserMapping,
-                RepositoryMapping,
-                OrganizationMapping);
-            await TrySetFilterAsync(page, transformed.Transformed, view.Name, cancellationToken).ConfigureAwait(false);
-        }
     }
 
     private async Task TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
+        => await TrySetSingleAsync(page, label, [value], value, viewName, cancellationToken).ConfigureAwait(false);
+
+    private async Task TrySetSingleAsync(
+        IPage page,
+        string label,
+        IReadOnlyList<string> candidates,
+        string expectedValue,
+        string viewName,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -388,10 +287,19 @@ public sealed class ViewUiImporter
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
 
-            var option = await FindOptionAsync(page, value).ConfigureAwait(false);
+            ILocator? option = null;
+            foreach (var candidate in candidates)
+            {
+                option = await FindOptionAsync(page, candidate).ConfigureAwait(false);
+                if (option is not null)
+                {
+                    break;
+                }
+            }
+
             if (option is null)
             {
-                _warnings.Add($"view '{viewName}': {label} value '{value}' is not available on the target");
+                _warnings.Add($"view '{viewName}': {label} value '{expectedValue}' is not available on the target");
                 await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
                 return;
             }
@@ -410,10 +318,6 @@ public sealed class ViewUiImporter
     private async Task TrySetSortAsync(IPage page, SortByFieldSnapshot sort, string viewName, CancellationToken cancellationToken)
     {
         await TrySetSingleAsync(page, "Sort by", sort.Field, viewName, cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(sort.Direction, "DESC", StringComparison.Ordinal))
-        {
-            return;
-        }
 
         try
         {
@@ -422,14 +326,17 @@ public sealed class ViewUiImporter
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
 
-            var descending = await FindOptionAsync(page, "Descending").ConfigureAwait(false);
-            if (descending is null)
+            var directionName = string.Equals(sort.Direction, "DESC", StringComparison.Ordinal)
+                ? "Descending"
+                : "Ascending";
+            var direction = await FindOptionAsync(page, directionName).ConfigureAwait(false);
+            if (direction is null)
             {
-                _warnings.Add($"view '{viewName}': descending sort direction for '{sort.Field}' could not be applied");
+                _warnings.Add($"view '{viewName}': {directionName.ToLowerInvariant()} sort direction for '{sort.Field}' could not be applied");
             }
             else
             {
-                await descending.ClickAsync().ConfigureAwait(false);
+                await direction.ClickAsync().ConfigureAwait(false);
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
 
@@ -438,45 +345,6 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view '{viewName}': sort direction could not be applied — {exception.Message}");
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private async Task TrySetVisibleFieldsAsync(IPage page, ViewSnapshot view, CancellationToken cancellationToken)
-    {
-        if (view.VisibleFields.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
-            var item = Sel.ConfigurationMenuItem(menu, "Fields");
-            if (await item.CountAsync().ConfigureAwait(false) == 0)
-            {
-                // Boards/roadmaps expose visible fields differently; not an error.
-                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            await item.First.ClickAsync().ConfigureAwait(false);
-            await PauseAsync(cancellationToken).ConfigureAwait(false);
-            // The sort field renders as a virtual column (aria-checked=true) that is never
-            // part of GraphQL visibleFields (E2E discovery, 2026-07-06) — include it in the
-            // desired set so it is not unchecked (which could drop the sort).
-            var desired = new HashSet<string>(view.VisibleFields, StringComparer.Ordinal);
-            foreach (var sort in view.SortByFields)
-            {
-                desired.Add(sort.Field);
-            }
-
-            await ToggleCheckboxesAsync(page, desired, cancellationToken).ConfigureAwait(false);
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-        {
-            _warnings.Add($"view '{view.Name}': visible fields could not be applied — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -592,23 +460,7 @@ public sealed class ViewUiImporter
         await PauseAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task TrySetFilterAsync(IPage page, string filter, string viewName, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var filterBox = Sel.FilterCombobox(page);
-            await filterBox.ClickAsync().ConfigureAwait(false);
-            await filterBox.FillAsync(filter).ConfigureAwait(false);
-            await filterBox.PressAsync("Enter").ConfigureAwait(false);
-            await PauseAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-        {
-            _warnings.Add($"view '{viewName}': filter could not be applied — {exception.Message}");
-        }
-    }
-
-    // ----- save / delete -----
+    // ----- save -----
 
     private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
     {
@@ -641,28 +493,6 @@ public sealed class ViewUiImporter
             // No confirmation dialog appeared; the save applied directly.
         }
 
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task DeleteDefaultViewAsync(IPage page, CancellationToken cancellationToken)
-    {
-        var tabs = Sel.ViewTab(page, DefaultViewName);
-        if (await tabs.CountAsync().ConfigureAwait(false) == 0)
-        {
-            return;
-        }
-
-        await tabs.First.ClickAsync().ConfigureAwait(false);
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-
-        // Clicking the already-active tab opens its view options menu.
-        await tabs.First.ClickAsync().ConfigureAwait(false);
-        var menu = Sel.OpenMenu(page);
-        await menu.WaitForAsync().ConfigureAwait(false);
-        await Sel.DeleteViewMenuItem(menu).First.ClickAsync().ConfigureAwait(false);
-
-        // D0: deletion asks for confirmation.
-        await Sel.ConfirmDeleteButton(page).ClickAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
     }
 

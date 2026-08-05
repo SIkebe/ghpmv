@@ -199,12 +199,19 @@ public class BrowserRoundTripTests
         var importer = new ProjectImporter(client)
         {
             OperationLogDirectory = CreateOperationLogDirectory(),
+            BrowserViewEnrichmentPlanned = true,
         };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
             var viewImporter = new ViewUiImporter(session);
-            await viewImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            await viewImporter.EnrichAsync(
+                snapshot,
+                TargetOrg,
+                ProjectOwnerType.Organization,
+                result.ProjectNumber,
+                result.ViewNumbers,
+                cancellationToken);
             Assert.Empty(viewImporter.Warnings);
 
             // Verify re-exports the target through GraphQL and its browser post-export hook.
@@ -264,7 +271,13 @@ public class BrowserRoundTripTests
                         ? view with { Ui = view.Ui! with { SliceBy = "Status" } }
                         : view).ToList(),
             };
-            await viewImporter.ImportAsync(driftedSnapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            await viewImporter.EnrichAsync(
+                driftedSnapshot,
+                TargetOrg,
+                ProjectOwnerType.Organization,
+                result.ProjectNumber,
+                result.ViewNumbers,
+                cancellationToken);
             var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Contains(driftReport.Differences, difference =>
                 difference.Severity == VerifySeverity.Error

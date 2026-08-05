@@ -4,7 +4,7 @@ namespace Ghpmv.Core.Import;
 
 /// <summary>
 /// Result of <see cref="ProjectImporter.ImportAsync"/>: the target project identity
-/// plus name-to-id mappings needed by the item import phase (M4).
+/// plus field and View mappings needed by later import phases.
 /// </summary>
 public sealed record ImportResult
 {
@@ -39,4 +39,11 @@ public sealed record ImportResult
     /// <summary>Issue Field name → (select option name → option ID).</summary>
     public IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> IssueFieldOptionIds { get; init; } =
         ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>.Empty;
+
+    /// <summary>Source view number → target view number.</summary>
+    public IReadOnlyDictionary<int, int> ViewNumbers { get; init; } =
+        ReadOnlyDictionary<int, int>.Empty;
+
+    /// <summary>Number of recoverable warnings emitted while importing views through GraphQL.</summary>
+    public int ViewWarningCount { get; init; }
 }

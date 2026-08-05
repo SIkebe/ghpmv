@@ -1,8 +1,8 @@
 # ghpmv — GitHub Projects Migrator
 
-`ghpmv` is a CLI that migrates **GitHub Projects V2** between organizations — **including Views and Workflows**, which have no public API.
+`ghpmv` is a CLI that migrates **GitHub Projects V2** between organizations, including Views and Workflows.
 
-Most existing tools (e.g. [timrogers/gh-migrate-project](https://github.com/timrogers/gh-migrate-project)) migrate what the GraphQL API exposes: fields, items and field values. Views (layout, filters, grouping, slicing, roadmap settings, …) and Workflows (auto-add, item-closed automation, …) must then be recreated by hand. `ghpmv` closes that gap with an **opt-in browser automation module** (Playwright + your own signed-in session) so a project can be migrated end-to-end:
+Most existing tools (e.g. [timrogers/gh-migrate-project](https://github.com/timrogers/gh-migrate-project)) migrate fields, items and field values. `ghpmv` also uses the GraphQL View mutations for names, layouts, filters and ordered visible fields. Advanced View settings and Workflows can be completed with an **opt-in browser automation module** (Playwright + your own signed-in session):
 
 | Capability | gh-migrate-project | ghpmv |
 |---|---|---|
@@ -10,7 +10,7 @@ Most existing tools (e.g. [timrogers/gh-migrate-project](https://github.com/timr
 | Draft issues (with author note) | ✅ | ✅ |
 | Iteration fields incl. completed iterations | ➖ | ✅ |
 | Item order & archived state | ➖ | ✅ |
-| **Views (all layouts, filters, grouping, slicing, roadmap)** | ❌ | ✅ (opt-in browser automation) |
+| **Views (all layouts, filters, grouping, slicing, roadmap)** | ❌ | ✅ (GraphQL + optional browser automation) |
 | **Workflows (auto-add, auto-archive, item state automations)** | ❌ | ✅ (opt-in browser automation) |
 | Post-migration verification (`ghpmv verify`) | ❌ | ✅ |
 
@@ -184,9 +184,9 @@ ghpmv import --org octocat    --owner-type user --in ./snapshot
 ghpmv verify --org octocat    --owner-type user --project 2 --in ./snapshot
 ```
 
-### Migrating Views & Workflows (opt-in browser automation)
+### Full-fidelity Views & Workflows (opt-in browser automation)
 
-Views and Workflows have no public API, so `ghpmv` replays them through the Projects web UI using Playwright with **your own browser session**. This is strictly **opt-in**:
+View names, layouts, filters and ordered visible fields are imported through GraphQL without browser automation. Grouping, sorting, slicing, field sums, Roadmap display settings and Workflows still require the Projects web UI, so `ghpmv` can supplement the API import with Playwright using **your own browser session**. This is strictly **opt-in**:
 
 ```bash
 # One-time setup
@@ -256,7 +256,7 @@ Organization projects and user-owned projects (`--owner-type user`) are both sup
 
 ## What ghpmv can migrate today
 
-`ghpmv` migrates Projects V2 configuration and membership after repositories, issues, and pull requests have been moved with GitHub Enterprise Importer or another migration tool. It covers fields, items, values, ordering, archived state, linked repositories, and opt-in browser migration for Views and Workflows.
+`ghpmv` migrates Projects V2 configuration and membership after repositories, issues, and pull requests have been moved with GitHub Enterprise Importer or another migration tool. It covers fields, items, values, ordering, archived state, linked repositories, API-backed View migration, and opt-in browser enrichment for advanced View settings and Workflows.
 
 See [Migration scope and limitations](docs/MIGRATION_SCOPE.md) for the complete support matrix, prerequisites, unsupported areas, and browser automation constraints.
 

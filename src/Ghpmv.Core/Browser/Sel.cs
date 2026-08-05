@@ -16,12 +16,6 @@ internal static class Sel
     // Enterprise SSO interstitial heading ("Single sign-on to <enterprise>", M7 discovery).
     private static readonly Regex SsoHeadingName = new("^Single sign-on to ");
 
-    // Active-tab menu item "Delete view" (D0: View options menu).
-    private static readonly Regex DeleteViewName = new("^Delete view");
-
-    // Confirmation button of the delete dialog.
-    private static readonly Regex DeleteButtonName = new("^Delete");
-
     // Filter-bar "View" button. D0: once a setting is changed the accessible name
     // becomes "Unsaved changes View", so an exact "View" match only works before edits.
     private static readonly Regex ViewMenuButtonName = new("^(Unsaved changes )?View$");
@@ -36,11 +30,6 @@ internal static class Sel
     /// <summary>Authoritative field catalog embedded in every Project view page.</summary>
     public static ILocator ProjectFieldData(IPage page) => page.Locator("#memex-columns-data");
 
-    /// <summary>Layout switch button (Table/Board/Roadmap) inside the View menu overlay.</summary>
-    public static ILocator ViewLayoutButton(IPage page, string layoutName)
-        => page.GetByRole(AriaRole.List, new() { Name = "Layout" })
-            .GetByRole(AriaRole.Button, new() { Name = layoutName, Exact = true });
-
     /// <summary>
     /// Configuration menu item. D0: label and current value are combined in the accessible
     /// name ("Group by: &lt;value&gt;"), so the item is located by label prefix.
@@ -48,25 +37,9 @@ internal static class Sel
     public static ILocator ConfigurationMenuItem(ILocator menu, string label)
         => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = new Regex($"^{Regex.Escape(label)}:") });
 
-    /// <summary>"New view" tab; clicking it opens the layout menu (Table/Board/Roadmap).</summary>
-    public static ILocator NewViewTab(IPage page)
-        => page.GetByRole(AriaRole.Tab, new() { Name = "New view" });
-
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
-
-    /// <summary>The currently selected view tab.</summary>
-    public static ILocator SelectedViewTab(IPage page)
-        => page.GetByRole(AriaRole.Tab, new() { Selected = true });
-
-    /// <summary>Rename textbox shown after double-clicking a view tab.</summary>
-    public static ILocator ViewNameTextbox(IPage page)
-        => page.GetByRole(AriaRole.Textbox, new() { Name = "Change view name" });
-
-    /// <summary>Filter-bar input.</summary>
-    public static ILocator FilterCombobox(IPage page)
-        => page.GetByRole(AriaRole.Combobox, new() { Name = "Filter" }).First;
 
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)
@@ -94,15 +67,6 @@ internal static class Sel
     /// <summary>"Continue" button of the SSO interstitial (re-authenticates via the stored IdP session).</summary>
     public static ILocator SsoContinueButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { Name = "Continue", Exact = true });
-
-    /// <summary>"Delete view" item in the active tab's view options menu.</summary>
-    public static ILocator DeleteViewMenuItem(ILocator menu)
-        => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = DeleteViewName });
-
-    /// <summary>Confirm button of the delete-view confirmation dialog.</summary>
-    public static ILocator ConfirmDeleteButton(IPage page)
-        => page.Locator("[role='alertdialog'], [role='dialog']")
-            .GetByRole(AriaRole.Button, new() { NameRegex = DeleteButtonName }).First;
 
     // === Workflows (M7 discovery, 2026-07-05) ===
 

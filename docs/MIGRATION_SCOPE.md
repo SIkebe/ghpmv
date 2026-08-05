@@ -60,14 +60,15 @@ Revisit the workaround when `ProjectV2FieldType` exposes `MULTI_SELECT` and the 
 
 ## Views
 
-Full-fidelity Views require `--enable-browser-automation`. GitHub's [versioned REST API](https://docs.github.com/en/rest/projects/projects?apiVersion=2026-03-10) can create basic organization Project views with a name, layout, filter, and visible fields, but it does not cover all settings that `ghpmv` migrates, and `ghpmv` does not currently use that endpoint.
+View names, layouts, filters, and ordered visible fields are imported through the public [`createProjectV2View` and `updateProjectV2View` GraphQL mutations](https://docs.github.com/en/graphql/reference/projects#createprojectv2view). Full-fidelity Views still require `--enable-browser-automation` for settings that the mutation inputs do not expose.
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| Table views | ✅ / best effort | Name, filter, the first sort key, visible-field membership, Slice by and related display options are migrated. Additional sort keys and visible-field order are exported but are not explicitly reproduced by the browser importer. |
+| Table views | ✅ / best effort | Name, layout, filter, and visible-field order use GraphQL. Group by, the first sort key, Slice by, and related display options use browser enrichment. Additional sort keys are exported but only the first is applied. |
 | Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
 | Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
-| View UI-only settings | ✅ | Exported/imported by browser automation where the UI exposes them. |
+| View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
+| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
 | View tab order | ❌ | Views are recreated, but tab drag-and-drop ordering is not reproduced in v1. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 

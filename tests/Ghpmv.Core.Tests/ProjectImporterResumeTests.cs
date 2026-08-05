@@ -52,6 +52,56 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Project_created_before_apply_failure_reuses_default_view_on_resume()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-created-project-resume-").FullName;
+        try
+        {
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                CreateSucceeds = true,
+                FailFirstProjectUpdate = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+            var snapshot = Snapshot() with
+            {
+                Views =
+                [
+                    new ViewSnapshot
+                    {
+                        Number = 1,
+                        Name = "Backlog",
+                        Layout = "TABLE_LAYOUT",
+                        Filter = null,
+                        GroupByFields = [],
+                        SortByFields = [],
+                        VerticalGroupByFields = [],
+                        VisibleFields = [],
+                    },
+                ],
+            };
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(snapshot, "target", cancellationToken));
+            Assert.NotNull((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingProject);
+
+            handler.Resume = true;
+            var result = await importer.ImportAsync(snapshot, "target", cancellationToken);
+
+            Assert.Equal("PVT_created", result.ProjectId);
+            Assert.Equal("PVTV_default", handler.UpdatedViewId);
+            Assert.Equal(0, handler.ViewCreateMutationCount);
+            Assert.Null((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingProject);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Ambiguous_field_create_is_adopted_without_resending()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -385,6 +435,16 @@ public class ProjectImporterResumeTests
 
     private sealed class ProjectResumeHandler(string directory) : ResumeHandler(directory)
     {
+        public bool CreateSucceeds { get; init; }
+
+        public bool FailFirstProjectUpdate { get; init; }
+
+        public int ViewCreateMutationCount { get; private set; }
+
+        public string? UpdatedViewId { get; private set; }
+
+        private bool _projectUpdateFailed;
+
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -402,23 +462,51 @@ public class ProjectImporterResumeTests
                 return Json("""{"data":{"organization":{"id":"O_target"}}}""");
             }
 
-            if (query.Contains("createProjectV2", StringComparison.Ordinal))
+            if (query.Contains("createProjectV2(input:", StringComparison.Ordinal))
             {
                 CreateMutationCount++;
                 var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);
                 PendingWasPresentAtMutation = log.PendingProject is not null;
                 ClientMutationId = variables.GetProperty("clientMutationId").GetString();
+                if (CreateSucceeds)
+                {
+                    return Json("""{"data":{"createProjectV2":{"projectV2":{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}}}}""");
+                }
+
                 throw new HttpRequestException("Response ended prematurely.");
             }
 
-            if (query.Contains("updateProjectV2", StringComparison.Ordinal))
+            if (query.Contains("updateProjectV2(input:", StringComparison.Ordinal))
             {
+                if (FailFirstProjectUpdate && !_projectUpdateFailed)
+                {
+                    _projectUpdateFailed = true;
+                    throw new InvalidOperationException("Apply failed after project creation.");
+                }
+
                 return Json("""{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_created"}}}}""");
             }
 
             if (query.Contains("fields(first:", StringComparison.Ordinal))
             {
                 return Json("""{"data":{"node":{"fields":{"nodes":[]}}}}""");
+            }
+
+            if (query.Contains("views(first:", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"node":{"views":{"nodes":[{"id":"PVTV_default","number":1,"name":"View 1","layout":"TABLE_LAYOUT"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+            }
+
+            if (query.Contains("createProjectV2View", StringComparison.Ordinal))
+            {
+                ViewCreateMutationCount++;
+                return Json("""{"data":{"createProjectV2View":{"projectV2View":{"id":"PVTV_created","number":2,"name":"Backlog","layout":"TABLE_LAYOUT"}}}}""");
+            }
+
+            if (query.Contains("updateProjectV2View", StringComparison.Ordinal))
+            {
+                UpdatedViewId = variables.GetProperty("viewId").GetString();
+                return Json("""{"data":{"updateProjectV2View":{"projectV2View":{"id":"PVTV_default","number":1,"name":"Backlog","layout":"TABLE_LAYOUT"}}}}""");
             }
 
             throw new InvalidOperationException($"Unexpected operation: {query}");

@@ -10,8 +10,8 @@ namespace Ghpmv.Core.Import;
 /// Imports a <see cref="ProjectSnapshot"/> into a target organization (M3):
 /// creates the project, applies metadata (README, description, visibility, closed state),
 /// creates all custom fields (TEXT/NUMBER/DATE/SINGLE_SELECT/ITERATION), recreates and
-/// links organization Issue Fields (including MULTI_SELECT), and overwrites the built-in
-/// Status field options with the snapshot's options.
+/// links organization Issue Fields (including MULTI_SELECT), overwrites the built-in
+/// Status field options, and recreates API-writable View settings.
 /// Completed iterations are recreated as past-dated iterations; the API accepts past
 /// start dates and reclassifies them into <c>completedIterations</c> on read (verified by PoC).
 /// </summary>
@@ -50,6 +50,12 @@ public sealed class ProjectImporter
     /// <summary>Source login → target login mapping for user collaborators. Unmapped logins are resolved as-is.</summary>
     public IReadOnlyDictionary<string, string> UserMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>Source organization login → target organization login mapping for View filters.</summary>
+    public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
+    /// <summary>Whether Playwright will apply View settings that the GraphQL API cannot write.</summary>
+    public bool BrowserViewEnrichmentPlanned { get; init; }
+
     /// <summary>Warnings accumulated by the last import (unresolvable collaborators, unlinkable repositories).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
@@ -87,12 +93,19 @@ public sealed class ProjectImporter
             }
 
             existing = await ReconcilePendingProjectAsync(pendingProject, matches, cancellationToken).ConfigureAwait(false);
-            _operationLog.PendingProject = null;
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
             ValidatePendingFieldOperations(snapshot, existing.Id);
+            ValidatePendingViewOperations(snapshot, existing.Id);
             await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
-            return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+            var resumedResult = await ApplySnapshotAsync(
+                snapshot,
+                ownerLogin,
+                existing,
+                ProjectImportOutcome.Created,
+                cancellationToken).ConfigureAwait(false);
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+            return resumedResult;
         }
 
         existing = matches.FirstOrDefault();
@@ -114,6 +127,7 @@ public sealed class ProjectImporter
 
                 case ConflictAction.Update:
                     ValidatePendingFieldOperations(snapshot, existing.Id);
+                    ValidatePendingViewOperations(snapshot, existing.Id);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
                     await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -123,6 +137,7 @@ public sealed class ProjectImporter
 
         ValidatePendingItemProject(projectId: null);
         ValidatePendingFieldOperations(snapshot, projectId: null);
+        ValidatePendingViewOperations(snapshot, projectId: null);
         var ownerId = await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke($"Creating project '{title}' in '{ownerLogin}'...");
@@ -160,13 +175,14 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
         if (_operationLog is not null)
         {
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>
@@ -195,10 +211,46 @@ public sealed class ProjectImporter
 
         ValidatePendingItemProject(project.Id);
         ValidatePendingFieldOperations(snapshot, project.Id);
+        ValidatePendingViewOperations(snapshot, project.Id);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Imports only Views into an existing project. Used by fixture setup so View creation
+    /// still goes through GraphQL while workflows and unsupported View settings use Playwright.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, int>> ImportViewsIntoAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        int projectNumber,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        InitializeSnapshotFieldNames(snapshot);
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+
+        var project = await FindProjectByNumberAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
+                $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
+        ValidatePendingViewOperations(snapshot, project.Id);
+        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+
+        _warnings.Clear();
+        var maps = new FieldMaps();
+        await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
+        var viewImporter = CreateViewImporter();
+        var viewNumbers = await viewImporter.ImportAsync(
+            snapshot.Views,
+            project.Id,
+            maps.FieldIds,
+            ProjectImportOutcome.Updated,
+            cancellationToken).ConfigureAwait(false);
+        _warnings.AddRange(viewImporter.Warnings);
+        return viewNumbers;
     }
 
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
@@ -281,6 +333,29 @@ public sealed class ProjectImporter
             {
                 throw new InvalidOperationException(
                     $"Pending Issue Field link operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
+            }
+        }
+    }
+
+    private void ValidatePendingViewOperations(ProjectSnapshot snapshot, string? projectId)
+    {
+        if (_operationLog is null || _operationLog.PendingViews.Count == 0)
+        {
+            return;
+        }
+
+        var viewsByNumber = snapshot.Views.ToDictionary(view => view.Number);
+        foreach (var (sourceNumber, pending) in _operationLog.PendingViews)
+        {
+            if (projectId is null
+                || !string.Equals(pending.ProjectId, projectId, StringComparison.Ordinal)
+                || pending.SourceNumber != sourceNumber
+                || !viewsByNumber.TryGetValue(sourceNumber, out var view)
+                || !string.Equals(pending.Name, view.Name, StringComparison.Ordinal)
+                || !string.Equals(pending.Layout, view.Layout, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Pending view operation '{pending.OperationId}' does not match the selected project and snapshot. Resume the original import or reconcile it manually.");
             }
         }
     }
@@ -456,13 +531,44 @@ public sealed class ProjectImporter
             maps,
             targetIssueFields,
             cancellationToken).ConfigureAwait(false);
+        IReadOnlyDictionary<int, int> viewNumbers = ReadOnlyDictionary<int, int>.Empty;
+        var viewWarningCount = 0;
+        if (snapshot.Views.Count > 0)
+        {
+            var viewImporter = CreateViewImporter();
+            viewNumbers = await viewImporter.ImportAsync(
+                snapshot.Views,
+                project.Id,
+                maps.FieldIds,
+                outcome,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var warning in viewImporter.Warnings)
+            {
+                _warnings.Add(warning);
+            }
+
+            viewWarningCount = viewImporter.Warnings.Count;
+        }
+
         await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
         await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Import finished: project #{project.Number}, {maps.FieldIds.Count} fields mapped."));
-        return maps.ToResult(project, outcome);
+        return maps.ToResult(project, outcome, viewNumbers, viewWarningCount);
     }
+
+    private ProjectViewImporter CreateViewImporter() => new(
+        _client,
+        _operationLog ?? throw new InvalidOperationException("The project operation log was not initialized."),
+        SaveOperationLogAsync)
+    {
+        RepositoryMapping = RepositoryMapping,
+        UserMapping = UserMapping,
+        OrganizationMapping = OrganizationMapping,
+        BrowserEnrichmentPlanned = BrowserViewEnrichmentPlanned,
+        OnProgress = OnProgress,
+    };
 
     private async Task ApplyIssueFieldsAsync(
         List<FieldSnapshot> fields,
@@ -1631,7 +1737,11 @@ public sealed class ProjectImporter
             }
         }
 
-        public ImportResult ToResult(ProjectRef project, ProjectImportOutcome outcome) => new()
+        public ImportResult ToResult(
+            ProjectRef project,
+            ProjectImportOutcome outcome,
+            IReadOnlyDictionary<int, int> viewNumbers,
+            int viewWarningCount) => new()
         {
             ProjectId = project.Id,
             ProjectNumber = project.Number,
@@ -1642,6 +1752,8 @@ public sealed class ProjectImporter
             IterationIds = IterationIds,
             IssueFieldIds = IssueFieldIds,
             IssueFieldOptionIds = IssueFieldOptionIds,
+            ViewNumbers = viewNumbers,
+            ViewWarningCount = viewWarningCount,
         };
     }
 
