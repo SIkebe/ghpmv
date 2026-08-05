@@ -142,13 +142,15 @@ public class ProjectExporterTests
         Assert.Equal("BOARD_LAYOUT", board.Layout);
         Assert.Equal("Fixture Select", Assert.Single(board.VerticalGroupByFields));
         Assert.Equal("Status", Assert.Single(board.GroupByFields)); // board swimlanes
+        Assert.Empty(board.VisibleFields);
 
-        Assert.Equal("ROADMAP_LAYOUT", Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap").Layout);
+        var roadmap = Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap");
+        Assert.Equal("ROADMAP_LAYOUT", roadmap.Layout);
+        Assert.Empty(roadmap.VisibleFields);
 
         foreach (var view in snapshot.Views)
         {
             Assert.True(view.Number > 0);
-            Assert.NotEmpty(view.VisibleFields);
             Assert.Null(view.Ui); // browser-only (M6)
         }
     }
