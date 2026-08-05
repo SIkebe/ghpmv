@@ -1354,6 +1354,53 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Fallback_repository_claim_is_revalidated_before_retry_writes()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-fallback-retry-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            Directory.CreateDirectory(operationDirectory);
+            await File.WriteAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                ["https://api.github.com", "example/fixture", "fallback-pending", "1"],
+                TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var restHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
+                JsonResponse("""[{"name":"README.md"}]"""),
+                JsonResponse("[]"));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(
+                graphQl,
+                rest,
+                allowExistingEmptyRepository: true,
+                operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' is not empty.", exception.Message);
+            Assert.Equal([HttpMethod.Get, HttpMethod.Get, HttpMethod.Get], restHandler.RequestMethods);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            var state = await File.ReadAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                TestContext.Current.CancellationToken);
+            Assert.Equal("fallback-pending", state[2]);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Repository_created_by_operation_is_reused_on_retry()
     {
         var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-repository-resume-").FullName;
