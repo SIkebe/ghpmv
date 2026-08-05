@@ -38,9 +38,9 @@ public class FixtureProjectBuilderTests
 
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => builder.CreateAsync(
-                    "example",
+                    "Example",
                     "Fixture",
-                    "fixture",
+                    "Fixture",
                     TestContext.Current.CancellationToken));
 
             Assert.Contains("Another fixture operation", exception.Message, StringComparison.Ordinal);
@@ -83,12 +83,12 @@ public class FixtureProjectBuilderTests
 
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => builder.CreateAsync(
-                    "example",
+                    "Example",
                     "Different Fixture",
-                    "fixture",
+                    "Fixture",
                     TestContext.Current.CancellationToken));
 
-            Assert.Contains("repository 'example/fixture'", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("repository 'example/fixture'", exception.Message, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(graphQlHandler.RequestBodies);
             Assert.Empty(restHandler.RequestMethods);
         }
@@ -1436,7 +1436,8 @@ public class FixtureProjectBuilderTests
         string apiHost = "https://api.github.com")
     {
         var operationKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{apiHost.ToLowerInvariant()}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}")))[..16]
             .ToLowerInvariant();
         return Path.Combine(logRoot, operationKey);
     }
@@ -1447,7 +1448,8 @@ public class FixtureProjectBuilderTests
         string apiHost = "https://api.github.com")
     {
         var repositoryKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{repositoryFullName}")))[..16]
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{apiHost.ToLowerInvariant()}\n{repositoryFullName.ToLowerInvariant()}")))[..16]
             .ToLowerInvariant();
         return Path.Combine(logRoot, "repository-locks", repositoryKey + ".lock");
     }

@@ -47,7 +47,8 @@ public sealed class FixtureProjectBuilder
 
         var apiHost = GetApiHost();
         var operationKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
         // Keep this order consistent so overlapping operation and repository scopes cannot deadlock.
@@ -885,7 +886,8 @@ public sealed class FixtureProjectBuilder
         var repositoryLockDirectory = Path.Combine(operationLogDirectory, "repository-locks");
         Directory.CreateDirectory(repositoryLockDirectory);
         var repositoryKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{repositoryFullName}")))[..16]
+            SHA256.HashData(Encoding.UTF8.GetBytes(
+                $"{apiHost}\n{repositoryFullName.ToLowerInvariant()}")))[..16]
             .ToLowerInvariant();
         try
         {
