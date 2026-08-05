@@ -4,7 +4,7 @@ namespace Ghpmv.Browser.Tests;
 
 /// <summary>
 /// Serialization round-trip for the UI-only view settings added in M6
-/// (<see cref="ViewUiSnapshot"/> incl. GroupBy/SortBy and roadmap settings).
+/// (<see cref="ViewUiSnapshot"/> incl. slicing, field sums, and roadmap settings).
 /// No Playwright required.
 /// </summary>
 public class ViewUiSnapshotSerializationTests
@@ -32,10 +32,7 @@ public class ViewUiSnapshotSerializationTests
                     VisibleFields = ["Title"],
                     Ui = new ViewUiSnapshot
                     {
-                        GroupBy = "Status",
-                        SortBy = "Title",
                         SliceBy = "Assignees",
-                        Swimlanes = "Status",
                         FieldSum = ["Fixture Number"],
                         Roadmap = new RoadmapSettingsSnapshot
                         {
@@ -73,10 +70,7 @@ public class ViewUiSnapshotSerializationTests
 
             var roadmap = loaded.Views[0];
             Assert.NotNull(roadmap.Ui);
-            Assert.Equal("Status", roadmap.Ui!.GroupBy);
-            Assert.Equal("Title", roadmap.Ui.SortBy);
-            Assert.Equal("Assignees", roadmap.Ui.SliceBy);
-            Assert.Equal("Status", roadmap.Ui.Swimlanes);
+            Assert.Equal("Assignees", roadmap.Ui!.SliceBy);
             Assert.Equal(["Fixture Number"], roadmap.Ui.FieldSum);
             Assert.Equal(scrapedAt, roadmap.Ui.ScrapedAt);
             Assert.NotNull(roadmap.Ui.Roadmap);

@@ -100,7 +100,7 @@ public class ViewUiLogicTests
     }
 
     [Fact]
-    public void CollectPreflightWarnings_reports_missing_swimlanes_and_field_sum_fields()
+    public void CollectPreflightWarnings_reports_missing_field_sum_fields()
     {
         var snapshot = Snapshot(
             fields: ["Status"],
@@ -108,17 +108,15 @@ public class ViewUiLogicTests
             {
                 Ui = new ViewUiSnapshot
                 {
-                    Swimlanes = "Missing swimlane",
                     FieldSum = ["Count", "Missing number"],
                 },
             });
 
         var warnings = ViewUiImporter.CollectPreflightWarnings(snapshot);
 
-        Assert.Contains(warnings, w => w.Contains("swimlanes field 'Missing swimlane'", StringComparison.Ordinal));
         // "Count" is a built-in Field sum entry, not a field.
         Assert.Contains(warnings, w => w.Contains("field-sum field 'Missing number'", StringComparison.Ordinal));
-        Assert.Equal(2, warnings.Count);
+        Assert.Single(warnings);
     }
 
     [Fact]
@@ -179,8 +177,6 @@ public class ViewUiLogicTests
 
     private static ViewUiSnapshot Ui(string sliceBy) => new()
     {
-        GroupBy = null,
-        SortBy = null,
         SliceBy = sliceBy,
         Roadmap = new RoadmapSettingsSnapshot
         {

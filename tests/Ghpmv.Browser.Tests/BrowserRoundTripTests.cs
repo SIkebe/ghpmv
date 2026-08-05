@@ -181,13 +181,11 @@ public class BrowserRoundTripTests
         var sourceTable = Assert.Single(source.Views, v => v.Name == "View 1");
         Assert.Equal("status:Todo", sourceTable.Filter);
         Assert.Equal("Fixture Number", Assert.Single(sourceTable.SortByFields).Field);
-        Assert.NotNull(sourceTable.Ui!.SortBy);
-        Assert.Equal("Fixture Select", sourceTable.Ui.SliceBy);
+        Assert.Equal("Fixture Select", sourceTable.Ui!.SliceBy);
 
         var sourceBoard = Assert.Single(source.Views, v => v.Name == "Fixture Board");
         Assert.Equal("Fixture Select", Assert.Single(sourceBoard.VerticalGroupByFields));
-        Assert.Equal("Status", sourceBoard.Ui!.Swimlanes);
-        Assert.Equal(["Fixture Number"], sourceBoard.Ui.FieldSum);
+        Assert.Equal(["Fixture Number"], sourceBoard.Ui!.FieldSum);
 
         var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
         Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
@@ -249,10 +247,7 @@ public class BrowserRoundTripTests
 
                 Assert.NotNull(expected.Ui);
                 Assert.NotNull(actual.Ui);
-                Assert.Equal(expected.Ui!.GroupBy, actual.Ui!.GroupBy);
-                Assert.Equal(expected.Ui.SortBy, actual.Ui.SortBy);
-                Assert.Equal(expected.Ui.SliceBy, actual.Ui.SliceBy);
-                Assert.Equal(expected.Ui.Swimlanes, actual.Ui.Swimlanes);
+                Assert.Equal(expected.Ui!.SliceBy, actual.Ui!.SliceBy);
                 Assert.Equal(expected.Ui.FieldSum ?? [], actual.Ui.FieldSum ?? []);
                 Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
                 if (expected.Ui.Roadmap is { } roadmap)

@@ -74,11 +74,6 @@ public sealed class ViewUiImporter
                 WarnIfMissing(warnings, fieldNames, view.Name, "slice-by", sliceBy);
             }
 
-            if (view.Ui?.Swimlanes is { } swimlanes)
-            {
-                WarnIfMissing(warnings, fieldNames, view.Name, "swimlanes", swimlanes);
-            }
-
             // "Count" is a built-in Field sum entry, not a field.
             foreach (var entry in view.Ui?.FieldSum ?? [])
             {
@@ -233,14 +228,6 @@ public sealed class ViewUiImporter
                 "none",
                 view.Name,
                 cancellationToken).ConfigureAwait(false);
-        }
-
-        // The scraped Swimlanes value usually duplicates groupByFields (already applied
-        // above); only apply it when it deviates to avoid re-clicking the active option.
-        if (view.Ui?.Swimlanes is { } swimlanes
-            && (view.GroupByFields.Count == 0 || !string.Equals(view.GroupByFields[0], swimlanes, StringComparison.Ordinal)))
-        {
-            await TrySetSingleAsync(page, "Swimlanes", swimlanes, view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         // "Field sum" is a checkbox overlay (Count + number fields). A fresh board

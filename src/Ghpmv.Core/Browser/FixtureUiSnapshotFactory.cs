@@ -69,7 +69,6 @@ public static class FixtureUiSnapshotFactory
             VisibleFields = ["Title", "Assignees", "Status", "Fixture Text", "Fixture Date", "Fixture Select", "Fixture Sprint"],
             Ui = new ViewUiSnapshot
             {
-                SortBy = "Fixture Number",
                 SliceBy = "Fixture Select",
             },
         },
@@ -85,7 +84,6 @@ public static class FixtureUiSnapshotFactory
             VisibleFields = [],
             Ui = new ViewUiSnapshot
             {
-                Swimlanes = "Status",
                 FieldSum = ["Fixture Number"],
             },
         },

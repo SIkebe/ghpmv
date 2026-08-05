@@ -571,10 +571,7 @@ public sealed class ProjectVerifier
                 && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
 
     private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
-        => string.Equals(source.GroupBy, target.GroupBy, StringComparison.Ordinal)
-            && string.Equals(source.SortBy, target.SortBy, StringComparison.Ordinal)
-            && string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
-            && string.Equals(source.Swimlanes, target.Swimlanes, StringComparison.Ordinal)
+        => string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
             && UiListEquals(source.FieldSum, target.FieldSum)
             && RoadmapEquals(source.Roadmap, target.Roadmap);
 
@@ -653,10 +650,7 @@ public sealed class ProjectVerifier
 
     private static void CompareViewUi(string name, ViewUiSnapshot source, ViewUiSnapshot target, List<VerifyDifference> differences)
     {
-        CompareUiValue(differences, name, "group by", source.GroupBy, target.GroupBy);
-        CompareUiValue(differences, name, "sort by", source.SortBy, target.SortBy);
         CompareUiValue(differences, name, "slice by", source.SliceBy, target.SliceBy);
-        CompareUiValue(differences, name, "swimlanes", source.Swimlanes, target.Swimlanes);
         if (!UiListEquals(source.FieldSum, target.FieldSum))
         {
             AddError(differences, ViewCategory,

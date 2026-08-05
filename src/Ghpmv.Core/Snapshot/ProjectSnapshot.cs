@@ -180,16 +180,7 @@ public sealed record SortByFieldSnapshot
 /// <summary>UI-only view settings (populated in M6 via browser automation).</summary>
 public sealed record ViewUiSnapshot
 {
-    /// <summary>Current "Group by" value read from the view configuration menu (null when none).</summary>
-    public string? GroupBy { get; init; }
-
-    /// <summary>Current "Sort by" value read from the view configuration menu (null when none).</summary>
-    public string? SortBy { get; init; }
-
     public string? SliceBy { get; init; }
-
-    /// <summary>Board "Swimlanes" field (null when none; boards use Swimlanes, not Group by).</summary>
-    public string? Swimlanes { get; init; }
 
     /// <summary>Board "Field sum" entries (e.g. "Count", number field names).</summary>
     public IReadOnlyList<string>? FieldSum { get; init; }
