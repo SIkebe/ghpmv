@@ -1011,7 +1011,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
     using var fixtureUiClient = authenticatedFixtureUiClient;
 
     int? createdFixtureProjectNumber = null;
-    var fixtureAlreadyExisted = false;
+    FixtureProjectSetupResult? fixtureResult = null;
     if (parseResult.GetValue(fixtureOption))
     {
         var token = parseResult.GetValue(tokenOption)
@@ -1042,21 +1042,20 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         };
         try
         {
-            var result = await builder.CreateAsync(
+            fixtureResult = await builder.CreateAsync(
                 parseResult.GetValue(fixtureOrgOption)!,
                 parseResult.GetValue(fixtureTitleOption) ?? "gpm-fixture",
                 parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo",
                 cancellationToken);
-            Console.WriteLine(result.Url);
-            var fixtureDisposition = result.Created
+            Console.WriteLine(fixtureResult.Url);
+            var fixtureDisposition = fixtureResult.Created
                 ? "created"
-                : result.OwnedByOperation
+                : fixtureResult.OwnedByOperation
                     ? "resumed"
                     : "already existed";
             Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"Fixture project {fixtureDisposition}: #{result.ProjectNumber}"));
-            createdFixtureProjectNumber = result.ProjectNumber;
-            fixtureAlreadyExisted = !result.Created && !result.OwnedByOperation;
+                $"Fixture project {fixtureDisposition}: #{fixtureResult.ProjectNumber}"));
+            createdFixtureProjectNumber = fixtureResult.ProjectNumber;
         }
         catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or HttpRequestException or System.Text.Json.JsonException)
         {
@@ -1067,12 +1066,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
     if (!parseResult.GetValue(fixtureUiOption))
     {
-        return 0;
-    }
-
-    if (fixtureAlreadyExisted && parseResult.GetValue(fixtureProjectOption) is null)
-    {
-        Console.Error.WriteLine("Fixture project already exists; skipping --fixture-ui to avoid duplicating workflows. To force UI setup on an existing project, run setup --fixture-ui with --fixture-project <number> explicitly.");
         return 0;
     }
 
@@ -1101,6 +1094,16 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             deployment,
             org,
             projectNumber.Value.ToString(CultureInfo.InvariantCulture));
+        var uiCompletionPath = Path.Combine(fixtureViewOperationDirectory, "fixture-ui-complete");
+        if (fixtureResult?.ShouldSkipUiSetup(
+                projectExplicitlySelected: parseResult.GetValue(fixtureProjectOption) is not null,
+                uiSetupCompleted: File.Exists(uiCompletionPath)) is true)
+        {
+            Console.Error.WriteLine("Fixture UI setup already completed; skipping --fixture-ui to avoid duplicating workflows. To force UI setup, run setup --fixture-ui with --fixture-project <number> explicitly.");
+            return 0;
+        }
+
+        File.Delete(uiCompletionPath);
         var apiViewImporter = new ProjectImporter(fixtureUiClient)
         {
             OperationLogDirectory = fixtureViewOperationDirectory,
@@ -1134,11 +1137,19 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"Fixture UI applied: views={viewNumbers.Count} workflows={workflowImporter.ImportedCount} viewWarnings={apiViewImporter.Warnings.Count + viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
-        return apiViewImporter.Warnings.Count == 0
+        var uiSetupSucceeded = apiViewImporter.Warnings.Count == 0
             && viewImporter.Warnings.Count == 0
-            && workflowImporter.Warnings.Count == 0
-                ? 0
-                : 1;
+            && workflowImporter.Warnings.Count == 0;
+        if (uiSetupSucceeded)
+        {
+            Directory.CreateDirectory(fixtureViewOperationDirectory);
+            await File.WriteAllTextAsync(
+                uiCompletionPath,
+                projectNumber.Value.ToString(CultureInfo.InvariantCulture),
+                CancellationToken.None);
+        }
+
+        return uiSetupSucceeded ? 0 : 1;
     }
     catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
     {

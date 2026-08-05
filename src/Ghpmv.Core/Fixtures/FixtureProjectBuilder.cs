@@ -50,6 +50,9 @@ public sealed class FixtureProjectBuilder
             SHA256.HashData(Encoding.UTF8.GetBytes($"{apiHost}\n{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         var operationDirectory = Path.Combine(OperationLogDirectory, operationKey);
+        using var operationLock = RequireNewResources
+            ? AcquireStrictOperationLock(operationDirectory)
+            : null;
         var repositoryFullName = $"{organization}/{repositoryName}";
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
@@ -852,6 +855,25 @@ public sealed class FixtureProjectBuilder
     private static void DeleteRepositoryState(string operationDirectory)
         => File.Delete(Path.Combine(operationDirectory, RepositoryClaimFileName));
 
+    private static FileStream AcquireStrictOperationLock(string operationDirectory)
+    {
+        Directory.CreateDirectory(operationDirectory);
+        try
+        {
+            return new FileStream(
+                Path.Combine(operationDirectory, "strict-fixture-operation.lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"Another strict fixture operation is already using '{operationDirectory}'.",
+                exception);
+        }
+    }
+
     private static string GetRepositoryOperationMarker(string operationId)
         => $"ghpmv fixture operation {operationId}";
 
@@ -1513,4 +1535,10 @@ public sealed record FixtureProjectSetupResult(
     int ProjectNumber,
     string Url,
     bool Created,
-    bool OwnedByOperation);
+    bool OwnedByOperation)
+{
+    public bool ShouldSkipUiSetup(bool projectExplicitlySelected, bool uiSetupCompleted)
+        => !projectExplicitlySelected
+            && !Created
+            && (!OwnedByOperation || uiSetupCompleted);
+}

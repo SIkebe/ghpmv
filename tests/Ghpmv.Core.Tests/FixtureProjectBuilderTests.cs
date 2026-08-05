@@ -8,6 +8,70 @@ namespace Ghpmv.Core.Tests;
 public class FixtureProjectBuilderTests
 {
     [Fact]
+    public async Task Concurrent_strict_fixture_operation_is_rejected_before_network_writes()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-lock-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            Directory.CreateDirectory(operationDirectory);
+            using var operationLock = new FileStream(
+                Path.Combine(operationDirectory, "strict-fixture-operation.lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            using var graphQlHandler = new RecordingHandler();
+            using var restHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient(
+                "token",
+                baseUrl: null,
+                graphQlHandler,
+                (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => builder.CreateAsync(
+                    "example",
+                    "Fixture",
+                    "fixture",
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("Another strict fixture operation", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(graphQlHandler.RequestBodies);
+            Assert.Empty(restHandler.RequestMethods);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Completed_owned_fixture_skips_implicit_ui_setup()
+    {
+        var result = new FixtureProjectSetupResult(1, "https://github.com/orgs/example/projects/1", Created: false, OwnedByOperation: true);
+
+        Assert.True(result.ShouldSkipUiSetup(projectExplicitlySelected: false, uiSetupCompleted: true));
+    }
+
+    [Fact]
+    public void Incomplete_owned_fixture_allows_ui_setup_retry()
+    {
+        var result = new FixtureProjectSetupResult(1, "https://github.com/orgs/example/projects/1", Created: false, OwnedByOperation: true);
+
+        Assert.False(result.ShouldSkipUiSetup(projectExplicitlySelected: false, uiSetupCompleted: false));
+    }
+
+    [Fact]
+    public void Explicit_project_allows_completed_ui_setup_reapply()
+    {
+        var result = new FixtureProjectSetupResult(1, "https://github.com/orgs/example/projects/1", Created: false, OwnedByOperation: true);
+
+        Assert.False(result.ShouldSkipUiSetup(projectExplicitlySelected: true, uiSetupCompleted: true));
+    }
+
+    [Fact]
     public void Demo_fixture_exercises_every_snapshot_field_pattern()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(
