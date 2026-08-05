@@ -114,6 +114,11 @@ public sealed class ProjectImporter
         }
 
         await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
         return true;
     }
 
@@ -307,7 +312,14 @@ public sealed class ProjectImporter
             matches,
             cancellationToken,
             invokeBeforeWrite: true).ConfigureAwait(false);
-        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+        var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+        if (_operationLog is not null)
+        {
+            _operationLog.PendingProject = null;
+            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -460,7 +472,6 @@ public sealed class ProjectImporter
         if (_operationLog is not null)
         {
             _operationLog.CreatedProjectId = project.Id;
-            _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         }
         return project;
