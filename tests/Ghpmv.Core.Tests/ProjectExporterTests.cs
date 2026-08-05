@@ -406,6 +406,71 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Browser_assisted_export_uses_catalog_when_linked_field_database_id_is_null()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[{
+                "number":3,"name":"All","layout":"TABLE_LAYOUT","filter":null,
+                "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},
+                "sortByFields":{"nodes":[]},"fields":{"nodes":[]}
+              }]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"ISSUE","isArchived":false,
+                "content":{"number":7,"repository":{"nameWithOwner":"source/repo"}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemIssueFieldValue",
+                  "field":{"id":"PVTF_issue_teams","databaseId":null,"name":"Teams"},
+                  "issueFieldValue":{
+                    "__typename":"IssueFieldMultiSelectValue",
+                    "options":[{"name":"SDK"}]
+                  }
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"issueFields":{"nodes":[{
+              "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+              "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+              "options":[{"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}]
+            }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: static (_, _) => Task.CompletedTask);
+        var catalog = new ProjectFieldCatalog
+        {
+            Entries =
+            [
+                new(new FieldSnapshot { Name = "Title", DataType = "TITLE" }, false),
+                new(new FieldSnapshot { Name = "Teams", DataType = "MULTI_SELECT", Options = [] }, true),
+            ],
+        };
+
+        var snapshot = await new ProjectExporter(client)
+        {
+            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
+        }.ExportAsync("source", 1, TestContext.Current.CancellationToken);
+
+        var teams = snapshot.Fields.Single(field => field.Name == "Teams");
+        Assert.NotNull(teams.IssueField);
+        var itemValue = Assert.Single(Assert.Single(snapshot.Items).FieldValues);
+        Assert.True(itemValue.IsIssueField);
+        Assert.Equal(["SDK"], itemValue.MultiSelectOptionNames);
+        Assert.Equal(3, handler.RequestBodies.Count);
+    }
+
+    [Fact]
     public async Task Export_rejects_item_issue_fields_not_linked_by_the_complete_catalog()
     {
         using var handler = new StubHandler(

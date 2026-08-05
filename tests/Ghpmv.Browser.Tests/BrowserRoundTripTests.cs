@@ -10,8 +10,8 @@ namespace Ghpmv.Browser.Tests;
 
 /// <summary>
 /// M6 E2E: exports the configured fixture project including browser-scraped UI
-/// settings, imports it into the target org (project + fields via GraphQL, views via
-/// browser automation), re-exports the target and asserts the views round-trip
+/// settings, imports it into the target org (project, fields, and supported View state
+/// via GraphQL; unsupported View state via browser automation), re-exports the target and asserts the views round-trip
 /// (name / layout / UI settings). Requires GHPMV_BROWSER_STATE (a storage-state file
 /// saved by <c>ghpmv login</c>) and GHPMV_TEST_TOKEN; skipped otherwise.
 /// The created project is deleted in a finally block.

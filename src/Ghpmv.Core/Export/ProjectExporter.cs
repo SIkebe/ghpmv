@@ -83,6 +83,7 @@ public sealed class ProjectExporter
             projectNumber,
             issueFieldNames,
             issueFieldDatabaseIds,
+            requireIssueFieldDatabaseIds: completeFieldCatalog is null,
             cancellationToken).ConfigureAwait(false);
         var referencedItemFields = items
             .SelectMany(item => item.FieldValues)
@@ -328,6 +329,7 @@ public sealed class ProjectExporter
         int projectNumber,
         HashSet<string> issueFieldNames,
         HashSet<int> issueFieldDatabaseIds,
+        bool requireIssueFieldDatabaseIds,
         CancellationToken cancellationToken)
     {
         var items = new List<ItemSnapshot>();
@@ -341,7 +343,8 @@ public sealed class ProjectExporter
                 node,
                 position: items.Count,
                 issueFieldNames,
-                issueFieldDatabaseIds));
+                issueFieldDatabaseIds,
+                requireIssueFieldDatabaseIds));
         }
 
         return items;
@@ -639,7 +642,8 @@ public sealed class ProjectExporter
         JsonElement node,
         int position,
         HashSet<string> issueFieldNames,
-        HashSet<int> issueFieldDatabaseIds)
+        HashSet<int> issueFieldDatabaseIds,
+        bool requireIssueFieldDatabaseIds)
     {
         var type = node.GetProperty("type").GetString() ?? string.Empty;
         var content = node.GetProperty("content");
@@ -681,7 +685,8 @@ public sealed class ProjectExporter
             FieldValues = ParseFieldValues(
                 node.GetProperty("fieldValues"),
                 issueFieldNames,
-                issueFieldDatabaseIds),
+                issueFieldDatabaseIds,
+                requireIssueFieldDatabaseIds),
         };
     }
 
@@ -707,7 +712,8 @@ public sealed class ProjectExporter
     private static List<FieldValueSnapshot> ParseFieldValues(
         JsonElement connection,
         HashSet<string> issueFieldNames,
-        HashSet<int> issueFieldDatabaseIds)
+        HashSet<int> issueFieldDatabaseIds,
+        bool requireIssueFieldDatabaseIds)
     {
         var values = new List<FieldValueSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
@@ -728,14 +734,17 @@ public sealed class ProjectExporter
             {
                 issueFieldNames.Add(fieldName);
                 var field = node.GetProperty("field");
-                if (!field.TryGetProperty("databaseId", out var databaseId)
-                    || databaseId.ValueKind != JsonValueKind.Number)
+                if (field.TryGetProperty("databaseId", out var databaseId)
+                    && databaseId.ValueKind == JsonValueKind.Number)
+                {
+                    issueFieldDatabaseIds.Add(databaseId.GetInt32());
+                }
+                else if (requireIssueFieldDatabaseIds)
                 {
                     throw new GitHubGraphQLException(
                         $"Linked Issue Field '{fieldName}' did not expose a database ID.");
                 }
 
-                issueFieldDatabaseIds.Add(databaseId.GetInt32());
                 if (node.GetProperty("issueFieldValue") is not { ValueKind: JsonValueKind.Object } issueFieldValue)
                 {
                     continue;

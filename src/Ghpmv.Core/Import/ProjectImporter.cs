@@ -1847,9 +1847,13 @@ public sealed class ProjectImporter
             ... on ProjectV2 {
               field(name: $name) {
                 __typename
+                ... on ProjectV2FieldCommon { id name dataType }
                 ... on ProjectV2Field { id name }
                 ... on ProjectV2SingleSelectField { id name }
                 ... on ProjectV2IterationField { id name }
+                ... on ProjectV2MultiSelectField {
+                  multiSelectOptions { id name }
+                }
               }
             }
           }
