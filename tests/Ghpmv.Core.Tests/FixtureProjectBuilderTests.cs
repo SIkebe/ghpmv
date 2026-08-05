@@ -837,7 +837,7 @@ public class FixtureProjectBuilderTests
                 """));
         using var restHandler = new RecordingHandler(
             JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
-            NotFoundResponse(),
+            ErrorResponse(HttpStatusCode.Conflict),
             JsonResponse("[]"),
             NotFoundResponse(),
             ErrorResponse(HttpStatusCode.UnprocessableEntity));

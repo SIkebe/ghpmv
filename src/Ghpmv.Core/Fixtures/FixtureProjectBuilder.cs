@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -885,7 +886,16 @@ public sealed class FixtureProjectBuilder
 
     private async Task<bool> IsRepositoryEmptyAsync(string repositoryFullName, CancellationToken cancellationToken)
     {
-        var contents = await _rest.GetAsync($"repos/{repositoryFullName}/contents", cancellationToken).ConfigureAwait(false);
+        JsonElement? contents;
+        try
+        {
+            contents = await _rest.GetAsync($"repos/{repositoryFullName}/contents", cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException exception) when (exception.StatusCode == HttpStatusCode.Conflict)
+        {
+            contents = null;
+        }
+
         var issues = await _rest.GetAsync($"repos/{repositoryFullName}/issues?state=all&per_page=1", cancellationToken).ConfigureAwait(false);
         return contents is null
             && issues is { ValueKind: JsonValueKind.Array }
