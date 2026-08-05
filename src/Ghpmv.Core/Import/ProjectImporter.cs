@@ -79,6 +79,7 @@ public sealed class ProjectImporter
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        using var operationLock = AcquireStrictOperationLock();
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
         await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
 
@@ -142,12 +143,21 @@ public sealed class ProjectImporter
 
         var reservedProjectId = _operationLog?.CreatedProjectId
             ?? throw new InvalidOperationException("The reserved Project ID was not recorded.");
-        var confirmedMatches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
-        if (confirmedMatches.Any(project => !string.Equals(project.Id, reservedProjectId, StringComparison.Ordinal)))
+        var confirmedMatches = await ConfirmReservedProjectAsync(
+            ownerLogin,
+            title,
+            cancellationToken).ConfigureAwait(false);
+        var reservedProjectIsVisible = confirmedMatches.Any(
+            project => string.Equals(project.Id, reservedProjectId, StringComparison.Ordinal));
+        var unrelatedProjectIsVisible = confirmedMatches.Any(
+            project => !string.Equals(project.Id, reservedProjectId, StringComparison.Ordinal));
+        if (!reservedProjectIsVisible || unrelatedProjectIsVisible)
         {
-            await ReleaseReservedProjectAsync(CancellationToken.None).ConfigureAwait(false);
+            await ReleaseReservedProjectCoreAsync(reservedProjectId, CancellationToken.None).ConfigureAwait(false);
             throw new InvalidOperationException(
-                $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'. The Project created by this operation was removed.");
+                unrelatedProjectIsVisible
+                    ? $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'. The Project created by this operation was removed."
+                    : $"Project '{reservedProjectId}' created by this operation was not visible after reservation confirmation and was removed.");
         }
 
         return true;
@@ -155,7 +165,22 @@ public sealed class ProjectImporter
 
     internal async Task ReleaseReservedProjectAsync(CancellationToken cancellationToken = default)
     {
+        using var operationLock = AcquireStrictOperationLock();
+        await ReleaseReservedProjectCoreAsync(expectedProjectId: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task ReleaseReservedProjectCoreAsync(
+        string? expectedProjectId,
+        CancellationToken cancellationToken)
+    {
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        if (expectedProjectId is not null
+            && !string.Equals(_operationLog?.CreatedProjectId, expectedProjectId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The reserved Project ID changed from '{expectedProjectId}' to '{_operationLog?.CreatedProjectId ?? "<none>"}'; refusing to delete another operation's Project.");
+        }
+
         if (_operationLog?.PendingProjectDeletionId is not null)
         {
             await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
@@ -181,6 +206,49 @@ public sealed class ProjectImporter
         _operationLog.ImportCompleted = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<ProjectRef>> ConfirmReservedProjectAsync(
+        string ownerLogin,
+        string title,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ProjectRef> matches = [];
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
+            if (matches.Count > 0)
+            {
+                return matches;
+            }
+
+            if (attempt < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(Math.Pow(2, attempt)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        return matches;
+    }
+
+    private FileStream AcquireStrictOperationLock()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(OperationLogDirectory);
+        Directory.CreateDirectory(OperationLogDirectory);
+        try
+        {
+            return new FileStream(
+                Path.Combine(OperationLogDirectory, "strict-project-operation.lock"),
+                FileMode.OpenOrCreate,
+                FileAccess.ReadWrite,
+                FileShare.None);
+        }
+        catch (IOException exception)
+        {
+            throw new InvalidOperationException(
+                $"Another strict Project operation is already using '{OperationLogDirectory}'.",
+                exception);
+        }
     }
 
     private async Task DeleteProjectAndReconcileAsync(string projectId, CancellationToken cancellationToken)
