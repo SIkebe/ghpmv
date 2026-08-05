@@ -166,6 +166,67 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_warns_when_ordinary_multi_select_field_cannot_be_migrated()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler();
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Project = MinimalSnapshot("Roadmap").Project with
+                {
+                    ShortDescription = null,
+                    Readme = null,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                        ],
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            var result = await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain("Teams", result.FieldIds);
+            Assert.Contains(
+                importer.Warnings,
+                warning => warning.Contains(
+                    "Project multi-select field 'Teams' cannot be imported",
+                    StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_idempotently_ensures_existing_multi_select_issue_field_link_without_broken_reads()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;

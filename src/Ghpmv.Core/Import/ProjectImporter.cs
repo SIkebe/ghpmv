@@ -416,6 +416,12 @@ public sealed class ProjectImporter
 
             if (!CreatableDataTypes.Contains(field.DataType))
             {
+                if (string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+                {
+                    Warn(
+                        $"Project multi-select field '{field.Name}' cannot be imported because GitHub's Project field APIs do not support creating it or applying its values.");
+                }
+
                 continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
             }
 
