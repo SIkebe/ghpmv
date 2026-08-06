@@ -155,6 +155,29 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public void Demo_fixture_normalizes_repository_identity_for_case_insensitive_retries()
+    {
+        var mixedCase = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "Example/Fixture",
+            "octocat",
+            pullRequestNumber: 2);
+        var lowerCase = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+
+        Assert.Equal(
+            ImportLog.ComputeSnapshotFingerprint(lowerCase),
+            ImportLog.ComputeSnapshotFingerprint(mixedCase));
+        Assert.Equal(["example/fixture"], mixedCase.LinkedRepositories);
+        Assert.All(
+            mixedCase.Items.Where(item => item.Repository is not null),
+            item => Assert.Equal("example/fixture", item.Repository));
+    }
+
+    [Fact]
     public void Demo_fixture_puts_multi_select_values_on_a_real_issue()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(
