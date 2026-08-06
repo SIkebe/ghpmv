@@ -451,6 +451,8 @@ fixture title と repository name は PowerShell の single-quoted argument と�
 
 run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpoint (`/orgs/{org}/projects`) を使った title 衝突確認を行わない。この endpoint は Projects v2 の確認にならず、HTTP 4xx を「衝突なし」に変換してはならない。fixture command 自体が name conflict を返した場合だけ、resource が作成されていないことを確認し、新しい run ID の推奨値を提示する。任意の preflight command を追加した場合も、non-zero exit code や HTTP error を成功扱いせず、その command の成否を fixture 作成の成否と混同しない。
 
+`api-only`:
+
 ```powershell
 dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --fixture `
@@ -461,7 +463,21 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
   --token $env:SOURCE_TOKEN
 ```
 
-source が data residency の場合は `--api-base-url <source-api-url>` を追加する。`browser-e2e` の `--fixture-ui` にはさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
+`browser-e2e` では API fixture と UI fixture を同じ owned operation として実行する。`--fixture-project` を指定した別 command に分けない。
+
+```powershell
+dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+  --fixture `
+  --fixture-ui `
+  --fixture-org <source-org> `
+  --fixture-title '<escaped-unique-title>' `
+  --fixture-repo '<escaped-unique-repo>' `
+  --fixture-require-new `
+  --browser-profile source `
+  --token $env:SOURCE_TOKEN
+```
+
+source が data residency の場合は選択した source command に `--api-base-url <source-api-url>` を追加し、`browser-e2e` ではさらに `--browser-base-url <source-web-url>` を追加する。GitHub.com source ではどちらも付けない。
 
 `source empty-repository fallback` が `selected` の場合だけ、上記 source command に次も追加する。
 
@@ -471,17 +487,7 @@ source が data residency の場合は `--api-base-url <source-api-url>` を追�
 
 出力された source Project number を記録する。
 
-`browser-e2e` では続けて UI fixture を適用する。
-
-```powershell
-dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
-  --fixture-ui `
-  --fixture-org <source-org> `
-  --fixture-project <source-project-number> `
-  --fixture-repo <source-repo> `
-  --browser-profile source `
-  --token $env:SOURCE_TOKEN
-```
+`browser-e2e` の再試行も同じ combined command と同じ title / repository を使う。CLI は owned fixture の `fixture-ui-complete` marker を確認し、完了済みなら UI setup を自動で skipし、未完了なら再開する。marker-aware retry を迂回するため、通常の再試行で `--fixture-ui --fixture-project <source-project-number>` を実行しない。
 
 ### Fixture UI 再実行
 
