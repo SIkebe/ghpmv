@@ -54,6 +54,46 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Pending_deletion_invokes_prewrite_once_before_delete_and_later_import_mutations()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-pending-deletion-auth-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProjectDeletionId = "PVT_created",
+                ImportCompleted = false,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory) { CreateSucceeds = true };
+            using var client = CreateClient(handler);
+            var prewriteCount = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    prewriteCount++;
+                    handler.BeforeWriteInvoked = true;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var result = await importer.ImportAsync(Snapshot(), "target", cancellationToken);
+
+            Assert.True(result.Created);
+            Assert.Equal(1, prewriteCount);
+            Assert.True(handler.BeforeWriteObservedAtDeletion);
+            Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Strict_reservation_does_not_adopt_unrecorded_ambiguous_project_candidate()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -780,6 +820,10 @@ public class ProjectImporterResumeTests
 
         public List<string> DeletedProjectIds { get; } = [];
 
+        public bool BeforeWriteInvoked { get; set; }
+
+        public bool BeforeWriteObservedAtDeletion { get; private set; }
+
         public int ViewCreateMutationCount { get; private set; }
 
         public string? UpdatedViewId { get; private set; }
@@ -833,6 +877,11 @@ public class ProjectImporterResumeTests
                 return Json("""{"data":{"organization":{"id":"O_target"}}}""");
             }
 
+            if (query.Contains("... on ProjectV2 { id }", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"node":{"id":"PVT_created"}}}""");
+            }
+
             if (query.Contains("createProjectV2(input:", StringComparison.Ordinal))
             {
                 CreateMutationCount++;
@@ -849,6 +898,7 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("deleteProjectV2", StringComparison.Ordinal))
             {
+                BeforeWriteObservedAtDeletion = BeforeWriteInvoked;
                 DeletedProjectIds.Add(variables.GetProperty("projectId").GetString() ?? string.Empty);
                 return Json("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_created"}}}}""");
             }

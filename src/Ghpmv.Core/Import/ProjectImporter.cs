@@ -81,7 +81,7 @@ public sealed class ProjectImporter
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         using var operationLock = AcquireStrictOperationLock();
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePendingProjectDeletionAsync(invokeBeforeWrite: false, cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke($"Reserving project title '{title}' in {OwnerDescription} '{ownerLogin}'...");
         var matches = await FindProjectsByTitleAsync(ownerLogin, title, cancellationToken).ConfigureAwait(false);
@@ -183,7 +183,7 @@ public sealed class ProjectImporter
 
         if (_operationLog?.PendingProjectDeletionId is not null)
         {
-            await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+            await ReconcilePendingProjectDeletionAsync(invokeBeforeWrite: false, cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -313,11 +313,14 @@ public sealed class ProjectImporter
             && string.Equals(id.GetString(), projectId, StringComparison.Ordinal);
     }
 
-    private async Task ReconcilePendingProjectDeletionAsync(CancellationToken cancellationToken)
+    private async Task<bool> ReconcilePendingProjectDeletionAsync(
+        bool invokeBeforeWrite,
+        CancellationToken cancellationToken)
     {
+        var beforeWriteInvoked = false;
         if (_operationLog?.PendingProjectDeletionId is not { } projectId)
         {
-            return;
+            return false;
         }
 
         if (!string.Equals(_operationLog.CreatedProjectId, projectId, StringComparison.Ordinal))
@@ -328,6 +331,12 @@ public sealed class ProjectImporter
 
         if (await ProjectExistsAsync(projectId, cancellationToken).ConfigureAwait(false))
         {
+            if (invokeBeforeWrite)
+            {
+                await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                beforeWriteInvoked = true;
+            }
+
             await DeleteProjectAndReconcileAsync(projectId, cancellationToken).ConfigureAwait(false);
         }
 
@@ -335,6 +344,7 @@ public sealed class ProjectImporter
         _operationLog.ImportCompleted = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        return beforeWriteInvoked;
     }
 
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
@@ -345,7 +355,9 @@ public sealed class ProjectImporter
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+        var beforeWriteInvoked = await ReconcilePendingProjectDeletionAsync(
+            invokeBeforeWrite: true,
+            cancellationToken).ConfigureAwait(false);
 
         var title = snapshot.Project.Title;
         OnProgress?.Invoke($"Checking {OwnerDescription} '{ownerLogin}' for an existing project titled '{title}'...");
@@ -381,7 +393,11 @@ public sealed class ProjectImporter
             ValidatePendingItemProject(existing.Id);
             ValidatePendingFieldOperations(snapshot, existing.Id);
             ValidatePendingViewOperations(snapshot, existing.Id);
-            await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+            if (!beforeWriteInvoked)
+            {
+                await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             var resumedResult = await ApplySnapshotAsync(
                 snapshot,
                 ownerLogin,
@@ -415,7 +431,11 @@ public sealed class ProjectImporter
                     ValidatePendingViewOperations(snapshot, existing.Id);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Project '{title}' already exists (#{existing.Number}); applying snapshot to it (on-conflict=update)."));
-                    await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                    if (!beforeWriteInvoked)
+                    {
+                        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
                     await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
             }
@@ -429,7 +449,7 @@ public sealed class ProjectImporter
             title,
             matches,
             cancellationToken,
-            invokeBeforeWrite: true).ConfigureAwait(false);
+            invokeBeforeWrite: !beforeWriteInvoked).ConfigureAwait(false);
         var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
         if (_operationLog is not null)
         {
@@ -452,7 +472,9 @@ public sealed class ProjectImporter
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        await ReconcilePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+        var beforeWriteInvoked = await ReconcilePendingProjectDeletionAsync(
+            invokeBeforeWrite: true,
+            cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Looking up project #{projectNumber} in {OwnerDescription} '{ownerLogin}'..."));
@@ -478,7 +500,11 @@ public sealed class ProjectImporter
         ValidatePendingViewOperations(snapshot, project.Id);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
-        await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        if (!beforeWriteInvoked)
+        {
+            await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
         return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
     }
