@@ -30,6 +30,16 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 13. **Cancel / Skipped は即時 pause とする。** `ask_user` が cancel、skip、空回答を返した場合、必須値が不足していても同じ turn で再質問、言い換え、別カード表示をしてはならない。不足値と現在の Step を blocked state として記録し、command を追加実行せず、その turn を終了する。ユーザーから明示的な再開メッセージが届いた場合だけ、一度だけ質問を再表示する。
 14. **遷移説明だけで停止しない。** 質問への回答で現在の Step に必要な値と同意がすべて揃った場合は、「準備できました」「次へ進めます」だけを返して turn を終了してはならない。同じ turn で次の必要な terminal command を送信し、その完了監視まで開始する。追加の user decision、secret 入力、warning 承認、削除同意が必要な場合だけ質問で停止する。
 15. **内部 ID だけの選択肢を出さない。** `build-only`、`api-only` などの記録用 ID を choice に単独表示せず、各 choice に「何を実行するか」「実 resource を読み書きするか」を日本語で含める。ユーザーの依頼から推奨できる choice には `(Recommended)` を付ける。選択後は説明文ではなく対応する内部 ID を state に記録する。
+16. **Skill を実行する project session が terminal を所有する。** 親・兄弟 session で開いた terminal が画面に見えていても再利用しない。すでに検証用 nested session 内で Skill が起動された場合は、さらに nested session を作成しない。
+17. **in-flight command を再送しない。** command の sentinel が未到達なら実行中として扱い、同じ command、readiness probe、状態確認 command、後続 commandを terminal へ送らない。空出力や一時的な terminal transport error は再送理由にならない。
+
+## 実行 session と terminal ownership
+
+Skill を起動した現在の project session を `validation execution session` として記録し、この session 自身が全質問、terminal action、command 監視を行う。親 session が検証用 child session を作る場合は一つだけ作り、kickoff prompt には「この session で workflow を実行する」と書く。「新しい nested session を作って実行する」と child に再委任してはならない。
+
+Skill 自体の変更を検証する場合は、変更後の current branch HEAD から新しい child session を作る。変更前に作成した既存 child session は古い Skill を読み込んでいるため再利用しない。
+
+terminal canvas の instance ID だけでなく、利用可能なら owning project session / provider も記録する。terminal panel がユーザーに表示されていることは、現在の agent がその terminal を操作・観測できる証拠ではない。owner が `validation execution session` と一致しない terminal は `token execution terminal` に採用せず、Step 2 より前に現在の session が新しい terminal を一つだけ開く。
 
 ## 自動完了検出
 
@@ -46,7 +56,11 @@ $ghpmvExitCode = if ($ghpmvInvocationSucceeded -and $ghpmvNativeExitCode -eq 0) 
 Write-Output "GHPMV_COMMAND_DONE:<command-id>:$ghpmvExitCode"
 ```
 
-terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として監視を継続し、ユーザーへ完了報告を求めない。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
+送信直前に `in-flight command` として terminal instance ID、`<command-id>`、command の目的または hash、期待 sentinel を記録する。一つの terminal で同時に持てる in-flight command は一つだけとし、未解決の記録がある間は `send_terminal_input` を再度呼ばない。
+
+terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として同じ instance の出力監視だけを継続し、ユーザーへ完了報告を求めず、command を再送しない。sentinel を確認した場合だけ in-flight state を clear して次の command へ進む。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
+
+session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
 browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で sign in を行ってください」と通知するだけで、質問カードや「完了したら返答」を表示しない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
@@ -76,7 +90,11 @@ Write-Output "GHPMV_TERMINAL_READY"
 
 open 後の terminal process 起動は非同期である。最初の出力取得が空でも失敗扱いせず、同じ instance を再読する。`GHPMV_TERMINAL_READY` を実際に読めた場合だけ terminal を ready と記録して Step 2 へ進む。canvas を開く action が成功しただけでは ready とみなさない。
 
-`Terminal not found or not running` が返った場合は、stale instance を使い続けず、新しい一意な instance ID で command 付き open を再実行し、bounded retry する。空出力または一時的な runtime error だけを理由に project session を作り直さない。fresh instance でも繰り返し失敗した場合だけ停止し、terminal panel の focus / App 再起動を案内する。成功するまで build、test、browser setup、token、live resource の処理を一切実行しない。
+readiness 中で、まだ token も in-flight command もない terminal に `Terminal not found or not running` が返った場合だけ、stale instance を破棄し、新しい一意な instance ID で command 付き open を bounded retry する。空出力または一時的な runtime error だけを理由に project session を作り直さない。
+
+`provider not connected`、`cannot be reached` などの transport / ownership error は terminal process の終了と同一視しない。まず現在の project session と terminal owner が一致するか確認する。owner mismatch ならその terminal への read / send を止め、readiness gate 内で現在の session 所有の terminal を一つだけ開く。owner が一致するのに provider が一時切断されている場合は、既存 panel の focus や App connection の回復を案内して停止し、fresh terminal を連続作成しない。
+
+token 設定後または in-flight command 送信後に terminal が到達不能になった場合は、実行中 command を別 terminal で再送しない。既存 terminal の recovery が不可能と確定した場合だけ新しい terminal で readiness gate から再開し、必要な token の missing check と hidden re-entry を完了するまで後続 command を送らない。fresh instance でも readiness が繰り返し失敗した場合は停止し、terminal panel の focus / App 再起動を案内する。成功するまで build、test、browser setup、token、live resource の処理を一切実行しない。
 
 ready になった terminal instance ID を `token execution terminal` として記録し、`read-only`、`api-only`、`browser-e2e` の Step 2 以降の command はすべてその terminal へ送信する。別 process の shell tool へ切り替えない。
 
@@ -140,7 +158,11 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | fixture preparation | `existing` または `create` |
 | source / target token type | `classic` または `fine-grained` |
 | source / target fine-grained PAT URL status | `not-required`, `pending`, `shown-and-validated` |
+| validation execution session | Skill と terminal workflow を所有する現在の project session |
 | token execution terminal | token を設定し、以後の live command を実行する同一 PowerShell session |
+| terminal owner / provider | `validation execution session` と一致する canvas owner / provider |
+| in-flight command | terminal instance、command ID、目的または hash、期待 sentinel |
+| required token inventory | 選択経路で必要な env var、host、owner、type、role、scope / permission、作成 URL status |
 | source host type / web URL / API URL | `github.com`, `https://github.com`, `https://api.github.com/graphql` |
 | target host type / web URL / API URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
@@ -248,7 +270,21 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 ## Step 4: Token を準備する
 
-**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** ユーザーに source / target の token type を一つずつ選んでもらうが、現在の経路で必要な全 side の token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。全 token type の確定後、fine-grained を選んだ side だけに作成 URL を表示し、必要な権限を準備できたことを確認してから `Read-Host` へ進む。
+**PAT の入力を求める前に、経路から exact `required token inventory` を作成する。** inventory には env var、host、organization、token owner、用途、token type、role、scope / permission、作成 URL status、hidden input 順を含める。次の env var を一件も省略しない。
+
+| 経路 | required token inventory |
+|---|---|
+| `read-only` | `SOURCE_TOKEN` |
+| `api-only` / `browser-e2e` + `fixture-seed` | `SOURCE_TOKEN`, `TARGET_TOKEN` |
+| `api-only` / `browser-e2e` + `GEI` | `SOURCE_TOKEN`, `TARGET_TOKEN`, `GHPMV_GEI_SOURCE_TOKEN`, `GHPMV_GEI_TARGET_TOKEN` |
+
+`SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用で、ユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
+
+hidden input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
+
+**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** `SOURCE_TOKEN` / `TARGET_TOKEN` の必要な全 token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
+
+token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、全 required PAT の準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
 
 fine-grained PAT を選んだ token は URL status を `pending` にする。source / target organization login、host、fixture preparation、repository preparation mode が未確定なら、先に不足値を質問する。該当 token の完全な pre-filled URL を assistant 本文へ表示して検証し、status を `shown-and-validated` に更新するまで、次の操作を禁止する。
 
@@ -260,11 +296,7 @@ source と target の両方が fine-grained の場合は、**Source fine-grained
 
 agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
-mode ごとに必要な token だけを準備する。
-
-- `read-only`: source Project を export できる source token だけ
-- `api-only`: source export 用 token と target import / verify 用 token
-- `browser-e2e`: browser profile と同じユーザーの source / target token
+mode と repository preparation mode から作成した `required token inventory` に存在する token だけを準備する。GEI 経路では ghpmv 用二件に加えて GEI 用二件も必須であり、四件すべてが ready になるまで preflight、fixture、export、GEI、import、verify のいずれにも進まない。
 
 `setup --fixture` で organization repository を自動作成する完全自動経路では、確実性を優先する場合は classic PAT を推奨する。fine-grained PAT を選んだ場合は、下記の permission 設定だけで成功とみなさず、fixture 実行前に repository を作成しない preflight を必ず行う。
 
@@ -274,10 +306,10 @@ mode ごとに必要な token だけを準備する。
 
 現在の経路で必要な全 token type を確定し、そのうち一つ以上で fine-grained を選択した直後は、次の state machine を厳守する。
 
-1. 新しい質問を出さず、確認済みの token type / host / organization / fixture 経路から、fine-grained を選んだ side の URL だけを内部で組み立てる。classic を選んだ side の fine-grained URL は生成しない。
-2. 次の assistant 本文に、fine-grained を選んだ token ごとの label と placeholder のない完全な raw autolink を実際に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
-3. URL を含むその同じ assistant response で readiness 用 `ask_user` を一度だけ呼ぶ。
-4. source / target の両方が fine-grained の場合、両 URL を同じ本文に表示し、`Source/target fine-grained PAT を両方作成済み` という一つの確認カードにまとめる。一方だけが fine-grained の mixed route では、その side の URL だけを表示し、`Source fine-grained PAT を作成済み` または `Target fine-grained PAT を作成済み` という単一-token card にする。
+1. 新しい質問を出さず、確認済みの token type / host / organization / fixture 経路から、fine-grained を選んだ side の URL を内部で組み立てる。classic を選んだ side の fine-grained URL は生成しない。
+2. 次の assistant 本文に token plan と、fine-grained を選んだ token ごとの label、placeholder のない完全な raw autolink を実際に表示する。classic / GEI token の作成ページ URL も同じ本文に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
+3. URL を含むその同じ assistant response で、inventory 内の全 required PAT を対象に readiness 用 `ask_user` を一度だけ呼ぶ。
+4. choices は `必要な PAT をすべて作成・承認済み` と `まだ準備中` にする。一部 token だけを準備済みとして hidden input へ進まない。
 
 assistant response 本文に今回の完全な URL が一つも存在しない状態では、`PAT を準備できましたか？`、permission 確認、PAT terminal 入力のいずれにも進んではならない。URL を生成できない必須値がある場合だけ、その不足値を一つ質問する。
 
@@ -312,14 +344,16 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 
 URL 内に literal `\n`、escaped newline、空白、Markdown link label を混ぜない。renderer 上で折り返されても href 自体は一つの URL になるようにする。URL を表示した assistant 本文の直後に `ask_user` を呼ぶ場合、質問カードには readiness の確認文と choices だけを渡し、URL や Markdown を重複させない。「URL を生成して確認します」という本文の後に URL なしで readiness card を表示することは禁止する。
 
-fine-grained PAT URL を表示した turn は、URL の表示だけで終了してはならない。同じ turn で直ちに `ask_user` を呼び、次を一つの readiness question として明示する。
+PAT URL を表示した turn は、URL の表示だけで終了してはならない。同じ turn で直ちに `ask_user` を呼び、次を一つの readiness question として明示する。
 
 - 表示した fine-grained PAT URL を開いて PAT を作成する。
 - 経路に必要な Repository access を選び、organization approval が必要なら **Active** まで待つ。
 - token 値は会話へ貼らない。
-- 表示した fine-grained PAT が準備できたら、classic を選んだ side の scope / SSO 確認を行い、次の Step で共有 terminal の hidden prompt へ安全に入力する。
+- classic PAT は表示した host の作成ページで指定 scope を選び、必要なら SSO authorize する。
+- GEI 経路では source / destination の classic PAT credential を両方準備する。
+- required inventory の全 PAT が準備できたら、共有 terminal の hidden prompt へ一件ずつ安全に入力する。
 
-source / target の両方が fine-grained の場合だけ choices を `Source/target fine-grained PAT を両方作成済み` と `まだ準備中` にする。一方だけが fine-grained の場合は該当 side の単一-token choice と `まだ準備中` にする。`作成済み` の場合だけ次の token preparation へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
+`必要な PAT をすべて作成・承認済み` の場合だけ hidden input へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
@@ -333,6 +367,13 @@ source / target の両方が fine-grained の場合だけ choices を `Source/ta
 | target: fixture seed + import / verify | `repo`, `project`, `admin:org`。 |
 
 Organization が要求する場合は classic PAT を SSO authorize する。
+
+classic PAT には fine-grained PAT の permission pre-fill URL を使わない。token plan では host に対応する作成ページを完全な raw URL で表示し、表の scope をユーザーが選択する。
+
+- GitHub.com: `https://github.com/settings/tokens/new`
+- GHEC with data residency: `https://TENANT.ghe.com/settings/tokens/new`
+
+data residency URL の `TENANT` は確認済みの実 subdomain に置き換える。placeholder のまま表示しない。
 
 ### Fine-grained PAT
 
@@ -351,7 +392,7 @@ GitHub の [fine-grained PAT permission matrix](https://docs.github.com/en/rest/
 
 ### GEI 専用 token
 
-`repository preparation mode` が `GEI` の場合、GEI は fine-grained PAT を使用できないため、`SOURCE_TOKEN` / `TARGET_TOKEN` とは別に classic PAT を用意することを推奨する。
+`repository preparation mode` が `GEI` の場合、source と destination の classic PAT credential は必須である。workflow では `GHPMV_GEI_SOURCE_TOKEN` と `GHPMV_GEI_TARGET_TOKEN` を必須 env var として準備し、Step 7 でそれぞれ GEI が要求する `GH_SOURCE_PAT` と `GH_PAT` へ一時的に mapping する。別 token 値を `SOURCE_TOKEN` / `TARGET_TOKEN` から分離して発行することは推奨だが、GEI credential 自体を省略してよいという意味ではない。
 
 source / destination の role status が `migrator-pending` の間は、次の scope を説明してもよいが PAT の入力は求めない。Migrator ロールが適用されたことを確認して `migrator-active` に更新してから進める。
 
@@ -362,6 +403,14 @@ source / destination の role status が `migrator-pending` の間は、次の s
 | destination | destination organization の migrator | `repo`, `read:org`, `workflow` |
 
 同じ classic PAT を `ghpmv` と GEI で再利用する場合は、該当する scope の和集合が必要になる。不要な `admin:org` を `ghpmv` 専用 token に追加させない。
+
+role status が `owner` または `migrator-active` になった後、hidden input より前の token plan に次の作成ページを表示する。source は GitHub.com 固定である。destination が data residency の場合だけ確認済み tenant host を使う。
+
+- GEI source: `https://github.com/settings/tokens/new`
+- GEI destination on GitHub.com: `https://github.com/settings/tokens/new`
+- GEI destination with data residency: `https://TENANT.ghe.com/settings/tokens/new`
+
+各 URL の直前または token plan の同じ行に、該当 role に対応する scope、SSO authorization、organization access が必要であることを示す。四件の required token がすべて ready になるまで、GEI source / destination のいずれかを後回しにしたまま Step 5 以降へ進まない。
 
 `read-only`:
 
