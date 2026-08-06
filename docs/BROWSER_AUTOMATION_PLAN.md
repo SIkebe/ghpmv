@@ -1,31 +1,32 @@
 # Browser Automation 詳細設計: Views / Workflows の解析と再現
 
-M6/M7(Playwright による View・Workflow 移行)の詳細設計と実装記録。
-M6/M7 は実装済みで、現行コードは `src/Ghpmv.Core/Browser/`、実 UI の確定事項は [projects-ui-discovery.md](ui-maps/projects-ui-discovery.md) を正とする。全体プランは [PLAN.md](../PLAN.md) を参照。
+GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設計と実装記録。
+現行コードは `src/Ghpmv.Core/Import/ProjectViewImporter.cs` と `src/Ghpmv.Core/Browser/`、実 UI の確定事項は [projects-ui-discovery.md](ui-maps/projects-ui-discovery.md) を正とする。全体プランは [PLAN.md](../PLAN.md) を参照。
 
 - 根拠にした一次情報:
   - GitHub Docs「[Managing your views](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/managing-your-views)」「[Changing the layout of a view](https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/changing-the-layout-of-a-view)」
   - GitHub Docs「[Using the built-in automations](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-built-in-automations)」「[Adding items automatically](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/adding-items-automatically)」
-  - GraphQL スキーマ(`ProjectV2View` / `ProjectV2Workflow`)— PLAN.md §1.2 で検証済み
+  - GraphQL スキーマ([2026-07-28 の View mutations](https://docs.github.com/en/graphql/overview/changelog/2026#schema-changes-for-2026-07-28) / [2026-07-30 の View configuration](https://docs.github.com/en/graphql/overview/changelog/2026#schema-changes-for-2026-07-30) / `ProjectV2Workflow`)
 
 ---
 
 ## 0. 全体像: どこまで API で読めて、何を UI でやるのか
 
-**大原則: 読めるものは GraphQL で読む。UI 操作は「API に無い読み取り」と「すべての書き込み」だけ。**
+**大原則: 読み書きできるものは GraphQL を使う。UI 操作は API に無い読み取り・書き込みだけ。**
 
-Project fields are the exception while GitHub's public schema cannot resolve linked
-multi-select Issue Fields. Browser-assisted export reads the complete server-rendered
-`#memex-columns-data` catalog before API item export; API-only export fails closed when the
-public field connection cannot prove completeness.
+Project fields remain an exception for exact organization Issue Field linkage. Since
+2026-07-27, GraphQL can enumerate multi-select Project fields and their data type/options.
+However, `ProjectV2FieldConfiguration` does not expose the underlying organization
+`issueFieldId`, so browser-assisted export reads `#memex-columns-data` when exact linked
+versus ordinary field identity must be preserved.
 
 ### View のプロパティ別ソースマップ
 
 | プロパティ | export(読み) | import(書き) | 備考 |
 |---|---|---|---|
-| name / layout / number | GraphQL `ProjectV2View.name/layout/number` | **UI** | layout enum: `TABLE_LAYOUT` / `BOARD_LAYOUT` / `ROADMAP_LAYOUT` |
-| filter 文字列 | GraphQL `ProjectV2View.filter` | **UI**(フィルターバーに入力) | |
-| 表示フィールドと列順 | GraphQL `ProjectV2View.fields`(orderBy: POSITION) | **UI** | |
+| name / layout / number | GraphQL `ProjectV2View.name/layout/number` | **GraphQL** `createProjectV2View` / `updateProjectV2View` | layout enum: `TABLE_LAYOUT` / `BOARD_LAYOUT` / `ROADMAP_LAYOUT` |
+| filter 文字列 | GraphQL `ProjectV2View.filter` | **GraphQL** `updateProjectV2View` | repository / user / organization mapping を適用 |
+| 表示フィールドと列順 | **GraphQL** `ProjectV2View.configuration.visibleFields` | **GraphQL** `ProjectV2ViewConfigurationInput.visibleFieldIds` | target field ID へ名前で remap |
 | group-by(Table)/ swimlane(Board) | GraphQL `groupByFields` | **UI** | |
 | Board の列フィールド | GraphQL `verticalGroupByFields` | **UI**("Column by") | |
 | sort(複数キー+方向) | GraphQL `sortByFields`(`ProjectV2SortByField.direction`) | **UI** | |
@@ -41,7 +42,7 @@ public field connection cannot prove completeness.
 | name / number / enabled | GraphQL `ProjectV2Workflow` | **UI**(enable は保存操作に内包) |
 | トリガー条件・対象(issue/PR)・Set する Status 値・フィルター・対象リポジトリ | ❌ API に無い → **UI で読む** | **UI** |
 
-つまり **export 側にも Playwright が必要**(Slice by / Field sum / Roadmap 設定 / Workflow 詳細)。export の UI 解析と import の UI 操作は同じページを扱うため、セレクター資産を共有する。
+つまり完全移行には **export/import の両側で Playwright が必要**(group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細)。API-only import でも View の基本構成は作成される。
 
 ---
 
@@ -89,7 +90,7 @@ context.SetDefaultTimeout(30_000);
 ```
 
 - 操作間ウェイト: 連続 UI 操作の間に 300ms(`Task.Delay`)。並列ページは使わない(1 セッション 1 ページ直列)。ToS 配慮とレース回避を兼ねる。
-- **失敗時処理**: 回復可能な UI 操作失敗は warning に追加して続行する。UI write は transaction ではないため、途中まで適用された view / workflow が残る場合があり、移行後の browser-assisted `verify` が必須。診断ダンプとページ全体の reload retry は未実装。SPA の race には view 作成確認(最大 3 回)、rename textbox 待機(5 秒 × 3 回)、repository option 待機(10 秒)など対象要素単位の待機・再試行を使う。
+- **失敗時処理**: 回復可能な UI 操作失敗は warning に追加して続行する。UI write は transaction ではないため、View の補完設定や Workflow が途中まで適用された状態で残る場合があり、移行後の browser-assisted `verify` が必須。診断ダンプとページ全体の reload retry は未実装。SPA の race には repository option 待機(10 秒)など対象要素単位の待機・再試行を使う。
 
 ### 1.5 セレクターレジストリ
 
@@ -126,7 +127,7 @@ internal static class Sel
    - New view → レイアウト切替 → Fields 変更 → Group by → Sort by → Slice by → Field sum → filter 入力 → Save changes → Rename → Delete
    - Workflows ページ → 各 workflow を開く → Edit → 設定変更 → Save and turn on workflow → Disable
 3. accessibility tree と UI quirk を `docs/ui-maps/projects-ui-discovery.md` に記録
-4. `Sel.cs` の全エントリを実測値で確定
+4. `Sel.cs` の browser enrichment / Workflow 用エントリを実測値で確定
 5. Workflow の設定値を閲覧モードの DOM から読み取れることを確認
 
 **D0 の成果物**: `docs/ui-maps/projects-ui-discovery.md` と `src/Ghpmv.Core/Browser/Sel.cs`。
@@ -167,31 +168,24 @@ internal static class Sel
 
 実装メモ: メニュー項目は「設定名 + 現在値」を accessible name に含むため、label prefix で特定する。複数選択項目は overlay の `aria-checked` を読む。
 
-### 3.3 import: View 作成の操作シーケンス
+### 3.3 import: GraphQL 作成後の UI 補完シーケンス
 
-ViewSpec 1 件あたりの手順。**各ステップの後に 300ms ウェイト**。
+`ProjectViewImporter` が View の再利用または作成、name/layout/filter/visible fields を適用した後、View 1 件あたり次を補完する。**各ステップの後に 300ms ウェイト**。
 
 ```
-CreateView(spec):
- 1. プロジェクトルートへ goto
- 2. Sel.NewViewTab.Click()                          → 新タブ "View {n}" が active になるのを待つ
- 3. Rename: 選択中タブを double-click → "Change view name" textbox → spec.Name → Enter
- 4. Layout: View menu → "Layout" セクションで spec.Layout("Table"|"Board"|"Roadmap")をクリック
- 5. Fields: ViewOptions → "Fields" → ダイアログで:
-      - 現在の表示フィールド集合と spec.VisibleFields を突き合わせて checked state を一致させる
-      - 列順は明示的に並べ替えない(v1 best effort)
- 6. Column by(Board のみ): ViewOptions → "Column by" → spec.VerticalGroupBy を選択
- 7. Group by: ViewOptions → "Group by" → spec.GroupBy を選択(未指定なら "None" を選択)
- 8. Sort by: View menu → "Sort by" → 先頭キーを選択 → 必要なら方向トグル
- 9. Slice by: ViewOptions → "Slice by" → spec.SliceBy(未指定なら None)
-10. Field sum: ViewOptions → "Field sum" → spec.FieldSum の各フィールドをチェック
-11. Roadmap のみ: "Dates" → 開始/終了フィールド対 or iteration を選択、"Zoom level"、"Markers" のチェック群
-12. Filter: フィルターバー(role=textbox, D0 で名称確定)をクリック → spec.Filter を Fill → Enter
-13. 保存: View menu → "Save view" → alertdialog の "Save"(dialog が出ない UI variant では直接保存)
-14. 検証は後続の `ghpmv verify --enable-browser-automation` または browser E2E で行う
+EnrichView(spec, targetViewNumber):
+ 1. {project}/views/{targetViewNumber} へ goto
+ 2. Column by(Board のみ): ViewOptions → "Column by" → spec.VerticalGroupBy を選択
+ 3. Group by / Swimlanes: layout に応じた項目で spec.GroupBy を選択
+ 4. Sort by: View menu → "Sort by" → 先頭キーを選択 → 必要なら方向トグル
+ 5. Slice by: ViewOptions → "Slice by" → spec.SliceBy
+ 6. Field sum: ViewOptions → "Field sum" → spec.FieldSum の各フィールドをチェック
+ 7. Roadmap のみ: "Dates" → 開始/終了フィールド対 or iteration を選択、"Zoom level"、"Markers" のチェック群
+ 8. 保存: View menu → "Save view" → alertdialog の "Save"(dialog が出ない UI variant では直接保存)
+ 9. 検証は後続の `ghpmv verify --enable-browser-automation` または browser E2E で行う
 ```
 
-Project conflict は browser stage より前に `--on-conflict skip|update|fail` または `--project-number` で解決する。browser importer は選択された target project に view を適用し、個別設定の失敗は warning にする。
+Project conflict は API View stage より前に `--on-conflict skip|update|fail` または `--project-number` で解決する。API importer は source view number と target view number の対応を返し、browser importer はその View に未公開設定だけを適用する。
 
 作成順序: **スナップショットの view number 昇順**で作成(タブ順が概ね再現される)。デフォルトで作られる "View 1" は、スナップショット先頭の view で上書き(rename + 設定)して消費する。
 
@@ -323,7 +317,7 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 
 | 項目 | 判断 |
 |---|---|
-| 表示フィールドの列順 | v1 は表示フィールドの membership のみ一致させ、列順は明示的に再現しない。将来対応では `Locator.DragToAsync` を検討 |
+| 表示フィールドの列順 | GraphQL `visibleFields` / `visibleFieldIds` で明示的に再現する |
 | View タブの並び順(D&D のみ) | v1 スコープ外。import 後に警告で「手動で並び替えてください」と案内 |
 | disabled workflow への設定適用 | 対応済み。設定保存後に toggle off へ戻す |
 | memex 内部 API の直接利用 | 既定では不採用。HAR は現時点で成果物として記録していない。UI 操作不能項目が出た場合に調査・取得を検討 |
@@ -337,8 +331,8 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 | B1 | BrowserSession 基盤(起動/ストレージ/ウェイト) | 完了。診断ダンプは未実装 |
 | B2 | `ghpmv login` / `ghpmv setup --browsers` | 完了 |
 | B3 | View UI-export(§3.2: sliceBy/fieldSum/roadmap 読み取り) | 完了 |
-| B4 | View import Table 系(V-1〜V-4, V-8, V-9) | 完了。複数 sort / field order は best effort |
-| B5 | View import Board / Roadmap(V-5〜V-7) | 完了 |
+| B4 | View GraphQL import(name/layout/filter/visible fields) + Table UI 補完 | 完了。複数 sort は best effort |
+| B5 | View Board / Roadmap UI 補完(V-5〜V-7) | 完了 |
 | B6 | Workflow UI-export(§4.2) | 完了 |
 | B7 | Workflow import(§4.3)W-1〜W-8 | 完了 |
 | B8 | Workflow import W-9(Auto-add 複数 + 上限処理) | 完了。実装上限は 20 |

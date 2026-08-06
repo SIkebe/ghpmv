@@ -15,6 +15,8 @@ public sealed record ProjectImportLog
 
     public Dictionary<string, PendingIssueFieldLinkOperation> PendingIssueFieldLinks { get; init; } = new(StringComparer.Ordinal);
 
+    public Dictionary<int, PendingViewOperation> PendingViews { get; init; } = [];
+
     public static async Task<ProjectImportLog> LoadAsync(string directory, CancellationToken cancellationToken)
     {
         var path = Path.Combine(directory, FileName);
@@ -113,6 +115,21 @@ public sealed record PendingIssueFieldLinkOperation
     public required string Name { get; init; }
 
     public required string[] ExistingFieldIds { get; init; }
+}
+
+public sealed record PendingViewOperation
+{
+    public required string OperationId { get; init; }
+
+    public required string ProjectId { get; init; }
+
+    public required int SourceNumber { get; init; }
+
+    public required string Name { get; init; }
+
+    public required string Layout { get; init; }
+
+    public required string[] ExistingViewIds { get; init; }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

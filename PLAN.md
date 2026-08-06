@@ -36,7 +36,7 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 | コラボレーター | ✅ | `updateProjectV2Collaborators` |
 | リポジトリ/チームへのリンク | ✅ | `linkProjectV2ToRepository`, `linkProjectV2ToTeam` |
 | Status update(進捗報告) | ✅ | `createProjectV2StatusUpdate` |
-| **View の作成・設定** | ❌ **読み取り専用** | `ProjectV2View` は query のみ。`createProjectV2View` / `updateProjectV2View` はスキーマに存在しない(github/docs のスキーマデータを検索して不存在を確認) |
+| **View の作成・基本設定** | ✅ | `createProjectV2View` / `updateProjectV2View` と `ProjectV2ViewConfigurationInput.visibleFieldIds` で name / layout / filter / ordered visible fields を移行。group / sort / column / slice / field sum / Roadmap 設定は書き込み API 未公開 |
 | **Workflow の作成・有効化** | ❌ **削除のみ可** | `deleteProjectV2Workflow` のみ存在。create/update は無い |
 
 ### 1.3 後発ツールの状況(車輪の再発明チェック)
@@ -153,7 +153,7 @@ graph LR
 | アイテム並び順 | GraphQL | `updateProjectV2ItemPosition` を順次適用 |
 | アーカイブ状態 | GraphQL | 値設定後に `archiveProjectV2Item` |
 | コラボレーター / リポジトリリンク | GraphQL + Playwright | import は `updateProjectV2Collaborators` / `linkProjectV2ToRepository`(ユーザー/リポジトリマッピング CSV 適用、解決不能は warning+skip)。**コラボレーターの読み取り API は存在しない**(`ProjectV2ActorConnection` は mutation payload のみ、実スキーマで確認 2026-07-06)ため API-only export は null。`--enable-browser-automation` 時は `/settings/access` UI から明示 project collaborator と role を export(`ravel-maurice-uo_sde` で検証済み、2026-07-06)。Base role / org owner / inherited access は `ghpmv` 対象外で、GEI と target org/team/repo/enterprise policy 側の責務。チームリンク(`linkProjectV2ToTeam`)はコラボレーターとは別概念で v1 対象外 |
-| **Views(layout, filter, groupBy, sortBy, visibleFields, 列順)** | **GraphQL + Playwright** | export は原則 GraphQL。ただし Slice by / Field sum / Roadmap 設定は API に無く UI から読み取る。import は全項目 UI 操作。詳細: [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) |
+| **Views(layout, filter, groupBy, sortBy, visibleFields, 列順)** | **GraphQL + Playwright** | name / layout / filter / ordered visible fields は GraphQL で export/import。group / sort / column / Slice by / Field sum / Roadmap 設定は API に書き込みが無く、Playwright で補完。詳細: [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) |
 | **Workflows(有効/無効, Auto-add ほか)** | **GraphQL + Playwright** | GraphQL で取れるのは name/number/enabled のみ。設定詳細(Status 値・フィルター・対象リポジトリ)は export/import とも UI。詳細: [docs/BROWSER_AUTOMATION_PLAN.md](docs/BROWSER_AUTOMATION_PLAN.md) |
 
 v1 で扱わないものと将来対応は §8 のロードマップを参照。

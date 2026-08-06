@@ -82,7 +82,7 @@ Important limitations:
 
 ## E2E カバレッジ強化で確定した追加知見(2026-07-06)
 
-1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映する → import は board のとき Swimlanes メニューで適用する(ViewUiExporter/Importer 対応済み、ViewUiSnapshot.Swimlanes 追加)
+1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映するため、import は board のとき Swimlanes メニューで適用する
 2. **Field sum はチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。menuitem の accessible name は "Field sum: Count and Fixture Number" のようにラベル結合されるため値はメニューを開かず読める。Count は uncheck 可能
 3. **UI のリスト値は散文形式**: "A and B" / "A, B, and C"(カンマ区切りとは限らない)→ ParseListValue は `,` と `" and "` の両方で分割する
 4. **Fields オーバーレイのエントリーは `option` ロール + aria-checked**(Field sum / Markers の `menuitemcheckbox` とは異なる)→ チェックボックス走査は両ロール対応が必要(ToggleCheckboxesAsync 対応済み)
@@ -92,4 +92,4 @@ Important limitations:
 8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
 10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)
-11. **Project field の完全カタログは server-rendered JSON に存在する**: `script#memex-columns-data` は非表示・未使用の built-in/custom field も含み、linked Issue Field には `issueFieldId` が入る。fixture #37 では GraphQL fallback が 11 fields しか取得しなかった一方、このカタログは 20 fields を返した。browser-assisted export/verify はこのJSONを主経路にし、public GraphQL field connectionを呼ばない
+11. **Project field の完全カタログは server-rendered JSON に存在する**: `script#memex-columns-data` は非表示・未使用の built-in/custom field も含み、linked Issue Field には `issueFieldId` が入る。2026-07-27 以降の GraphQL は multi-select field 自体を列挙できるが、linked Issue Field の元 ID は公開しない。browser-assisted export/verify は exact linkage を保持するためこの JSON を主経路にする

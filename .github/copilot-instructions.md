@@ -28,7 +28,7 @@ dotnet test tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj -c Release --filter "
 dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release
 ```
 
-Browser E2E tests require both `GHPMV_BROWSER_STATE` and `GHPMV_TEST_TOKEN`. `BrowserRoundTripTests` also expects source project `#3` to contain the collaborator, View, and Workflow fixture data asserted by the tests, and the target organization must permit temporary project creation/deletion. `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG` select those organizations; `GHPMV_TEST_PROJECT_NUMBER` does not change this suite's hardcoded project number. Create browser state through the CLI rather than editing it:
+Browser E2E tests require both `GHPMV_BROWSER_STATE` and `GHPMV_TEST_TOKEN`. `BrowserRoundTripTests` expects the source project selected by `GHPMV_TEST_PROJECT_NUMBER` (default `3`) to contain the collaborator, View, and Workflow fixture data asserted by the tests, and the target organization must permit temporary project creation/deletion. `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG` select the organizations; `GHPMV_TEST_FIXTURE_REPO` and `GHPMV_TEST_TARGET_FIXTURE_REPO` select the source and target repository short names; `GHPMV_TEST_COLLABORATOR_LOGIN` selects the expected collaborator. Create browser state through the CLI rather than editing it:
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup --browsers

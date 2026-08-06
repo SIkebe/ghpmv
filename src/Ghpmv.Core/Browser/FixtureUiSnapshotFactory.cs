@@ -3,11 +3,11 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Core.Browser;
 
 /// <summary>
-/// Creates the UI-only portion of the standard integration-test fixture.
+/// Creates the View and Workflow portion of the standard integration-test fixture.
 /// The returned snapshot is intentionally minimal: it contains just enough field,
-/// view and workflow metadata for <see cref="ViewUiImporter"/> and
-/// <see cref="WorkflowUiImporter"/> to drive the GitHub Projects UI against a project
-/// whose API-backed fields and repository were created by <c>ghpmv setup --fixture</c>.
+/// View and Workflow metadata for the GraphQL View importer and the browser enrichment
+/// importers to configure a project whose fields and repository were created by
+/// <c>ghpmv setup --fixture</c>.
 /// </summary>
 public static class FixtureUiSnapshotFactory
 {
@@ -43,6 +43,16 @@ public static class FixtureUiSnapshotFactory
         new FieldSnapshot { Name = "Fixture Date", DataType = "DATE" },
         new FieldSnapshot { Name = "Fixture Select", DataType = "SINGLE_SELECT" },
         new FieldSnapshot { Name = "Fixture Sprint", DataType = "ITERATION" },
+        new FieldSnapshot
+        {
+            Name = "Fixture Teams",
+            DataType = "MULTI_SELECT",
+            IssueField = new IssueFieldConfigurationSnapshot
+            {
+                Description = "Teams involved in the issue",
+                Visibility = "ALL",
+            },
+        },
     ];
 
     private static IReadOnlyList<ViewSnapshot> CreateViews() =>
@@ -59,7 +69,6 @@ public static class FixtureUiSnapshotFactory
             VisibleFields = ["Title", "Assignees", "Status", "Fixture Text", "Fixture Date", "Fixture Select", "Fixture Sprint"],
             Ui = new ViewUiSnapshot
             {
-                SortBy = "Fixture Number",
                 SliceBy = "Fixture Select",
             },
         },
@@ -75,7 +84,6 @@ public static class FixtureUiSnapshotFactory
             VisibleFields = [],
             Ui = new ViewUiSnapshot
             {
-                Swimlanes = "Status",
                 FieldSum = ["Fixture Number"],
             },
         },

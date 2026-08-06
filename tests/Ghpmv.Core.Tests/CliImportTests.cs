@@ -155,6 +155,7 @@ public class CliImportTests
                 "items: created=0 resumed=0 already-complete=0 skipped=0 warnings=0",
                 result.Output,
                 StringComparison.Ordinal);
+            Assert.Contains("views: imported=0 warnings=0", result.Output, StringComparison.Ordinal);
             Assert.Equal(3, server.RequestBodies.Count);
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("mutation", StringComparison.OrdinalIgnoreCase));

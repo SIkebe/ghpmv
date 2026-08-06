@@ -106,8 +106,30 @@ public sealed class WorkflowUiExporter
     /// <summary>Navigates to a workflow via its sidebar link and waits for its heading.</summary>
     internal static async Task OpenWorkflowAsync(IPage page, string name, CancellationToken cancellationToken)
     {
-        await Sel.WorkflowLink(page, name).First.ClickAsync().ConfigureAwait(false);
-        await Sel.WorkflowHeading(page, name).First.WaitForAsync().ConfigureAwait(false);
+        var link = Sel.WorkflowLink(page, name).First;
+        var heading = Sel.WorkflowHeading(page, name).First;
+        for (var attempt = 0; ; attempt++)
+        {
+            await link.ClickAsync().ConfigureAwait(false);
+            try
+            {
+                await heading.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
+                break;
+            }
+            catch (Exception exception) when (
+                attempt == 0
+                && exception is PlaywrightException or TimeoutException)
+            {
+                // The Projects SPA can drop the first sidebar click while the previous
+                // workflow is leaving edit mode. Retry once against the still-stable link.
+            }
+        }
+
+        await Sel.EditWorkflowButton(page, name)
+            .Or(Sel.SaveWorkflowButton(page, name))
+            .First
+            .WaitForAsync(new() { Timeout = 10_000 })
+            .ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
     }
 

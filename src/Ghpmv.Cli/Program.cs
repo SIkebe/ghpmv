@@ -408,6 +408,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
+        var projectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
         if (itemLog is not null
             && !string.Equals(
                 itemLog.SourceSnapshotFingerprint,
@@ -421,13 +422,20 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
             || itemLog is { HasIncompleteItems: true };
+        var hasIncompleteProjectWork = projectLog.PendingProject is not null
+            || projectLog.PendingFields.Count > 0
+            || projectLog.PendingIssueFields.Count > 0
+            || projectLog.PendingIssueFieldLinks.Count > 0
+            || projectLog.PendingViews.Count > 0;
         var pendingItemProjectId = itemLog?.ProjectId;
         var importer = new ProjectImporter(client)
         {
-            OnConflict = hasIncompleteItemWork ? ConflictAction.Update : onConflict,
+            OnConflict = hasIncompleteItemWork || hasIncompleteProjectWork ? ConflictAction.Update : onConflict,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
+            OrganizationMapping = organizationMapping,
+            BrowserViewEnrichmentPlanned = enableBrowserAutomation,
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
             OperationLogDirectory = inDirectory,
@@ -456,7 +464,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         };
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
 
-        var viewWarnings = 0;
+        var viewWarnings = result.ViewWarningCount;
         var workflowWarnings = 0;
         var workflowsImported = 0;
         if (enableBrowserAutomation)
@@ -464,18 +472,21 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             System.Diagnostics.Debug.Assert(session is not null);
             var viewImporter = new ViewUiImporter(session)
             {
-                RepositoryMapping = repoMapping,
-                UserMapping = userMapping,
-                OrganizationMapping = organizationMapping,
                 OnProgress = Console.Error.WriteLine,
             };
-            await viewImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
+            await viewImporter.EnrichAsync(
+                snapshot,
+                org,
+                ownerType,
+                result.ProjectNumber,
+                result.ViewNumbers,
+                cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
                 Console.Error.WriteLine($"warning: {warning}");
             }
 
-            viewWarnings = viewImporter.Warnings.Count;
+            viewWarnings += viewImporter.Warnings.Count;
 
             var workflowImporter = new WorkflowUiImporter(session)
             {
@@ -499,10 +510,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
         if (enableBrowserAutomation)
         {
-            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"views: imported={snapshot.Views.Count} warnings={viewWarnings}"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }
@@ -853,6 +864,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     BrowserSession? authenticatedFixtureUiSession = null;
+    GitHubGraphQLClient? authenticatedFixtureUiClient = null;
     if (parseResult.GetValue(fixtureUiOption))
     {
         try
@@ -879,9 +891,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var authClient = new GitHubGraphQLClient(token, graphQlBaseUri);
-            authClient.OnRetry = Console.Error.WriteLine;
-            var apiLogin = await authClient.GetViewerLoginAsync(cancellationToken);
+            authenticatedFixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
+            authenticatedFixtureUiClient.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await authenticatedFixtureUiClient.GetViewerLoginAsync(cancellationToken);
             await authenticatedFixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
@@ -891,12 +903,14 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 await authenticatedFixtureUiSession.DisposeAsync();
             }
 
+            authenticatedFixtureUiClient?.Dispose();
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;
         }
     }
 
     await using var fixtureUiSession = authenticatedFixtureUiSession;
+    using var fixtureUiClient = authenticatedFixtureUiClient;
 
     int? createdFixtureProjectNumber = null;
     var fixtureAlreadyExisted = false;
@@ -953,7 +967,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
     if (fixtureAlreadyExisted && parseResult.GetValue(fixtureProjectOption) is null)
     {
-        Console.Error.WriteLine("Fixture project already exists; skipping --fixture-ui to avoid duplicating views/workflows. To force UI setup on an existing project, run setup --fixture-ui with --fixture-project <number> explicitly.");
+        Console.Error.WriteLine("Fixture project already exists; skipping --fixture-ui to avoid duplicating workflows. To force UI setup on an existing project, run setup --fixture-ui with --fixture-project <number> explicitly.");
         return 0;
     }
 
@@ -970,8 +984,37 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         var snapshot = FixtureUiSnapshotFactory.Create(parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
 
         System.Diagnostics.Debug.Assert(fixtureUiSession is not null);
+        System.Diagnostics.Debug.Assert(fixtureUiClient is not null);
+        var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+        var deployment = apiBaseUrl is null
+            ? "api.github.com"
+            : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl).Host;
+        var fixtureViewOperationDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "ghpmv",
+            "fixture-view-operations",
+            deployment,
+            org,
+            projectNumber.Value.ToString(CultureInfo.InvariantCulture));
+        var apiViewImporter = new ProjectImporter(fixtureUiClient)
+        {
+            OperationLogDirectory = fixtureViewOperationDirectory,
+            BrowserViewEnrichmentPlanned = true,
+            OnProgress = Console.Error.WriteLine,
+        };
+        var viewNumbers = await apiViewImporter.ImportViewsIntoAsync(
+            snapshot,
+            org,
+            projectNumber.Value,
+            cancellationToken);
         var viewImporter = new ViewUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
-        await viewImporter.ImportAsync(snapshot, org, projectNumber.Value, cancellationToken);
+        await viewImporter.EnrichAsync(
+            snapshot,
+            org,
+            ProjectOwnerType.Organization,
+            projectNumber.Value,
+            viewNumbers,
+            cancellationToken);
         foreach (var warning in viewImporter.Warnings)
         {
             Console.Error.WriteLine($"warning: {warning}");
@@ -985,8 +1028,12 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"Fixture UI applied: views={snapshot.Views.Count} workflows={workflowImporter.ImportedCount} viewWarnings={viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
-        return viewImporter.Warnings.Count == 0 && workflowImporter.Warnings.Count == 0 ? 0 : 1;
+            $"Fixture UI applied: views={viewNumbers.Count} workflows={workflowImporter.ImportedCount} viewWarnings={apiViewImporter.Warnings.Count + viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
+        return apiViewImporter.Warnings.Count == 0
+            && viewImporter.Warnings.Count == 0
+            && workflowImporter.Warnings.Count == 0
+                ? 0
+                : 1;
     }
     catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
     {

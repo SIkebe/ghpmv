@@ -5,9 +5,8 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
-/// M2 integration tests: exports the fixture project through the real GraphQL metadata
-/// and item connections while supplying the known field catalog that the public field
-/// connection cannot enumerate. API-only fail-closed behavior is covered separately.
+/// M2 integration tests: exports the fixture project through the real GraphQL metadata,
+/// field, and item connections.
 /// Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized for the test orgs).
 /// Skipped when the variable is not set (e.g. fork PRs without secrets).
 /// </summary>
@@ -31,11 +30,10 @@ public class ProjectExporterTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
-        var catalog = await CreateFixtureCatalogAsync(client, cancellationToken);
-        var snapshot = await new ProjectExporter(client)
-        {
-            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
-        }.ExportAsync(Org, FixtureProjectNumber, cancellationToken);
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            Org,
+            FixtureProjectNumber,
+            cancellationToken);
         return IntegrationFixtureSnapshot.SelectCanonicalItems(snapshot);
     }
 
@@ -44,11 +42,7 @@ public class ProjectExporterTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
-        var catalog = await CreateFixtureCatalogAsync(client, cancellationToken);
-        var exporter = new ProjectExporter(client)
-        {
-            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
-        };
+        var exporter = new ProjectExporter(client);
 
         var entries = await exporter.ListProjectsAsync(Org, includeClosed: false, cancellationToken);
         var entry = Assert.Single(entries, candidate =>
@@ -142,13 +136,15 @@ public class ProjectExporterTests
         Assert.Equal("BOARD_LAYOUT", board.Layout);
         Assert.Equal("Fixture Select", Assert.Single(board.VerticalGroupByFields));
         Assert.Equal("Status", Assert.Single(board.GroupByFields)); // board swimlanes
+        Assert.NotEmpty(board.VisibleFields);
 
-        Assert.Equal("ROADMAP_LAYOUT", Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap").Layout);
+        var roadmap = Assert.Single(snapshot.Views, v => v.Name == "Fixture Roadmap");
+        Assert.Equal("ROADMAP_LAYOUT", roadmap.Layout);
+        Assert.Empty(roadmap.VisibleFields);
 
         foreach (var view in snapshot.Views)
         {
             Assert.True(view.Number > 0);
-            Assert.NotEmpty(view.VisibleFields);
             Assert.Null(view.Ui); // browser-only (M6)
         }
     }
@@ -261,18 +257,4 @@ public class ProjectExporterTests
     private static FieldValueSnapshot? ValueOf(ItemSnapshot item, string fieldName)
         => item.FieldValues.FirstOrDefault(v => v.FieldName == fieldName);
 
-    private static async Task<ProjectFieldCatalog> CreateFixtureCatalogAsync(
-        GitHubGraphQLClient client,
-        CancellationToken cancellationToken)
-    {
-        var knownSnapshot = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
-        var catalog = IntegrationFixtureSnapshot.CreateFieldCatalog(knownSnapshot);
-        return catalog with
-        {
-            Entries = catalog.Entries.Select(entry =>
-                string.Equals(entry.Field.Name, "Fixture Teams", StringComparison.Ordinal)
-                    ? entry with { Field = entry.Field with { Options = [], IssueField = null } }
-                    : entry).ToArray(),
-        };
-    }
 }

@@ -7,9 +7,8 @@ namespace Ghpmv.Core.Browser;
 
 /// <summary>
 /// UI export of view settings that GraphQL does not expose (B2). For each view the
-/// "View" configuration menu is opened and the current values of Group by / Markers /
-/// Sort by / Dates / Zoom level / Slice by are read (D0: the menu item accessible name
-/// is "Group by: &lt;value&gt;"). Results are stored in <see cref="ViewSnapshot.Ui"/>;
+/// "View" configuration menu is opened and the current values of Markers / Dates /
+/// Zoom level / Slice by / Field sum are read. Results are stored in <see cref="ViewSnapshot.Ui"/>;
 /// views whose UI settings cannot be read keep <c>Ui = null</c> and add a warning.
 /// </summary>
 public sealed class ViewUiExporter
@@ -101,12 +100,7 @@ public sealed class ViewUiExporter
         await menu.WaitForAsync().ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
 
-        var groupBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Group by").ConfigureAwait(false));
-        var sortBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Sort by").ConfigureAwait(false));
         var sliceBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Slice by").ConfigureAwait(false));
-        // Boards use "Swimlanes" (not "Group by") and expose a "Field sum" checkbox overlay;
-        // both menu items combine label and value, so plain reads suffice (E2E discovery, 2026-07-06).
-        var swimlanes = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Swimlanes").ConfigureAwait(false));
         var fieldSum = ParseListValue(await ReadMenuItemTextAsync(menu, "Field sum").ConfigureAwait(false));
 
         RoadmapSettingsSnapshot? roadmap = null;
@@ -128,10 +122,7 @@ public sealed class ViewUiExporter
 
         return new ViewUiSnapshot
         {
-            GroupBy = groupBy,
-            SortBy = sortBy,
             SliceBy = sliceBy,
-            Swimlanes = swimlanes,
             FieldSum = fieldSum,
             Roadmap = roadmap,
             ScrapedAt = DateTimeOffset.UtcNow,

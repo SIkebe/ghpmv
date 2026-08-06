@@ -110,7 +110,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 
-Views / Workflows は public API だけでは作成できませんが、`ghpmv setup --fixture-ui` が C# の Playwright layer で標準テスト用 View / Workflow を作成します。手動で UI をぽちぽち濃くする必要はありません。fixture setup の実装本体は C# CLI に一本化されています。
+Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定と Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer でそれらだけを補完します。手動で UI をぽちぽち濃くする必要はありません。
 
 ---
 
@@ -151,10 +151,11 @@ gh extension upgrade github/gh-gei
 | `GHPMV_GEI_TARGET_TOKEN` | GEI destination 用の classic PAT。 |
 | `GHPMV_TEST_TOKEN` | 既存 integration / browser E2E tests を手動で回す場合。 |
 | `GHPMV_TEST_ORG` | integration / browser E2E tests の source organization login。未指定時は `GHPMV_SOURCE_ORG`、それも無ければ `gpm-source`。CI repo variable でも指定。 |
-| `GHPMV_TEST_TARGET_ORG` | integration tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
-| `GHPMV_TEST_PROJECT_NUMBER` | integration tests が export 元として使う fixture Project number。未指定時は現在の shared fixture `89`。CI repo variable でも指定。 |
-| `GHPMV_TEST_FIXTURE_REPO` | integration tests が期待する source fixture repository short name。未指定時は `GHPMV_FIXTURE_REPO`、それも無ければ現在の shared fixture repo `fixture-repo2`。CI repo variable でも指定。 |
-| `GHPMV_TEST_TARGET_FIXTURE_REPO` | integration tests が linked repository remap 先として期待する target fixture repository short name。未指定時は `fixture-repo`。CI repo variable でも指定。 |
+| `GHPMV_TEST_TARGET_ORG` | integration / browser E2E tests の target organization login。未指定時は `GHPMV_TARGET_ORG`、それも無ければ `gpm-target`。CI repo variable でも指定。 |
+| `GHPMV_TEST_PROJECT_NUMBER` | integration / browser E2E tests が export 元として使う fixture Project number。未指定時は integration tests が shared fixture `89`、browser E2E tests が `3`。CI repo variable でも指定。 |
+| `GHPMV_TEST_FIXTURE_REPO` | integration / browser E2E tests が期待する source fixture repository short name。未指定時は integration tests が `GHPMV_FIXTURE_REPO` または shared fixture repo `fixture-repo2`、browser E2E tests が `fixture-repo`。CI repo variable でも指定。 |
+| `GHPMV_TEST_TARGET_FIXTURE_REPO` | integration / browser E2E tests が linked repository remap 先として期待する target fixture repository short name。未指定時は `fixture-repo`。CI repo variable でも指定。 |
+| `GHPMV_TEST_COLLABORATOR_LOGIN` | browser E2E tests が source fixture で期待する collaborator login。 |
 | `GHPMV_SOURCE_ORG` | source organization login。 |
 | `GHPMV_TARGET_ORG` | target organization login。 |
 | `GHPMV_FIXTURE_REPO` | source fixture repository 名。 |
@@ -275,9 +276,9 @@ Source project URL: https://github.com/orgs/<source-org>/projects/<source-projec
 Source project number: <source-project-number>
 ```
 
-### 5.2 UI-only fixture を C# / Playwright で作成する
+### 5.2 View / Workflow fixture を GraphQL API + C# / Playwright で作成する
 
-`ghpmv setup --fixture` は public API で作れる repository / fields / items までを作ります。Views / Workflows は public API が無いため、続けて `ghpmv setup --fixture-ui` を実行し、C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で GitHub UI を操作して作成します。
+`ghpmv setup --fixture` は repository / fields / items までを作ります。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap など API 未対応設定と Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `
@@ -302,9 +303,9 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile source
 ```
 
-既に同名 Project が存在する場合、`--fixture --fixture-ui` の組み合わせでは Views / Workflows の重複作成を避けるため UI 適用は自動で skip されます。既存 Project に UI-only fixture を強制的に適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
+既に同名 Project が存在する場合、`--fixture --fixture-ui` の組み合わせでは Workflows の重複作成を避けるため UI 適用は自動で skip されます。既存 Project に fixture を強制的に適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
 
-> **再実行時の注意:** `setup --fixture-ui` は built-in Workflows を再設定できますが、既存の non-default Views を名前で再利用しません。同じ Project へ明示的に再実行すると `Fixture Board` / `Fixture Roadmap` が重複するため、最も安全なのは新しい fixture Project を使うことです。同じ Project で再検証する場合は、`View 1` を残して既存の `Fixture Board` / `Fixture Roadmap` を削除してから実行してください。
+> **再実行時の注意:** `setup --fixture-ui` の View import は既存 View を名前で再利用するため、`Fixture Board` / `Fixture Roadmap` は重複しません。Workflows は built-in entries を再設定できますが、複製した Auto-add workflow は重複し得るため、完全にクリーンな検証には新しい fixture Project を使用してください。
 
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 

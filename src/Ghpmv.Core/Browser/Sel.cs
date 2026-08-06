@@ -16,12 +16,6 @@ internal static class Sel
     // Enterprise SSO interstitial heading ("Single sign-on to <enterprise>", M7 discovery).
     private static readonly Regex SsoHeadingName = new("^Single sign-on to ");
 
-    // Active-tab menu item "Delete view" (D0: View options menu).
-    private static readonly Regex DeleteViewName = new("^Delete view");
-
-    // Confirmation button of the delete dialog.
-    private static readonly Regex DeleteButtonName = new("^Delete");
-
     // Filter-bar "View" button. D0: once a setting is changed the accessible name
     // becomes "Unsaved changes View", so an exact "View" match only works before edits.
     private static readonly Regex ViewMenuButtonName = new("^(Unsaved changes )?View$");
@@ -36,11 +30,6 @@ internal static class Sel
     /// <summary>Authoritative field catalog embedded in every Project view page.</summary>
     public static ILocator ProjectFieldData(IPage page) => page.Locator("#memex-columns-data");
 
-    /// <summary>Layout switch button (Table/Board/Roadmap) inside the View menu overlay.</summary>
-    public static ILocator ViewLayoutButton(IPage page, string layoutName)
-        => page.GetByRole(AriaRole.List, new() { Name = "Layout" })
-            .GetByRole(AriaRole.Button, new() { Name = layoutName, Exact = true });
-
     /// <summary>
     /// Configuration menu item. D0: label and current value are combined in the accessible
     /// name ("Group by: &lt;value&gt;"), so the item is located by label prefix.
@@ -48,25 +37,9 @@ internal static class Sel
     public static ILocator ConfigurationMenuItem(ILocator menu, string label)
         => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = new Regex($"^{Regex.Escape(label)}:") });
 
-    /// <summary>"New view" tab; clicking it opens the layout menu (Table/Board/Roadmap).</summary>
-    public static ILocator NewViewTab(IPage page)
-        => page.GetByRole(AriaRole.Tab, new() { Name = "New view" });
-
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
-
-    /// <summary>The currently selected view tab.</summary>
-    public static ILocator SelectedViewTab(IPage page)
-        => page.GetByRole(AriaRole.Tab, new() { Selected = true });
-
-    /// <summary>Rename textbox shown after double-clicking a view tab.</summary>
-    public static ILocator ViewNameTextbox(IPage page)
-        => page.GetByRole(AriaRole.Textbox, new() { Name = "Change view name" });
-
-    /// <summary>Filter-bar input.</summary>
-    public static ILocator FilterCombobox(IPage page)
-        => page.GetByRole(AriaRole.Combobox, new() { Name = "Filter" }).First;
 
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)
@@ -95,15 +68,6 @@ internal static class Sel
     public static ILocator SsoContinueButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { Name = "Continue", Exact = true });
 
-    /// <summary>"Delete view" item in the active tab's view options menu.</summary>
-    public static ILocator DeleteViewMenuItem(ILocator menu)
-        => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = DeleteViewName });
-
-    /// <summary>Confirm button of the delete-view confirmation dialog.</summary>
-    public static ILocator ConfirmDeleteButton(IPage page)
-        => page.Locator("[role='alertdialog'], [role='dialog']")
-            .GetByRole(AriaRole.Button, new() { NameRegex = DeleteButtonName }).First;
-
     // === Workflows (M7 discovery, 2026-07-05) ===
 
     // Saved Auto-add entries carry a kebab button whose label is appended to the link name.
@@ -118,7 +82,8 @@ internal static class Sel
     // line breaks that defeat a "$"-anchored pattern.
     private static readonly Regex WhenButtonName = new("^When ");
 
-    // Auto-add repository picker button: "When the filter matches a new or updated item : <repo>".
+    // Auto-add trigger heading. The repository button's accessible name differs between
+    // empty and configured workflows, so locate it relative to this stable heading.
     private static readonly Regex RepositoryButtonName = new("^When the filter matches a new or updated item");
 
     // "Set value : <status>" button (text "Status: <status>"). With a cleared binding the
@@ -140,6 +105,10 @@ internal static class Sel
     public static ILocator WorkflowHeading(IPage page, string name)
         => page.GetByRole(AriaRole.Heading, new() { Name = name, Exact = true, Level = 2 });
 
+    /// <summary>Header controls belonging to the detail pane identified by its workflow heading.</summary>
+    public static ILocator WorkflowHeader(IPage page, string name)
+        => WorkflowHeading(page, name).Locator("xpath=../..");
+
     /// <summary>
     /// Enable/disable control. The accessible name is not stable, so fall back to the
     /// single stateful control in the workflow detail pane.
@@ -152,25 +121,24 @@ internal static class Sel
                 "button[aria-pressed]:visible, [role='switch'][aria-checked]:visible, " +
                 "[role='checkbox'][aria-checked]:visible, input[type='checkbox']:visible"));
 
-    /// <summary>"Edit" button (view mode). Exact match — "Edit workflow name" also starts with "Edit".</summary>
-    public static ILocator EditWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Edit", Exact = true });
+    /// <summary>"Edit" button scoped to a specific workflow detail pane.</summary>
+    public static ILocator EditWorkflowButton(IPage page, string name)
+        => WorkflowHeader(page, name).GetByRole(AriaRole.Button, new() { Name = "Edit", Exact = true });
 
-    /// <summary>Edit-mode save button ("Save workflow" or "Save and turn on workflow").</summary>
-    public static ILocator SaveWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
-
-    /// <summary>Save button for an unsaved, disabled workflow; saving also enables it.</summary>
-    public static ILocator SaveAndTurnOnWorkflowButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Save and turn on workflow", Exact = true });
+    /// <summary>Edit-mode save button scoped to a specific workflow detail pane.</summary>
+    public static ILocator SaveWorkflowButton(IPage page, string name)
+        => WorkflowHeader(page, name).GetByRole(AriaRole.Button, new() { NameRegex = SaveWorkflowName });
 
     /// <summary>"When ... : &lt;value&gt;" buttons (content types, Auto-close status, Auto-add repository).</summary>
     public static ILocator WorkflowWhenButtons(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = WhenButtonName });
 
-    /// <summary>Auto-add repository picker button (disabled in view mode; text = repo short name).</summary>
+    /// <summary>Auto-add repository picker button in the block identified by its trigger heading.</summary>
     public static ILocator WorkflowRepositoryButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { NameRegex = RepositoryButtonName });
+        => WhenFilterMatchesHeading(page)
+            .Locator("xpath=../..")
+            .GetByRole(AriaRole.Button)
+            .First;
 
     /// <summary>Auto-add "When the filter matches..." section heading (h3) — marks Auto-add pages.</summary>
     public static ILocator WhenFilterMatchesHeading(IPage page)

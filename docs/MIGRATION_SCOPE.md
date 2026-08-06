@@ -27,23 +27,27 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Number fields and values | ✅ | Includes decimals, negative values and zero. |
 | Date fields and values | ✅ | |
 | Single-select fields and values | ✅ | Option name, color and description are migrated. |
-| Organization Issue Fields, including multi-select | ✅ with browser automation | Browser-assisted export reads every Project field and its underlying `issueFieldId` from the Projects UI, including linked fields that are hidden and unset on every item. The organization API supplies description, visibility, and options. API-only export stops without writing a snapshot when GitHub cannot enumerate the complete field connection. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
+| Organization Issue Fields, including multi-select | ✅ with browser automation / API best effort | GraphQL now enumerates multi-select Project fields and their options. Browser-assisted export still reads the underlying `issueFieldId` from the Projects UI so hidden or unset linked fields and same-name ordinary fields retain their exact identity. The organization API supplies description, visibility, and options. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
 | Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
 | Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests, usually migrated by GEI. Draft issue title and draft assignees are handled separately. |
 | Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
 
-### Current GraphQL limitations for multi-select fields
+### Current GraphQL limitations for linked Issue Fields
 
-GitHub announced multi-select fields for both Projects and Issue Fields in [public preview](https://github.blog/changelog/2026-07-23-multi-select-fields-for-projects-and-issues-in-public-preview/), but the GraphQL schema does not yet expose the complete Project field model.
+GitHub added `MULTI_SELECT`, `ProjectV2MultiSelectField`, and multi-select options to the
+GraphQL schema on [2026-07-27](https://docs.github.com/en/graphql/overview/changelog/2026#schema-changes-for-2026-07-27).
+The remaining gap is the identity of an organization Issue Field linked into a Project.
 
 | Limitation | Impact | Current handling |
 |---|---|---|
-| `ProjectV2FieldType` does not contain `MULTI_SELECT`. | GitHub's resolver cannot represent a linked multi-select Issue Field and returns the generic `Something went wrong while executing your query` error. The failure occurs while resolving the union node, so removing `dataType` from the selection does not make the connection reliable. | Browser-assisted export does not call the broken Project field connection. It reads the complete server-rendered `memex-columns-data` catalog instead. API-only export retries transient failures, then stops rather than producing an incomplete snapshot. |
-| A linked organization Issue Field is returned as `ProjectV2Field`; there is no distinct public typename or exposed underlying Issue Field ID. | The public Project field connection cannot reliably distinguish it from a normal Project field. | The Projects UI catalog includes `issueFieldId`; browser-assisted export uses that linkage and enriches it from `organization.issueFields`. |
+| `ProjectV2FieldConfiguration` exposes no underlying organization `issueFieldId`. | A linked field and an ordinary Project field can have the same name and data type. The public Project field connection cannot prove which one is linked when no item value identifies it. | The Projects UI catalog includes `issueFieldId`; browser-assisted export uses that linkage and enriches it from `organization.issueFields`. |
+| Linked multi-select fields are returned as `ProjectV2MultiSelectField`, the same public type used by ordinary Project multi-select fields. | GraphQL can enumerate the field, data type, and options, but the typename alone does not establish linkage. | API-only export correlates fields with observed Issue Field values and the organization catalog. Browser-assisted export preserves exact linkage, including hidden and unset fields. |
 | `ProjectV2ItemIssueFieldValue` exists only when a Project item has a value. | Item-value discovery alone cannot find an unset linked field. | Browser-assisted export enumerates the complete field catalog independently of items and views, so unset and hidden linked fields are retained. |
-| The complete Project fields connection can fail after a multi-select Issue Field is linked. | The public API has no alternative complete enumeration endpoint. | Browser-assisted export/verify uses the complete UI catalog. API-only mode reports a fatal completeness error and does not write or compare a partial snapshot. |
+| Hidden or unset linked fields have no `ProjectV2ItemIssueFieldValue` evidence. | Name/type correlation can be ambiguous, especially when an ordinary field has the same identity. | Browser-assisted export/verify uses the UI catalog for exact linkage. |
 
-Revisit the workaround when `ProjectV2FieldType` exposes `MULTI_SELECT` and the Project fields connection can identify linked Issue Fields directly. At that point, the browser field catalog can return to being optional for field completeness, the separate `FieldDataTypesQuery` paths can be removed, and native Project multi-select import support can be added. `FixtureProjectBuilderTests` enforces that every new snapshot field/value shape is represented in that fixture.
+The browser field catalog can be removed when the public Project field model exposes the
+underlying Issue Field identity directly. `FixtureProjectBuilderTests` enforces that every
+new snapshot field/value shape is represented in that fixture.
 
 ## Project items
 
@@ -60,14 +64,15 @@ Revisit the workaround when `ProjectV2FieldType` exposes `MULTI_SELECT` and the 
 
 ## Views
 
-Full-fidelity Views require `--enable-browser-automation`. GitHub's [versioned REST API](https://docs.github.com/en/rest/projects/projects?apiVersion=2026-03-10) can create basic organization Project views with a name, layout, filter, and visible fields, but it does not cover all settings that `ghpmv` migrates, and `ghpmv` does not currently use that endpoint.
+View names, layouts, filters, and ordered visible fields are imported through the public [`createProjectV2View` and `updateProjectV2View` GraphQL mutations](https://docs.github.com/en/graphql/reference/projects#createprojectv2view). Full-fidelity Views still require `--enable-browser-automation` for settings that the mutation inputs do not expose.
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| Table views | ✅ / best effort | Name, filter, the first sort key, visible-field membership, Slice by and related display options are migrated. Additional sort keys and visible-field order are exported but are not explicitly reproduced by the browser importer. |
+| Table views | ✅ / best effort | Name, layout, filter, and visible-field order use GraphQL. Group by, the first sort key, Slice by, and related display options use browser enrichment. Additional sort keys are exported but only the first is applied. |
 | Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
 | Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
-| View UI-only settings | ✅ | Exported/imported by browser automation where the UI exposes them. |
+| View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
+| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
 | View tab order | ❌ | Views are recreated, but tab drag-and-drop ordering is not reproduced in v1. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 
