@@ -13,6 +13,22 @@ public sealed record ProjectImportLog
 
     public bool? ImportCompleted { get; set; }
 
+    public bool TryMarkImportCompleted(
+        bool browserAutomationEnabled,
+        int viewWarningCount,
+        int workflowWarningCount)
+    {
+        if (CreatedProjectId is null
+            || ImportCompleted is not false
+            || (browserAutomationEnabled && (viewWarningCount > 0 || workflowWarningCount > 0)))
+        {
+            return false;
+        }
+
+        ImportCompleted = true;
+        return true;
+    }
+
     public string? PendingProjectDeletionId { get; set; }
 
     public Dictionary<string, PendingFieldOperation> PendingFields { get; init; } = new(StringComparer.Ordinal);
