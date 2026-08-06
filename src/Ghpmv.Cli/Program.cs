@@ -961,55 +961,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
-    BrowserSession? authenticatedFixtureUiSession = null;
-    GitHubGraphQLClient? authenticatedFixtureUiClient = null;
-    if (parseResult.GetValue(fixtureUiOption))
-    {
-        try
-        {
-            var token = parseResult.GetValue(tokenOption)
-                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
-                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
-                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
-                return 1;
-            }
-
-            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
-            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
-            authenticatedFixtureUiSession = new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(
-                    graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
-                Profile = parseResult.GetValue(setupBrowserProfileOption),
-            });
-            authenticatedFixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
-            authenticatedFixtureUiClient.OnRetry = Console.Error.WriteLine;
-            var apiLogin = await authenticatedFixtureUiClient.GetViewerLoginAsync(cancellationToken);
-            await authenticatedFixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
-        }
-        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
-        {
-            if (authenticatedFixtureUiSession is not null)
-            {
-                await authenticatedFixtureUiSession.DisposeAsync();
-            }
-
-            authenticatedFixtureUiClient?.Dispose();
-            Console.Error.WriteLine($"error: {exception.Message}");
-            return 1;
-        }
-    }
-
-    await using var fixtureUiSession = authenticatedFixtureUiSession;
-    using var fixtureUiClient = authenticatedFixtureUiClient;
-
     int? createdFixtureProjectNumber = null;
     FixtureProjectSetupResult? fixtureResult = null;
     if (parseResult.GetValue(fixtureOption))
@@ -1081,8 +1032,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var snapshot = FixtureUiSnapshotFactory.Create(parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
 
-        System.Diagnostics.Debug.Assert(fixtureUiSession is not null);
-        System.Diagnostics.Debug.Assert(fixtureUiClient is not null);
         var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
         var deployment = apiBaseUrl is null
             ? "api.github.com"
@@ -1105,7 +1054,33 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             return 0;
         }
 
+        var token = parseResult.GetValue(tokenOption)
+            ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+            ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+            ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+            return 1;
+        }
+
+        var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+            ? parseResult.GetValue(baseUrlOption)
+            : null;
+        var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+        await using var fixtureUiSession = new BrowserSession(new BrowserSessionOptions
+        {
+            BaseUrl = BrowserBaseUrl.Resolve(
+                graphQlBaseUri,
+                parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+            Profile = parseResult.GetValue(setupBrowserProfileOption),
+        });
+        using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
+        fixtureUiClient.OnRetry = Console.Error.WriteLine;
+        var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
+        await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
         File.Delete(uiCompletionPath);
+
         var apiViewImporter = new ProjectImporter(fixtureUiClient)
         {
             OperationLogDirectory = fixtureViewOperationDirectory,

@@ -106,8 +106,12 @@ public sealed class ProjectImporter
                     $"The project '{createdProjectId}' created by this operation was not found.");
             if (matches.Any(project => !string.Equals(project.Id, reconciled.Id, StringComparison.Ordinal)))
             {
+                await ReleaseReservedProjectCoreAsync(
+                    reconciled.Id,
+                    CancellationToken.None,
+                    allowPendingProject: true).ConfigureAwait(false);
                 throw new InvalidOperationException(
-                    $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'.");
+                    $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'. The Project created by this operation was removed.");
             }
 
             _operationLog.PendingProject = null;
@@ -171,7 +175,8 @@ public sealed class ProjectImporter
 
     private async Task ReleaseReservedProjectCoreAsync(
         string? expectedProjectId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowPendingProject = false)
     {
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
         if (expectedProjectId is not null
@@ -189,7 +194,7 @@ public sealed class ProjectImporter
 
         var projectId = _operationLog?.CreatedProjectId
             ?? throw new InvalidOperationException("This operation has no reserved Project to release.");
-        if (_operationLog.PendingProject is not null
+        if ((!allowPendingProject && _operationLog.PendingProject is not null)
             || _operationLog.PendingFields.Count > 0
             || _operationLog.PendingIssueFields.Count > 0
             || _operationLog.PendingIssueFieldLinks.Count > 0
@@ -197,6 +202,11 @@ public sealed class ProjectImporter
         {
             throw new InvalidOperationException(
                 $"Project '{projectId}' has pending import operations and cannot be released automatically.");
+        }
+
+        if (allowPendingProject)
+        {
+            _operationLog.PendingProject = null;
         }
 
         _operationLog.PendingProjectDeletionId = projectId;

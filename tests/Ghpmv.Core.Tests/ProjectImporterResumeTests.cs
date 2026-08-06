@@ -128,6 +128,48 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Strict_reservation_retry_compensates_owned_project_when_duplicate_appears()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-strict-project-resume-race-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "recorded-project",
+                    OwnerLogin = "target",
+                    Title = "Project",
+                    ExistingProjectIds = [],
+                },
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                Resume = true,
+                ReturnDuplicateOnResume = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ReserveProjectAsync("target", "Project", cancellationToken));
+
+            Assert.Contains("was removed", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
+            var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Null(log.CreatedProjectId);
+            Assert.Null(log.PendingProject);
+            Assert.Null(log.PendingProjectDeletionId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Recorded_project_id_is_not_replaced_by_same_title_candidate_on_resume()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -812,6 +854,8 @@ public class ProjectImporterResumeTests
 
         public bool ReturnDuplicateAfterCreate { get; init; }
 
+        public bool ReturnDuplicateOnResume { get; init; }
+
         public bool HideCreatedAfterCreate { get; init; }
 
         public bool ReplaceDurableProjectIdAfterCreate { get; init; }
@@ -847,6 +891,17 @@ public class ProjectImporterResumeTests
                 }
 
                 if (ReturnDuplicateAfterCreate && CreateMutationCount > 0)
+                {
+                    return Json(
+                        """
+                        {"data":{"organization":{"projectsV2":{"nodes":[
+                          {"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"},
+                          {"id":"PVT_other","number":8,"title":"Project","url":"https://github.com/orgs/target/projects/8"}
+                        ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                        """);
+                }
+
+                if (ReturnDuplicateOnResume && Resume)
                 {
                     return Json(
                         """
