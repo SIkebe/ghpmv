@@ -131,7 +131,18 @@ public sealed class WorkflowUiImporter
         await Sel.WorkflowsSidebar(page).WaitForAsync().ConfigureAwait(false);
 
         var autoAddApplied = 0;
+        var defaultAutoAddExists = await Sel.WorkflowLink(page, AutoAddDefaultName).CountAsync().ConfigureAwait(false) > 0;
         string? firstAutoAddName = null;
+        foreach (var candidate in workflows.Where(IsAutoAdd))
+        {
+            if (!string.Equals(candidate.Name, AutoAddDefaultName, StringComparison.Ordinal)
+                && await Sel.WorkflowLink(page, candidate.Name).CountAsync().ConfigureAwait(false) > 0)
+            {
+                firstAutoAddName = candidate.Name;
+                break;
+            }
+        }
+
         foreach (var workflow in workflows)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -150,6 +161,7 @@ public sealed class WorkflowUiImporter
                             page,
                             workflow,
                             autoAddApplied,
+                            defaultAutoAddExists,
                             firstAutoAddName,
                             cancellationToken).ConfigureAwait(false))
                     {
@@ -328,11 +340,15 @@ public sealed class WorkflowUiImporter
         IPage page,
         WorkflowSnapshot workflow,
         int autoAddApplied,
+        bool defaultAutoAddExists,
         string? firstAutoAddName,
         CancellationToken cancellationToken)
     {
         var targetWorkflowExists = await Sel.WorkflowLink(page, workflow.Name).CountAsync().ConfigureAwait(false) > 0;
-        var entryPoint = SelectAutoAddEntryPoint(autoAddApplied, targetWorkflowExists);
+        var entryPoint = SelectAutoAddEntryPoint(
+            autoAddApplied,
+            targetWorkflowExists,
+            defaultAutoAddExists);
         switch (entryPoint)
         {
             case AutoAddEntryPoint.Default:
@@ -342,7 +358,13 @@ public sealed class WorkflowUiImporter
                 await WorkflowUiExporter.OpenWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
                 break;
             case AutoAddEntryPoint.Duplicate:
-                await DuplicateAutoAddAsync(page, firstAutoAddName!, workflow.Name, cancellationToken).ConfigureAwait(false);
+                if (firstAutoAddName is null)
+                {
+                    _warnings.Add($"workflow '{workflow.Name}': no existing Auto-add workflow is available to duplicate; skipped");
+                    return false;
+                }
+
+                await DuplicateAutoAddAsync(page, firstAutoAddName, workflow.Name, cancellationToken).ConfigureAwait(false);
                 break;
         }
 
@@ -606,10 +628,11 @@ public sealed class WorkflowUiImporter
 
     internal static AutoAddEntryPoint SelectAutoAddEntryPoint(
         int autoAddApplied,
-        bool targetWorkflowExists)
+        bool targetWorkflowExists,
+        bool defaultWorkflowExists)
         => targetWorkflowExists
             ? AutoAddEntryPoint.Existing
-            : autoAddApplied == 0
+            : autoAddApplied == 0 && defaultWorkflowExists
                 ? AutoAddEntryPoint.Default
                 : AutoAddEntryPoint.Duplicate;
 

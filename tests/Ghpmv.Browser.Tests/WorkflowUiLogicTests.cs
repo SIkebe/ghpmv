@@ -125,17 +125,22 @@ public class WorkflowUiLogicTests
         => Assert.Equal(expected, WorkflowUiImporter.ShouldSaveAndTurnOn(enabled, isSaved));
 
     [Theory]
-    [InlineData(0, false, "Default")]
-    [InlineData(0, true, "Existing")]
-    [InlineData(1, false, "Duplicate")]
-    [InlineData(1, true, "Existing")]
+    [InlineData(0, false, true, "Default")]
+    [InlineData(0, false, false, "Duplicate")]
+    [InlineData(0, true, false, "Existing")]
+    [InlineData(1, false, true, "Duplicate")]
+    [InlineData(1, true, false, "Existing")]
     public void SelectAutoAddEntryPoint_reuses_partially_applied_workflows_on_retry(
         int autoAddApplied,
         bool targetWorkflowExists,
+        bool defaultWorkflowExists,
         string expected)
         => Assert.Equal(
             expected,
-            WorkflowUiImporter.SelectAutoAddEntryPoint(autoAddApplied, targetWorkflowExists).ToString());
+            WorkflowUiImporter.SelectAutoAddEntryPoint(
+                autoAddApplied,
+                targetWorkflowExists,
+                defaultWorkflowExists).ToString());
 
     // ----- pre-flight: Auto-add plan limit -----
 
