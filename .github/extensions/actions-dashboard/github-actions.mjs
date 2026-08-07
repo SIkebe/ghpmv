@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -31,6 +31,121 @@ async function runGh(args, workspacePath) {
 async function runGhText(args, workspacePath) {
     const { stdout } = await executeGh(args, workspacePath);
     return stdout;
+}
+
+function collectFailureLogLines() {
+    const contextLines = [];
+    const selectedLines = [];
+    const tailLines = [];
+    const pattern =
+        /\b(error|failed|failure|exception|fatal|exit code|assert|timed out)\b/i;
+    let afterMatch = 0;
+    let lastSelectedIndex = -1;
+    let lineIndex = 0;
+
+    function select(line) {
+        if (line.index <= lastSelectedIndex) {
+            return;
+        }
+        selectedLines.push(line);
+        lastSelectedIndex = line.index;
+        if (selectedLines.length > 160) {
+            selectedLines.shift();
+        }
+    }
+
+    return {
+        add(rawLine) {
+            const cleanText = rawLine.replace(/\u001b\[[0-9;]*m/g, "");
+            if (!cleanText) {
+                return;
+            }
+            const match = cleanText.match(pattern);
+            const excerptStart =
+                cleanText.length > 8 * 1024
+                    ? match
+                        ? Math.max(0, (match.index ?? 0) - 4 * 1024)
+                        : cleanText.length - 8 * 1024
+                    : 0;
+            const text = cleanText.slice(excerptStart, excerptStart + 8 * 1024);
+
+            const line = { index: lineIndex, text };
+            lineIndex += 1;
+            tailLines.push(line);
+            if (tailLines.length > 80) {
+                tailLines.shift();
+            }
+
+            if (match) {
+                for (const contextLine of contextLines) {
+                    select(contextLine);
+                }
+                select(line);
+                afterMatch = 3;
+            } else if (afterMatch > 0) {
+                select(line);
+                afterMatch -= 1;
+            }
+
+            contextLines.push(line);
+            if (contextLines.length > 2) {
+                contextLines.shift();
+            }
+        },
+        result() {
+            return (selectedLines.length > 0 ? selectedLines : tailLines).map(
+                (line) => line.text,
+            );
+        },
+    };
+}
+
+async function streamFailureLogExcerpt(args, workspacePath) {
+    return new Promise((resolve, reject) => {
+        const collector = collectFailureLogLines();
+        const child = spawn("gh", args, {
+            cwd: workspacePath,
+            windowsHide: true,
+        });
+        let pending = "";
+        let stderr = "";
+
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk) => {
+            const lines = `${pending}${chunk}`.split(/\r?\n/);
+            pending = lines.pop() ?? "";
+            for (const line of lines) {
+                collector.add(line);
+            }
+            while (pending.length > 64 * 1024) {
+                collector.add(pending.slice(0, 64 * 1024));
+                pending = pending.slice(64 * 1024);
+            }
+        });
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk) => {
+            stderr = `${stderr}${chunk}`.slice(-16 * 1024);
+        });
+        child.on("error", (error) => {
+            reject(new Error(`GitHub CLI request failed: ${error.message}`));
+        });
+        child.on("close", (code) => {
+            if (pending) {
+                collector.add(pending);
+            }
+            if (code === 0) {
+                resolve(collector.result());
+                return;
+            }
+            reject(
+                new Error(
+                    `GitHub CLI request failed: ${
+                        stderr.trim() || `process exited with code ${code}`
+                    }`,
+                ),
+            );
+        });
+    });
 }
 
 async function captureResult(operation) {
@@ -435,48 +550,6 @@ export async function loadRunDetails({
     };
 }
 
-function failureLogExcerpt(text) {
-    if (!text) {
-        return [];
-    }
-
-    const lines = text
-        .replace(/\u001b\[[0-9;]*m/g, "")
-        .split(/\r?\n/)
-        .filter(Boolean);
-    const interesting = new Set();
-    const pattern =
-        /\b(error|failed|failure|exception|fatal|exit code|assert|timed out)\b/i;
-
-    lines.forEach((line, index) => {
-        if (!pattern.test(line)) {
-            return;
-        }
-        for (
-            let context = Math.max(0, index - 2);
-            context <= Math.min(lines.length - 1, index + 3);
-            context += 1
-        ) {
-            interesting.add(context);
-        }
-    });
-
-    const selected =
-        interesting.size > 0
-            ? [...interesting].sort((left, right) => left - right).slice(-160)
-            : lines
-                  .slice(-80)
-                  .map(
-                      (_, index) =>
-                          Math.max(0, lines.length - 80) + index,
-                  );
-
-    return selected
-        .filter((index) => index >= 0)
-        .map((index) => lines[index])
-        .filter(Boolean);
-}
-
 export async function loadFailureDiagnostics({
     jobIds,
     repository,
@@ -485,16 +558,16 @@ export async function loadFailureDiagnostics({
 }) {
     const [logResult, artifactResult, annotationResults] = await Promise.all([
         captureResult(
-            runGhText(
-            [
-                "run",
-                "view",
-                String(runId),
-                "--repo",
-                repository,
-                "--log-failed",
-            ],
-            workspacePath,
+            streamFailureLogExcerpt(
+                [
+                    "run",
+                    "view",
+                    String(runId),
+                    "--repo",
+                    repository,
+                    "--log-failed",
+                ],
+                workspacePath,
             ),
         ),
         captureResult(
@@ -559,7 +632,7 @@ export async function loadFailureDiagnostics({
     return {
         annotations,
         artifacts,
-        logLines: failureLogExcerpt(logResult.value),
+        logLines: logResult.value ?? [],
         runId,
         warnings: [
             ...(logResult.error

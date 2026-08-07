@@ -425,8 +425,8 @@ async function handleRequest(entry, req, res) {
             });
             entry.failureDiagnostics.delete(runId);
             entry.runDetails.delete(runId);
-            await refreshRecentRuns(entry);
             writeJson(res, 202, { runId, status: "rerun_requested" });
+            refreshRecentRuns(entry).catch(() => undefined);
         } catch (error) {
             writeJson(res, 502, {
                 error:
