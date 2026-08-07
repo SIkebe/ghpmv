@@ -874,11 +874,16 @@ function renderRunDetail(container, run, details) {
   if (details.failedJobs) {
     const failurePanel = node("section", "failure-panel");
     const failureHeader = node("div", "failure-header");
-    const rerun = details.rerunnableFailedJobs
+    const rerun =
+      details.rerunnableFailedJobs &&
+      run.status === "completed" &&
+      statusKind(run) === "failed"
       ? node("button", "danger-button", "Rerun failed jobs")
       : null;
     if (rerun) rerun.type = "button";
     const rerunStatus = node("span", "rerun-status");
+    rerunStatus.setAttribute("role", "status");
+    rerunStatus.setAttribute("aria-live", "polite");
     failureHeader.append(
       node("h3", null, "Failure diagnostics"),
       rerunStatus,

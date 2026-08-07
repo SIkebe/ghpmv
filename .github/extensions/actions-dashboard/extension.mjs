@@ -613,7 +613,7 @@ await joinSession({
                     },
                 );
                 if (isNew) {
-                    await refreshEntry(entry).catch(() => undefined);
+                    refreshEntry(entry).catch(() => undefined);
                 }
 
                 const repository =
@@ -621,7 +621,11 @@ await joinSession({
                     entry.options.repository ??
                     "Current repository";
                 return {
-                    status: entry.state.error ? "Refresh failed" : "Live",
+                    status: entry.state.loading
+                        ? "Loading"
+                        : entry.state.error
+                          ? "Refresh failed"
+                          : "Live",
                     title: `${repository} Actions`,
                     url: entry.url,
                 };
