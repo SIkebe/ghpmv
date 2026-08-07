@@ -29,6 +29,18 @@ async function runGh(args, workspacePath) {
     return JSON.parse(stdout);
 }
 
+async function runGhArray(args, workspacePath) {
+    const { stdout } = await executeGh(args, workspacePath);
+    if (!stdout.trim()) {
+        return [];
+    }
+    const value = JSON.parse(stdout);
+    if (!Array.isArray(value)) {
+        throw new Error("GitHub CLI request returned a non-array JSON value.");
+    }
+    return value;
+}
+
 async function runGhText(args, workspacePath) {
     const { stdout } = await executeGh(args, workspacePath);
     return stdout;
@@ -845,7 +857,7 @@ export async function loadDashboard({
     const historyNow = new Date();
     const [history, workflowData, pullRequestData] = await Promise.all([
         loadRunHistory(nameWithOwner, since, historyNow, workspacePath),
-        runGh(
+        runGhArray(
             [
                 "workflow",
                 "list",
