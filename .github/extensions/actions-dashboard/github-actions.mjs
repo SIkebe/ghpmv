@@ -33,14 +33,6 @@ async function runGhText(args, workspacePath) {
     return stdout;
 }
 
-async function tryRunGh(args, workspacePath) {
-    try {
-        return await runGh(args, workspacePath);
-    } catch {
-        return null;
-    }
-}
-
 async function captureResult(operation) {
     try {
         return { error: null, value: await operation };
@@ -129,6 +121,7 @@ function buildMetrics(runs, days, now) {
         (run) => run.conclusion === "success" && run.runAttempt > 1,
     ).length;
     const queueTimes = selected
+        .filter((run) => run.runAttempt === 1)
         .map((run) => elapsedMs(run.createdAt, run.startedAt))
         .filter((value) => value !== null);
     const runtimes = selected
@@ -299,6 +292,47 @@ function normalizePullRequest(pullRequest) {
         title: pullRequest.title,
         url: pullRequest.url,
     };
+}
+
+async function loadCurrentPullRequest(repository, workspacePath) {
+    try {
+        const { stdout } = await execFileAsync(
+            "git",
+            ["branch", "--show-current"],
+            {
+                cwd: workspacePath,
+                encoding: "utf8",
+                windowsHide: true,
+            },
+        );
+        const branch = stdout.trim();
+        if (!branch) {
+            throw new Error(
+                "Cannot resolve PR readiness from a detached Git HEAD.",
+            );
+        }
+        return {
+            error: null,
+            value: await runGh(
+                [
+                    "pr",
+                    "view",
+                    branch,
+                    "--repo",
+                    repository,
+                    "--json",
+                    "number,title,url,headRefOid,mergeStateStatus,statusCheckRollup",
+                ],
+                workspacePath,
+            ),
+        };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("no pull requests found for branch")) {
+            return { error: null, value: null };
+        }
+        return { error: message, value: null };
+    }
 }
 
 function workflowName(run, workflowNames) {
@@ -724,17 +758,7 @@ export async function loadDashboard({
             ],
             workspacePath,
         ),
-        tryRunGh(
-            [
-                "pr",
-                "view",
-                "--repo",
-                nameWithOwner,
-                "--json",
-                "number,title,url,headRefOid,mergeStateStatus,statusCheckRollup",
-            ],
-            workspacePath,
-        ),
+        loadCurrentPullRequest(nameWithOwner, workspacePath),
     ]);
 
     const workflowNames = new Map(
@@ -777,7 +801,8 @@ export async function loadDashboard({
             windowDays: days,
             windows,
         },
-        pullRequest: normalizePullRequest(pullRequestData),
+        pullRequest: normalizePullRequest(pullRequestData.value),
+        pullRequestError: pullRequestData.error,
         repository: {
             defaultBranch: repositoryData.defaultBranchRef?.name ?? null,
             nameWithOwner,

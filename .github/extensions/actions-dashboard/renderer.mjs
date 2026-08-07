@@ -631,7 +631,14 @@ function readinessBadge(label, count, kind) {
   badge.append(statusDot(kind), document.createTextNode(count + " " + label));
   return badge;
 }
-function renderPullRequest(pr) {
+function renderPullRequest(pr, error) {
+  if (error) {
+    elements.prReadiness.replaceChildren(
+      node("div", "run-detail-error", "PR readiness is unavailable."),
+      node("div", "muted", error),
+    );
+    return;
+  }
   if (!pr) {
     elements.prReadiness.replaceChildren(
       node("div", null, "No pull request is associated with the checked-out branch."),
@@ -943,7 +950,7 @@ function renderRuns() {
       node("td", "mono", run.headBranch || "—"),
       statusCell,
       startedCell,
-      node("td", "mono", formatMs(run.startedAt ? new Date(run.startedAt) - new Date(run.createdAt) : null)),
+      node("td", "mono", formatMs(run.runAttempt === 1 && run.startedAt ? new Date(run.startedAt) - new Date(run.createdAt) : null)),
       node("td", "mono", formatMs(run.startedAt ? (run.status === "completed" ? new Date(run.updatedAt) : new Date()) - new Date(run.startedAt) : null)),
     );
 
@@ -997,7 +1004,7 @@ function render(state) {
   renderSummary(health.selectedWindow, health.defaultBranch, dashboard.repository.defaultBranch);
   renderWindows(health.windows);
   renderTrend(health.trend);
-  renderPullRequest(dashboard.pullRequest);
+  renderPullRequest(dashboard.pullRequest, dashboard.pullRequestError);
   renderWorkflows(dashboard.workflows);
   renderWorkflowOptions(dashboard.workflows);
   renderRuns();
