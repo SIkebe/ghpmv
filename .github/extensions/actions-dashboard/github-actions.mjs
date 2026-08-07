@@ -150,7 +150,7 @@ function buildMetrics(runs, days, now) {
     };
 }
 
-function buildWorkflowSummary(runs, now, configuredWorkflows) {
+export function buildWorkflowSummary(runs, now, configuredWorkflows) {
     const workflows = new Map(
         configuredWorkflows.map((workflow) => [
             String(workflow.id),

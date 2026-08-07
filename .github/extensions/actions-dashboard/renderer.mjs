@@ -496,6 +496,7 @@ let mutationToken = null;
 let cacheTimestamp = null;
 let filteredRunLimit = 100;
 const FILTER_PAGE_SIZE = 100;
+let pendingRunFocus = null;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -539,6 +540,27 @@ function statusDot(kind) {
   const icon = node("span", "status-dot " + kind, symbols[kind] || "−");
   icon.setAttribute("aria-hidden", "true");
   return icon;
+}
+
+function captureRunFocus() {
+  const active = document.activeElement;
+  if (!(active instanceof Element) || !active.dataset.focusKey) return null;
+  const owner = active.closest("[data-run-id]");
+  return owner
+    ? { focusKey: active.dataset.focusKey, runId: owner.dataset.runId }
+    : null;
+}
+
+function restoreRunFocus(runId) {
+  if (!pendingRunFocus || pendingRunFocus.runId !== String(runId)) return;
+  const owners = document.querySelectorAll('[data-run-id="' + runId + '"]');
+  const target = Array.from(owners)
+    .map((owner) => owner.querySelector('[data-focus-key="' + pendingRunFocus.focusKey + '"]'))
+    .find(Boolean);
+  if (target) {
+    pendingRunFocus = null;
+    target.focus();
+  }
 }
 
 function renderSummary(metrics, defaultBranch, defaultBranchName) {
@@ -720,6 +742,7 @@ function renderJob(job) {
   card.className = "job-card " + kind;
   card.open = kind === "failed";
   const summary = document.createElement("summary");
+  summary.dataset.focusKey = "job-" + job.databaseId;
   summary.append(
     statusDot(kind),
     node("span", "job-name", job.name),
@@ -842,6 +865,7 @@ function renderRunDetail(container, run, details) {
   external.href = run.url;
   external.target = "_blank";
   external.rel = "noopener noreferrer";
+  external.dataset.focusKey = "external";
   header.append(summary, external);
   const metadata = node("div", "run-metadata");
   metadata.append(
@@ -888,6 +912,7 @@ function renderRunDetail(container, run, details) {
       ? node("button", "danger-button", "Rerun failed jobs")
       : null;
     if (rerun) rerun.type = "button";
+    if (rerun) rerun.dataset.focusKey = "rerun";
     const rerunStatus = node("span", "rerun-status");
     rerunStatus.setAttribute("role", "status");
     rerunStatus.setAttribute("aria-live", "polite");
@@ -904,6 +929,7 @@ function renderRunDetail(container, run, details) {
       .then((result) => renderDiagnostics(diagnostics, result))
       .catch((error) => diagnostics.replaceChildren(node("div", "run-detail-error", error.message)));
   }
+  restoreRunFocus(run.databaseId);
 }
 
 async function toggleRunDetail(run, control, detailRow, container) {
@@ -924,6 +950,7 @@ async function toggleRunDetail(run, control, detailRow, container) {
 }
 
 function renderRuns() {
+  pendingRunFocus = captureRunFocus();
   const matches = matchingRuns();
   const hasFilters = filtersActive();
   const runs = hasFilters
@@ -932,9 +959,11 @@ function renderRuns() {
   const rows = runs.flatMap((run) => {
     const row = document.createElement("tr");
     row.className = "run-row";
+    row.dataset.runId = String(run.databaseId);
     const runCell = document.createElement("td");
     const title = node("button", "run-title-button", run.displayTitle);
     title.type = "button";
+    title.dataset.focusKey = "title";
     title.setAttribute("aria-expanded", "false");
     title.setAttribute("aria-controls", "run-detail-" + run.databaseId);
     runCell.append(title, node("span", "mono", "#" + run.number + " · " + run.event + (run.runAttempt > 1 ? " · attempt " + run.runAttempt : "")));
@@ -961,6 +990,7 @@ function renderRuns() {
     const detailCell = document.createElement("td");
     detailCell.colSpan = 7;
     const detail = node("div", "run-detail");
+    detail.dataset.runId = String(run.databaseId);
     detailCell.append(detail);
     detailRow.append(detailCell);
 
@@ -971,6 +1001,7 @@ function renderRuns() {
     return [row, detailRow];
   });
   elements.runs.replaceChildren(...rows);
+  if (pendingRunFocus) restoreRunFocus(pendingRunFocus.runId);
   elements.emptyState.hidden = runs.length !== 0;
   elements.loadMore.hidden = !hasFilters || runs.length >= matches.length;
   elements.loadMore.textContent = "Load " + Math.min(FILTER_PAGE_SIZE, matches.length - runs.length) + " more";

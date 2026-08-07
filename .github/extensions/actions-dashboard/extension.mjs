@@ -12,6 +12,7 @@ import {
     loadFailureDiagnostics,
     loadRecentRuns,
     loadRunDetails,
+    buildWorkflowSummary,
     isUnsuccessfulConclusion,
     rerunFailedJobs,
 } from "./github-actions.mjs";
@@ -151,6 +152,11 @@ async function refreshRecentRuns(entry) {
                 data: {
                     ...entry.state.data,
                     runs: history,
+                    workflows: buildWorkflowSummary(
+                        history,
+                        new Date(),
+                        entry.state.data.workflows,
+                    ),
                 },
                 recentError: null,
                 recentUpdatedAt: new Date().toISOString(),
