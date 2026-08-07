@@ -74,6 +74,16 @@ async function refreshEntry(entry) {
     if (entry.refreshPromise) {
         return entry.refreshPromise;
     }
+    if (entry.recentRefreshPromise) {
+        try {
+            await entry.recentRefreshPromise;
+        } catch {
+            // A full refresh can recover after the recent refresh records its error.
+        }
+        if (entry.refreshPromise) {
+            return entry.refreshPromise;
+        }
+    }
 
     entry.state = {
         ...entry.state,
