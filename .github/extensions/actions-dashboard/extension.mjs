@@ -257,6 +257,7 @@ async function refreshRerun(entry, previousRun) {
     broadcast(entry, "recent");
 
     let lastError = null;
+    let lastObservedRun = previousRun;
     try {
         for (const delay of [0, 1000, 2000, 4000, 8000, 15000]) {
             if (delay > 0) {
@@ -272,6 +273,7 @@ async function refreshRerun(entry, previousRun) {
                     workspacePath: entry.workspacePath,
                 });
                 lastError = null;
+                lastObservedRun = run;
                 if (
                     run.runAttempt > previousRun.runAttempt ||
                     run.status !== previousRun.status ||
@@ -283,6 +285,13 @@ async function refreshRerun(entry, previousRun) {
             } catch (error) {
                 lastError = error;
             }
+        }
+        storeTargetedRun(entry, lastObservedRun);
+        try {
+            await refreshRecentRuns(entry);
+            lastError = null;
+        } catch (error) {
+            lastError = error;
         }
     } finally {
         if (lastError) {

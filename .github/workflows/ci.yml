@@ -41,7 +41,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          $files = @(git diff --name-only --diff-filter=ACDMRT "$env:BASE_SHA...$env:HEAD_SHA")
+          $files = @(git diff --name-only --no-renames --diff-filter=ACDMRT "$env:BASE_SHA...$env:HEAD_SHA")
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
