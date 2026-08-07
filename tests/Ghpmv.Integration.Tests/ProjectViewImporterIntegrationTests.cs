@@ -30,9 +30,13 @@ public class ProjectViewImporterIntegrationTests
         using var client = new GitHubGraphQLClient(Token);
         var title = "ghpmv-view-api-test-" + Guid.NewGuid().ToString("N");
         var snapshot = Snapshot(title);
-        var (projectId, projectNumber) = await CreateProjectAsync(client, title, cancellationToken);
         try
         {
+            var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
+                client,
+                TargetOrg,
+                title,
+                cancellationToken);
             var result = await new ProjectImporter(client)
             {
                 OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
@@ -62,9 +66,10 @@ public class ProjectViewImporterIntegrationTests
         }
         finally
         {
-            await client.QueryAsync(
-                "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
-                new { projectId },
+            await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                client,
+                TargetOrg,
+                title,
                 CancellationToken.None);
         }
     }
@@ -147,29 +152,4 @@ public class ProjectViewImporterIntegrationTests
         return snapshot ?? throw new InvalidOperationException("The imported project could not be exported.");
     }
 
-    private static async Task<(string Id, int Number)> CreateProjectAsync(
-        GitHubGraphQLClient client,
-        string title,
-        CancellationToken cancellationToken)
-    {
-        var ownerData = await client.QueryAsync(
-            "query($login: String!) { organization(login: $login) { id } }",
-            new { login = TargetOrg },
-            cancellationToken);
-        var projectData = await client.QueryAsync(
-            """
-            mutation($ownerId: ID!, $title: String!) {
-              createProjectV2(input: { ownerId: $ownerId, title: $title }) {
-                projectV2 {
-                  id
-                  number
-                }
-              }
-            }
-            """,
-            new { ownerId = ownerData.GetProperty("organization").GetProperty("id").GetString(), title },
-            cancellationToken);
-        var project = projectData.GetProperty("createProjectV2").GetProperty("projectV2");
-        return (project.GetProperty("id").GetString()!, project.GetProperty("number").GetInt32());
-    }
 }

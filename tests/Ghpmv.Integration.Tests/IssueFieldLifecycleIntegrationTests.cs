@@ -33,13 +33,15 @@ public class IssueFieldLifecycleIntegrationTests
         var title = $"ghpmv-issue-field-test-{suffix}";
         var createLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
         var updateLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        string? projectId = null;
         string? issueFieldId = null;
 
         try
         {
-            var project = await CreateProjectAsync(client, title, cancellationToken);
-            projectId = project.Id;
+            var project = await TemporaryProjectFixture.CreateAsync(
+                client,
+                TargetOrg,
+                title,
+                cancellationToken);
             var initial = Snapshot(
                 title,
                 IssueField(
@@ -87,8 +89,11 @@ public class IssueFieldLifecycleIntegrationTests
                 cancellationToken);
             AssertIssueField(updated.Fields.Single(), updatedField);
 
-            await DeleteProjectAsync(client, projectId);
-            projectId = null;
+            await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                client,
+                TargetOrg,
+                title,
+                CancellationToken.None);
             await DeleteIssueFieldAsync(client, issueFieldId);
             issueFieldId = null;
             await WaitUntilIssueFieldIsDeletedAsync(client, fieldName, cancellationToken);
@@ -97,10 +102,11 @@ public class IssueFieldLifecycleIntegrationTests
         {
             try
             {
-                if (projectId is not null)
-                {
-                    await DeleteProjectAsync(client, projectId);
-                }
+                await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                    client,
+                    TargetOrg,
+                    title,
+                    CancellationToken.None);
             }
             finally
             {
@@ -238,37 +244,6 @@ public class IssueFieldLifecycleIntegrationTests
             && actual is not null
             && expected.Select(option => (option.Name, option.Color, option.Description))
                 .SequenceEqual(actual.Select(option => (option.Name, option.Color, option.Description)));
-
-    private static async Task<(string Id, int Number)> CreateProjectAsync(
-        GitHubGraphQLClient client,
-        string title,
-        CancellationToken cancellationToken)
-    {
-        var ownerData = await client.QueryAsync(
-            "query($login: String!) { organization(login: $login) { id } }",
-            new { login = TargetOrg },
-            cancellationToken);
-        var projectData = await client.QueryAsync(
-            """
-            mutation($ownerId: ID!, $title: String!) {
-              createProjectV2(input: { ownerId: $ownerId, title: $title }) {
-                projectV2 { id number }
-              }
-            }
-            """,
-            new { ownerId = ownerData.GetProperty("organization").GetProperty("id").GetString(), title },
-            cancellationToken);
-        var project = projectData.GetProperty("createProjectV2").GetProperty("projectV2");
-        return (project.GetProperty("id").GetString()!, project.GetProperty("number").GetInt32());
-    }
-
-    private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
-    {
-        await client.QueryAsync(
-            "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
-            new { projectId },
-            CancellationToken.None);
-    }
 
     private static async Task DeleteIssueFieldAsync(GitHubGraphQLClient client, string issueFieldId)
     {
