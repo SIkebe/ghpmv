@@ -715,6 +715,8 @@ export async function loadDashboard({
                 "workflow",
                 "list",
                 "--all",
+                "--limit",
+                "1000",
                 "--repo",
                 nameWithOwner,
                 "--json",
