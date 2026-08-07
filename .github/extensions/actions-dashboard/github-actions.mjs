@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const DAY_MS = 24 * 60 * 60 * 1000;
+const RERUN_WINDOW_MS = 30 * DAY_MS;
 
 async function executeGh(args, workspacePath) {
     try {
@@ -202,6 +203,15 @@ export function isUnsuccessfulConclusion(conclusion) {
     return (
         Boolean(conclusion) &&
         !["success", "neutral", "skipped"].includes(conclusion)
+    );
+}
+
+export function isRerunAgeEligible(run, now = Date.now()) {
+    const createdAt = Date.parse(run.createdAt);
+    return (
+        Number.isFinite(createdAt) &&
+        createdAt <= now &&
+        createdAt >= now - RERUN_WINDOW_MS
     );
 }
 
@@ -543,11 +553,28 @@ export async function loadRunDetails({
             headSha: metadata.head_sha,
             triggeringActor: metadata.triggering_actor?.login ?? null,
         },
-        rerunnableFailedJobs: jobs.filter(
-            (job) => job.conclusion === "failure",
+        rerunnableFailedJobs: jobs.filter((job) =>
+            isUnsuccessfulConclusion(job.conclusion),
         ).length,
         runId,
     };
+}
+
+export async function loadRun({
+    repository,
+    runId,
+    workflowName: knownWorkflowName,
+    workspacePath,
+}) {
+    const run = await runGh(
+        ["api", `repos/${repository}/actions/runs/${runId}`],
+        workspacePath,
+    );
+    const workflowNames = new Map();
+    if (knownWorkflowName) {
+        workflowNames.set(String(run.workflow_id), knownWorkflowName);
+    }
+    return normalizeRun(run, workflowNames);
 }
 
 export async function loadFailureDiagnostics({
@@ -679,6 +706,7 @@ export async function loadRecentRuns({
         [
             "run",
             "list",
+            "--all",
             "--repo",
             repository,
             "--limit",

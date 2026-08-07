@@ -532,6 +532,11 @@ function statusKind(run) {
   if (run.conclusion === "neutral" || run.conclusion === "skipped") return "neutral";
   return "failed";
 }
+function isRerunAgeEligible(run) {
+  const createdAt = Date.parse(run.createdAt);
+  const now = Date.now();
+  return Number.isFinite(createdAt) && createdAt <= now && createdAt >= now - 30 * 24 * 60 * 60 * 1000;
+}
 function statusLabel(run) {
   return (run.status !== "completed" ? run.status : run.conclusion || "completed").replaceAll("_", " ");
 }
@@ -908,12 +913,14 @@ function renderRunDetail(container, run, details) {
     const rerun =
       details.rerunnableFailedJobs &&
       run.status === "completed" &&
-      statusKind(run) === "failed"
+      statusKind(run) === "failed" &&
+      isRerunAgeEligible(run)
       ? node("button", "danger-button", "Rerun failed jobs")
       : null;
     if (rerun) rerun.type = "button";
     if (rerun) rerun.dataset.focusKey = "rerun";
     const rerunStatus = node("span", "rerun-status");
+    if (!isRerunAgeEligible(run)) rerunStatus.textContent = "Reruns are available for 30 days after the original run.";
     rerunStatus.setAttribute("role", "status");
     rerunStatus.setAttribute("aria-live", "polite");
     failureHeader.append(

@@ -11,8 +11,10 @@ import {
     loadDashboard,
     loadFailureDiagnostics,
     loadRecentRuns,
+    loadRun,
     loadRunDetails,
     buildWorkflowSummary,
+    isRerunAgeEligible,
     isUnsuccessfulConclusion,
     rerunFailedJobs,
 } from "./github-actions.mjs";
@@ -35,8 +37,8 @@ function writeJson(res, statusCode, value) {
     res.end(JSON.stringify(value));
 }
 
-function broadcast(entry, eventName = "update") {
-    const message = `event: ${eventName}\ndata: ${JSON.stringify({
+function eventMessage(entry, eventName) {
+    return `event: ${eventName}\ndata: ${JSON.stringify({
         error: entry.state.error,
         loading: entry.state.loading,
         healthUpdatedAt: entry.state.healthUpdatedAt,
@@ -44,6 +46,10 @@ function broadcast(entry, eventName = "update") {
         recentUpdatedAt: entry.state.recentUpdatedAt,
         updatedAt: entry.state.updatedAt,
     })}\n\n`;
+}
+
+function broadcast(entry, eventName = "update") {
+    const message = eventMessage(entry, eventName);
 
     for (const client of entry.clients) {
         if (client.destroyed || client.writableEnded) {
@@ -91,6 +97,8 @@ async function refreshEntry(entry) {
             };
             entry.failureDiagnostics.clear();
             entry.runDetails.clear();
+            entry.incrementalRuns = data.runs.slice(0, entry.options.limit);
+            entry.targetedRunUpdates.clear();
             return data;
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
@@ -108,6 +116,40 @@ async function refreshEntry(entry) {
     })();
 
     return entry.refreshPromise;
+}
+
+function mergeRunUpdates(entry, runs) {
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const mergedRuns = new Map(
+        entry.state.data.runs.map((run) => [run.databaseId, run]),
+    );
+    for (const run of runs) {
+        entry.failureDiagnostics.delete(run.databaseId);
+        entry.runDetails.delete(run.databaseId);
+        mergedRuns.set(run.databaseId, run);
+    }
+    const history = [...mergedRuns.values()]
+        .filter((run) => new Date(run.createdAt).getTime() >= cutoff)
+        .sort(
+            (left, right) =>
+                new Date(right.createdAt).getTime() -
+                new Date(left.createdAt).getTime(),
+        );
+    entry.state = {
+        ...entry.state,
+        data: {
+            ...entry.state.data,
+            runs: history,
+            workflows: buildWorkflowSummary(
+                history,
+                new Date(),
+                entry.state.data.workflows,
+            ),
+        },
+        recentError: null,
+        recentUpdatedAt: new Date().toISOString(),
+    };
+    return history;
 }
 
 async function refreshRecentRuns(entry) {
@@ -130,40 +172,14 @@ async function refreshRecentRuns(entry) {
                 repository: entry.state.data.repository.nameWithOwner,
                 workspacePath,
             });
-            const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
-            const mergedRuns = new Map(
-                entry.state.data.runs.map((run) => [run.databaseId, run]),
-            );
             for (const run of runs) {
-                entry.failureDiagnostics.delete(run.databaseId);
-                entry.runDetails.delete(run.databaseId);
-                mergedRuns.set(run.databaseId, run);
+                entry.targetedRunUpdates.delete(run.databaseId);
             }
-            const history = [...mergedRuns.values()]
-                .filter(
-                    (run) =>
-                        new Date(run.createdAt).getTime() >= cutoff,
-                )
-                .sort(
-                    (left, right) =>
-                        new Date(right.createdAt).getTime() -
-                        new Date(left.createdAt).getTime(),
-                );
-            entry.state = {
-                ...entry.state,
-                data: {
-                    ...entry.state.data,
-                    runs: history,
-                    workflows: buildWorkflowSummary(
-                        history,
-                        new Date(),
-                        entry.state.data.workflows,
-                    ),
-                },
-                recentError: null,
-                recentUpdatedAt: new Date().toISOString(),
-            };
-            return history;
+            entry.incrementalRuns = [
+                ...runs,
+                ...entry.targetedRunUpdates.values(),
+            ];
+            return mergeRunUpdates(entry, runs);
         } catch (error) {
             entry.state = {
                 ...entry.state,
@@ -178,6 +194,48 @@ async function refreshRecentRuns(entry) {
     })();
 
     return entry.recentRefreshPromise;
+}
+
+async function refreshRerun(entry, previousRun) {
+    try {
+        let run;
+        for (const delay of [0, 1000, 2000]) {
+            if (delay > 0) {
+                await new Promise((resolveDelay) =>
+                    setTimeout(resolveDelay, delay),
+                );
+            }
+            run = await loadRun({
+                repository: entry.state.data.repository.nameWithOwner,
+                runId: previousRun.databaseId,
+                workflowName: previousRun.workflowName,
+                workspacePath,
+            });
+            if (
+                run.runAttempt > previousRun.runAttempt ||
+                run.status !== previousRun.status ||
+                run.updatedAt !== previousRun.updatedAt
+            ) {
+                break;
+            }
+        }
+        entry.targetedRunUpdates.set(run.databaseId, run);
+        entry.incrementalRuns = [
+            run,
+            ...entry.incrementalRuns.filter(
+                (candidate) => candidate.databaseId !== run.databaseId,
+            ),
+        ];
+        mergeRunUpdates(entry, [run]);
+    } catch (error) {
+        entry.state = {
+            ...entry.state,
+            recentError:
+                error instanceof Error ? error.message : String(error),
+        };
+    } finally {
+        broadcast(entry, "recent");
+    }
 }
 
 async function getFailureDiagnostics(entry, runId) {
@@ -295,7 +353,7 @@ async function handleRequest(entry, req, res) {
         writeJson(res, 200, {
             recentError: entry.state.recentError,
             recentUpdatedAt: entry.state.recentUpdatedAt,
-            runs: entry.state.data?.runs.slice(0, entry.options.limit) ?? [],
+            runs: entry.incrementalRuns,
             workflows: entry.state.data?.workflows ?? [],
         });
         return;
@@ -309,6 +367,7 @@ async function handleRequest(entry, req, res) {
         });
         res.write(": connected\n\n");
         entry.clients.add(res);
+        res.write(eventMessage(entry, "update"));
         req.on("close", () => entry.clients.delete(res));
         return;
     }
@@ -408,6 +467,12 @@ async function handleRequest(entry, req, res) {
             });
             return;
         }
+        if (!isRerunAgeEligible(run)) {
+            writeJson(res, 409, {
+                error: "GitHub only allows workflow reruns within 30 days of the original run.",
+            });
+            return;
+        }
 
         try {
             const details = await getRunDetails(entry, runId);
@@ -426,7 +491,7 @@ async function handleRequest(entry, req, res) {
             entry.failureDiagnostics.delete(runId);
             entry.runDetails.delete(runId);
             writeJson(res, 202, { runId, status: "rerun_requested" });
-            refreshRecentRuns(entry).catch(() => undefined);
+            refreshRerun(entry, run).catch(() => undefined);
         } catch (error) {
             writeJson(res, 502, {
                 error:
@@ -445,6 +510,7 @@ async function startServer(options) {
     const entry = {
         clients: new Set(),
         failureDiagnostics: new Map(),
+        incrementalRuns: [],
         mutationToken: randomUUID(),
         options,
         recentRefreshPromise: undefined,
@@ -460,6 +526,7 @@ async function startServer(options) {
             recentUpdatedAt: null,
             updatedAt: null,
         },
+        targetedRunUpdates: new Map(),
         url: undefined,
     };
 
