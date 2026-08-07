@@ -19,23 +19,86 @@ env:
   DOTNET_NOLOGO: true
 
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      dotnet: ${{ steps.classify.outputs.dotnet }}
+      extensions: ${{ steps.classify.outputs.extensions }}
+      workflows: ${{ steps.classify.outputs.workflows }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed paths
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          $files = @(git diff --name-only --no-renames --diff-filter=ACDMRT "$env:BASE_SHA...$env:HEAD_SHA")
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+          $dotnet = $false
+          $extensions = $false
+          $workflows = $false
+          foreach ($file in $files) {
+            $path = $file.Replace('\', '/')
+            if ($path.StartsWith('.github/extensions/')) {
+              $extensions = $true
+              continue
+            }
+            if ($path.StartsWith('.github/workflows/') -or $path.StartsWith('tools/ghalint/')) {
+              $workflows = $true
+              continue
+            }
+            if (
+              $path.StartsWith('docs/') -or
+              $path -eq 'examples/README.md' -or
+              $path -eq '.github/copilot-instructions.md' -or
+              $path -eq 'PLAN.md' -or
+              $path -match '^(\.gitattributes|\.gitignore|LICENSE(?:\..*)?|README(?:\..*)?)$'
+            ) {
+              continue
+            }
+            $dotnet = $true
+          }
+
+          "dotnet=$($dotnet.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "extensions=$($extensions.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "workflows=$($workflows.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
   ghalint:
     name: ghalint
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      - name: Skip workflow lint
+        if: ${{ needs.changes.outputs.workflows != 'true' }}
+        run: Write-Host 'No GitHub Actions workflow or ghalint configuration changed.'
       - name: Checkout
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup Go
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: tools/ghalint/go.mod
       - name: Install ghalint
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
         run: |
           $goModPath = 'tools/ghalint/go.mod'
           $versionLine = Get-Content $goModPath | Where-Object { $_ -match 'github\.com/suzuki-shunsuke/ghalint\s+v\d+\.\d+\.\d+' } | Select-Object -First 1
@@ -47,16 +110,15 @@ jobs:
           go install "github.com/suzuki-shunsuke/ghalint/cmd/ghalint@$version"
           Join-Path (go env GOPATH) 'bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Run ghalint
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
         run: ghalint run
 
-  build-test:
-    name: Build and test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+  extensions:
+    name: Extensions
+    needs: changes
+    if: ${{ needs.changes.outputs.extensions == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -65,11 +127,52 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate extension modules
+        run: |
+          if (-not (Test-Path '.github/extensions' -PathType Container)) {
+            Write-Host 'No extension directory remains to validate.'
+            exit 0
+          }
+          $files = @(Get-ChildItem '.github/extensions' -Recurse -Filter '*.mjs' -File)
+          if ($files.Count -eq 0) {
+            Write-Host 'No extension modules remain to validate.'
+            exit 0
+          }
+          foreach ($file in $files) {
+            node --check $file.FullName
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+  build-test:
+    name: Build and test (${{ matrix.os }})
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ needs.changes.outputs.dotnet == 'true' && matrix.os || 'ubuntu-latest' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Skip .NET validation
+        if: ${{ needs.changes.outputs.dotnet != 'true' }}
+        run: Write-Host 'No .NET-affecting paths changed.'
+      - name: Checkout
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup .NET SDK
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - name: Cache NuGet packages
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
@@ -77,15 +180,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
       - name: Restore
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: dotnet restore Ghpmv.slnx
       - name: Build
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: dotnet build Ghpmv.slnx -c Release --no-restore -warnaserror
       - name: Test deterministic suites
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: |
           dotnet test tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj -c Release --no-build --logger trx
           dotnet test tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj -c Release --no-build --filter "Category!=E2E" --logger trx
       - name: Upload test result logs
-        if: ${{ failure() }}
+        if: ${{ failure() && needs.changes.outputs.dotnet == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-results-${{ matrix.os }}
@@ -95,6 +201,8 @@ jobs:
 
   live-api:
     name: Live GitHub API
+    needs: changes
+    if: ${{ needs.changes.outputs.dotnet == 'true' }}
     permissions:
       contents: read
     uses: ./.github/workflows/live-api.yml
@@ -103,7 +211,8 @@ jobs:
 
   publish:
     name: Publish (${{ matrix.rid }})
-    needs: [build-test, live-api]
+    needs: [changes, build-test, live-api]
+    if: ${{ always() && needs.changes.result == 'success' && needs.build-test.result == 'success' && needs.live-api.result != 'failure' && needs.live-api.result != 'cancelled' }}
     strategy:
       fail-fast: false
       matrix:
@@ -117,21 +226,27 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             smoke: true
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ needs.changes.outputs.dotnet == 'true' && matrix.os || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions:
       contents: read
     steps:
+      - name: Skip publish validation
+        if: ${{ needs.changes.outputs.dotnet != 'true' }}
+        run: Write-Host 'No .NET-affecting paths changed.'
       - name: Checkout
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Setup .NET SDK
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - name: Cache NuGet packages
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.nuget/packages
@@ -139,18 +254,63 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-nuget-
       - name: Publish self-contained (${{ matrix.rid }})
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: dotnet publish src/Ghpmv.Cli -c Release --self-contained true -r ${{ matrix.rid }} -o artifacts/sc-${{ matrix.rid }}
       - name: Publish framework-dependent (portable)
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: dotnet publish src/Ghpmv.Cli -c Release --self-contained false -o artifacts/fdd
       - name: Smoke test (self-contained)
-        if: ${{ matrix.smoke }}
+        if: ${{ needs.changes.outputs.dotnet == 'true' && matrix.smoke }}
         shell: pwsh
         run: |
           $exe = Join-Path 'artifacts' "sc-${{ matrix.rid }}" ($IsWindows ? 'ghpmv.exe' : 'ghpmv')
           & $exe --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Smoke test (framework-dependent)
+        if: ${{ needs.changes.outputs.dotnet == 'true' }}
         shell: pwsh
         run: |
           dotnet artifacts/fdd/ghpmv.dll --version
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+  required:
+    name: CI gate
+    needs: [changes, ghalint, extensions, build-test, live-api, publish]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Require applicable checks
+        env:
+          BUILD_TEST_RESULT: ${{ needs.build-test.result }}
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          DOTNET_CHANGED: ${{ needs.changes.outputs.dotnet }}
+          EXTENSIONS_CHANGED: ${{ needs.changes.outputs.extensions }}
+          EXTENSIONS_RESULT: ${{ needs.extensions.result }}
+          GHALINT_RESULT: ${{ needs.ghalint.result }}
+          LIVE_API_RESULT: ${{ needs.live-api.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          WORKFLOWS_CHANGED: ${{ needs.changes.outputs.workflows }}
+        run: |
+          if ($env:CHANGES_RESULT -ne 'success') {
+            throw "Change classification did not succeed: $env:CHANGES_RESULT"
+          }
+
+          $checks = @(
+            @{ Name = 'ghalint'; Required = $env:WORKFLOWS_CHANGED -eq 'true'; Result = $env:GHALINT_RESULT },
+            @{ Name = 'extensions'; Required = $env:EXTENSIONS_CHANGED -eq 'true'; Result = $env:EXTENSIONS_RESULT },
+            @{ Name = 'build-test'; Required = $env:DOTNET_CHANGED -eq 'true'; Result = $env:BUILD_TEST_RESULT },
+            @{ Name = 'live-api'; Required = $env:DOTNET_CHANGED -eq 'true'; Result = $env:LIVE_API_RESULT },
+            @{ Name = 'publish'; Required = $env:DOTNET_CHANGED -eq 'true'; Result = $env:PUBLISH_RESULT }
+          )
+
+          foreach ($check in $checks) {
+            if ($check.Required -and $check.Result -ne 'success') {
+              throw "Required job '$($check.Name)' did not succeed: $($check.Result)"
+            }
+            if (-not $check.Required -and $check.Result -notin @('skipped', 'success')) {
+              throw "Non-applicable job '$($check.Name)' ended unexpectedly: $($check.Result)"
+            }
+          }
