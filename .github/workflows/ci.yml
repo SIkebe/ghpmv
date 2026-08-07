@@ -100,7 +100,6 @@ jobs:
     uses: ./.github/workflows/live-api.yml
     secrets:
       GHPMV_TEST_TOKEN: ${{ secrets.GHPMV_TEST_TOKEN }}
-      GPM_TEST_TOKEN: ${{ secrets.GPM_TEST_TOKEN }}
 
   publish:
     name: Publish (${{ matrix.rid }})

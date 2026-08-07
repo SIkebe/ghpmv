@@ -5,8 +5,6 @@ on:
     secrets:
       GHPMV_TEST_TOKEN:
         required: false
-      GPM_TEST_TOKEN:
-        required: false
   workflow_dispatch:
   schedule:
     - cron: '17 18 * * *'
@@ -33,12 +31,12 @@ jobs:
     permissions:
       contents: read
     env:
-      GHPMV_TEST_TOKEN: ${{ secrets.GHPMV_TEST_TOKEN || secrets.GPM_TEST_TOKEN }}
-      GHPMV_TEST_ORG: ${{ vars.GHPMV_TEST_ORG || vars.GPM_TEST_ORG || 'gpm-source' }}
-      GHPMV_TEST_PROJECT_NUMBER: ${{ vars.GHPMV_TEST_PROJECT_NUMBER || vars.GPM_TEST_PROJECT_NUMBER || '89' }}
-      GHPMV_TEST_FIXTURE_REPO: ${{ vars.GHPMV_TEST_FIXTURE_REPO || vars.GPM_TEST_FIXTURE_REPO || 'fixture-repo2' }}
-      GHPMV_TEST_TARGET_ORG: ${{ vars.GHPMV_TEST_TARGET_ORG || vars.GPM_TEST_TARGET_ORG || 'gpm-target' }}
-      GHPMV_TEST_TARGET_FIXTURE_REPO: ${{ vars.GHPMV_TEST_TARGET_FIXTURE_REPO || vars.GPM_TEST_TARGET_FIXTURE_REPO || 'fixture-repo' }}
+      GHPMV_TEST_TOKEN: ${{ secrets.GHPMV_TEST_TOKEN }}
+      GHPMV_TEST_ORG: ${{ vars.GHPMV_TEST_ORG || 'gpm-source' }}
+      GHPMV_TEST_PROJECT_NUMBER: ${{ vars.GHPMV_TEST_PROJECT_NUMBER || '89' }}
+      GHPMV_TEST_FIXTURE_REPO: ${{ vars.GHPMV_TEST_FIXTURE_REPO || 'fixture-repo2' }}
+      GHPMV_TEST_TARGET_ORG: ${{ vars.GHPMV_TEST_TARGET_ORG || 'gpm-target' }}
+      GHPMV_TEST_TARGET_FIXTURE_REPO: ${{ vars.GHPMV_TEST_TARGET_FIXTURE_REPO || 'fixture-repo' }}
     steps:
       - name: Check credentials
         id: credentials
@@ -51,7 +49,7 @@ jobs:
           }
 
           if ($env:EVENT_NAME -in @('schedule', 'workflow_dispatch')) {
-            throw 'GHPMV_TEST_TOKEN or GPM_TEST_TOKEN must be configured for scheduled and manual live API runs.'
+            throw 'GHPMV_TEST_TOKEN must be configured for scheduled and manual live API runs.'
           }
 
           Write-Output '::notice::Live GitHub API tests were not run because credentials are unavailable for this pull request.'
