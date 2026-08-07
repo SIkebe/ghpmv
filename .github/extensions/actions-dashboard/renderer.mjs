@@ -104,6 +104,7 @@ export const dashboardHtml = `<!doctype html>
           <tbody id="runs"></tbody>
         </table>
         <div id="empty-state" class="empty-state" hidden>No runs match these filters.</div>
+        <div class="run-footer"><button id="load-more" class="secondary-button" type="button" hidden>Load more</button></div>
       </div>
     </section>
   </main>
@@ -385,6 +386,27 @@ tbody .run-row:hover { background: var(--neutral-muted); }
   padding: 6px 10px;
 }
 .danger-button:disabled { cursor: wait; opacity: .65; }
+.secondary-button {
+  background: var(--background-color-default, #fff);
+  border: 1px solid var(--border-color-default, #d0d7de);
+  border-radius: 7px;
+  color: var(--text-color-default, #1f2328);
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--font-weight-semibold, 600);
+  padding: 7px 12px;
+}
+.run-footer { display: flex; justify-content: center; padding: 12px; }
+.run-footer:has(.secondary-button[hidden]) { display: none; }
+.diagnostic-warning {
+  background: var(--danger-muted);
+  border: 1px solid var(--danger);
+  border-radius: 7px;
+  color: var(--danger);
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
 .diagnostic-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .diagnostic-card {
   background: var(--background-color-default, #fff);
@@ -450,6 +472,7 @@ export const appJavaScript = `
 const elements = {
   emptyState: document.querySelector("#empty-state"),
   error: document.querySelector("#error"),
+  loadMore: document.querySelector("#load-more"),
   prReadiness: document.querySelector("#pr-readiness"),
   refresh: document.querySelector("#refresh"),
   repositoryName: document.querySelector("#repository-name"),
@@ -471,6 +494,8 @@ const expandedRunIds = new Set();
 let recentUpdatedAt = null;
 let mutationToken = null;
 let cacheTimestamp = null;
+let filteredRunLimit = 100;
+const FILTER_PAGE_SIZE = 100;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -648,17 +673,20 @@ function renderWorkflowOptions(workflows) {
   elements.workflowFilter.replaceChildren(...options);
   if (workflows.some((workflow) => workflow.id === selected)) elements.workflowFilter.value = selected;
 }
-function filteredRuns() {
+function filtersActive() {
+  return Boolean(elements.searchFilter.value.trim()) ||
+    elements.statusFilter.value !== "all" ||
+    elements.workflowFilter.value !== "all";
+}
+function matchingRuns() {
   if (!dashboard) return [];
   const search = elements.searchFilter.value.trim().toLocaleLowerCase();
   const status = elements.statusFilter.value;
   const workflow = elements.workflowFilter.value;
-  const filtered = dashboard.runs.filter((run) => {
+  return dashboard.runs.filter((run) => {
     const matchesSearch = !search || run.displayTitle.toLocaleLowerCase().includes(search) || run.headBranch.toLocaleLowerCase().includes(search);
     return matchesSearch && (status === "all" || statusKind(run) === status) && (workflow === "all" || run.workflowId === workflow);
   });
-  const hasFilters = Boolean(search) || status !== "all" || workflow !== "all";
-  return hasFilters ? filtered : filtered.slice(0, dashboard.recentLimit);
 }
 
 async function loadRunDetail(runId) {
@@ -773,7 +801,10 @@ function renderDiagnostics(container, diagnostics) {
   const log = node("pre", "log-excerpt", diagnostics.logLines.length ? diagnostics.logLines.join("\\n") : "No failed-step logs were available.");
   logCard.append(log);
   grid.append(logCard);
-  container.replaceChildren(grid);
+  const warnings = diagnostics.warnings?.length
+    ? node("div", "diagnostic-warning", diagnostics.warnings.join("\\n"))
+    : null;
+  container.replaceChildren(...(warnings ? [warnings, grid] : [grid]));
 }
 
 async function rerunFailed(run, button, status) {
@@ -843,12 +874,18 @@ function renderRunDetail(container, run, details) {
   if (details.failedJobs) {
     const failurePanel = node("section", "failure-panel");
     const failureHeader = node("div", "failure-header");
-    const rerun = node("button", "danger-button", "Rerun failed jobs");
-    rerun.type = "button";
+    const rerun = details.rerunnableFailedJobs
+      ? node("button", "danger-button", "Rerun failed jobs")
+      : null;
+    if (rerun) rerun.type = "button";
     const rerunStatus = node("span", "rerun-status");
-    failureHeader.append(node("h3", null, "Failure diagnostics"), rerunStatus, rerun);
+    failureHeader.append(
+      node("h3", null, "Failure diagnostics"),
+      rerunStatus,
+      ...(rerun ? [rerun] : []),
+    );
     const diagnostics = node("div", "run-detail-loading", "Loading annotations, artifacts, and failure logs...");
-    rerun.addEventListener("click", () => rerunFailed(run, rerun, rerunStatus));
+    if (rerun) rerun.addEventListener("click", () => rerunFailed(run, rerun, rerunStatus));
     failurePanel.append(failureHeader, diagnostics);
     container.append(failurePanel);
     loadFailureDiagnostic(run.databaseId)
@@ -875,7 +912,11 @@ async function toggleRunDetail(run, control, detailRow, container) {
 }
 
 function renderRuns() {
-  const runs = filteredRuns();
+  const matches = matchingRuns();
+  const hasFilters = filtersActive();
+  const runs = hasFilters
+    ? matches.slice(0, filteredRunLimit)
+    : matches.slice(0, dashboard.recentLimit);
   const rows = runs.flatMap((run) => {
     const row = document.createElement("tr");
     row.className = "run-row";
@@ -919,9 +960,10 @@ function renderRuns() {
   });
   elements.runs.replaceChildren(...rows);
   elements.emptyState.hidden = runs.length !== 0;
-  const hasFilters = elements.searchFilter.value.trim() || elements.statusFilter.value !== "all" || elements.workflowFilter.value !== "all";
+  elements.loadMore.hidden = !hasFilters || runs.length >= matches.length;
+  elements.loadMore.textContent = "Load " + Math.min(FILTER_PAGE_SIZE, matches.length - runs.length) + " more";
   elements.runCount.textContent = hasFilters
-    ? runs.length + " matching runs in the 90-day history · auto-refresh 60s" +
+    ? runs.length + " of " + matches.length + " matching runs in the 90-day history · auto-refresh 60s" +
       (recentUpdatedAt ? " · updated " + relativeTime(recentUpdatedAt) : "")
     : runs.length + " most recent runs · " + dashboard.runs.length + " in 90-day history · auto-refresh 60s" +
     (recentUpdatedAt ? " · updated " + relativeTime(recentUpdatedAt) : "");
@@ -975,7 +1017,6 @@ async function requestRefresh(path, full) {
   try {
     const response = await fetch(path, { method: "POST" });
     if (!response.ok) { const result = await response.json(); throw new Error(result.error || "Refresh failed."); }
-    await loadState();
   } catch (error) {
     elements.error.hidden = false; elements.error.textContent = error.message;
   } finally {
@@ -991,9 +1032,17 @@ async function requestRefresh(path, full) {
 
 elements.refresh.addEventListener("click", () => requestRefresh("/api/refresh", true));
 for (const element of [elements.searchFilter, elements.statusFilter, elements.workflowFilter]) {
-  element.addEventListener("input", renderRuns);
-  element.addEventListener("change", renderRuns);
+  const updateFilters = () => {
+    filteredRunLimit = FILTER_PAGE_SIZE;
+    renderRuns();
+  };
+  element.addEventListener("input", updateFilters);
+  element.addEventListener("change", updateFilters);
 }
+elements.loadMore.addEventListener("click", () => {
+  filteredRunLimit += FILTER_PAGE_SIZE;
+  renderRuns();
+});
 const events = new EventSource("/events");
 events.addEventListener("update", () => loadState().catch(() => undefined));
 loadState().catch((error) => { elements.error.hidden = false; elements.error.textContent = error.message; });

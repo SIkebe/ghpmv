@@ -392,6 +392,14 @@ async function handleRequest(entry, req, res) {
         }
 
         try {
+            const details = await getRunDetails(entry, runId);
+            if (details.rerunnableFailedJobs === 0) {
+                writeJson(res, 409, {
+                    error:
+                        "This run has no failed jobs eligible for a failed-job rerun.",
+                });
+                return;
+            }
             await rerunFailedJobs({
                 repository: entry.state.data.repository.nameWithOwner,
                 runId,

@@ -41,11 +41,14 @@ async function tryRunGh(args, workspacePath) {
     }
 }
 
-async function tryRunGhText(args, workspacePath) {
+async function captureResult(operation) {
     try {
-        return await runGhText(args, workspacePath);
-    } catch {
-        return null;
+        return { error: null, value: await operation };
+    } catch (error) {
+        return {
+            error: error instanceof Error ? error.message : String(error),
+            value: null,
+        };
     }
 }
 
@@ -391,6 +394,9 @@ export async function loadRunDetails({
             headSha: metadata.head_sha,
             triggeringActor: metadata.triggering_actor?.login ?? null,
         },
+        rerunnableFailedJobs: jobs.filter(
+            (job) => job.conclusion === "failure",
+        ).length,
         runId,
     };
 }
@@ -443,8 +449,9 @@ export async function loadFailureDiagnostics({
     runId,
     workspacePath,
 }) {
-    const [logText, artifactPages, annotationPages] = await Promise.all([
-        tryRunGhText(
+    const [logResult, artifactResult, annotationResults] = await Promise.all([
+        captureResult(
+            runGhText(
             [
                 "run",
                 "view",
@@ -454,8 +461,10 @@ export async function loadFailureDiagnostics({
                 "--log-failed",
             ],
             workspacePath,
+            ),
         ),
-        tryRunGh(
+        captureResult(
+            runGh(
             [
                 "api",
                 "--method",
@@ -467,12 +476,14 @@ export async function loadFailureDiagnostics({
                 "per_page=100",
             ],
             workspacePath,
+            ),
         ),
         mapWithConcurrency(
             jobIds,
             4,
             (jobId) =>
-                tryRunGh(
+                captureResult(
+                    runGh(
                     [
                         "api",
                         "--method",
@@ -484,11 +495,13 @@ export async function loadFailureDiagnostics({
                         "per_page=100",
                     ],
                     workspacePath,
+                    ),
                 ),
         ),
     ]);
 
-    const annotations = annotationPages
+    const annotations = annotationResults
+        .flatMap((result) => result.value ?? [])
         .flatMap((pages) => pages ?? [])
         .flatMap((page) => page ?? [])
         .map((annotation) => ({
@@ -499,7 +512,7 @@ export async function loadFailureDiagnostics({
             startLine: annotation.start_line,
             title: annotation.title || null,
         }));
-    const artifacts = (artifactPages ?? [])
+    const artifacts = (artifactResult.value ?? [])
         .flatMap((page) => page.artifacts ?? [])
         .map((artifact) => ({
             createdAt: artifact.created_at,
@@ -512,8 +525,23 @@ export async function loadFailureDiagnostics({
     return {
         annotations,
         artifacts,
-        logLines: failureLogExcerpt(logText),
+        logLines: failureLogExcerpt(logResult.value),
         runId,
+        warnings: [
+            ...(logResult.error
+                ? [`Failure logs: ${logResult.error}`]
+                : []),
+            ...(artifactResult.error
+                ? [`Artifacts: ${artifactResult.error}`]
+                : []),
+            ...annotationResults.flatMap((result, index) =>
+                result.error
+                    ? [
+                          `Annotations for job ${jobIds[index]}: ${result.error}`,
+                      ]
+                    : [],
+            ),
+        ],
     };
 }
 
