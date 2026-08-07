@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
     CanvasError,
     createCanvas,
@@ -22,12 +20,18 @@ import { appJavaScript, dashboardHtml, dashboardStyles } from "./renderer.mjs";
 
 const servers = new Map();
 const pendingServers = new Map();
-const workspacePath = resolve(
-    dirname(fileURLToPath(import.meta.url)),
-    "..",
-    "..",
-    "..",
-);
+let copilotSession;
+
+async function currentWorkingDirectory() {
+    if (!copilotSession) {
+        throw new CanvasError(
+            "actions_session_not_ready",
+            "The Copilot session is not ready.",
+        );
+    }
+    const metadata = await copilotSession.rpc.metadata.snapshot();
+    return metadata.workingDirectory;
+}
 
 function writeJson(res, statusCode, value) {
     res.writeHead(statusCode, {
@@ -84,7 +88,7 @@ async function refreshEntry(entry) {
                 days: entry.options.days,
                 limit: entry.options.limit,
                 repository: entry.options.repository,
-                workspacePath,
+                workspacePath: entry.workspacePath,
             });
             entry.state = {
                 data,
@@ -170,7 +174,7 @@ async function refreshRecentRuns(entry) {
             const runs = await loadRecentRuns({
                 limit: entry.options.limit,
                 repository: entry.state.data.repository.nameWithOwner,
-                workspacePath,
+                workspacePath: entry.workspacePath,
             });
             for (const run of runs) {
                 entry.targetedRunUpdates.delete(run.databaseId);
@@ -209,7 +213,7 @@ async function refreshRerun(entry, previousRun) {
                 repository: entry.state.data.repository.nameWithOwner,
                 runId: previousRun.databaseId,
                 workflowName: previousRun.workflowName,
-                workspacePath,
+                workspacePath: entry.workspacePath,
             });
             if (
                 run.runAttempt > previousRun.runAttempt ||
@@ -256,7 +260,7 @@ async function getFailureDiagnostics(entry, runId) {
             jobIds: failedJobIds,
             repository: entry.state.data.repository.nameWithOwner,
             runId,
-            workspacePath,
+            workspacePath: entry.workspacePath,
         });
         entry.failureDiagnostics.set(runId, diagnostics);
     }
@@ -285,7 +289,7 @@ async function getRunDetails(entry, runId) {
         details = loadRunDetails({
             repository: entry.state.data.repository.nameWithOwner,
             runId,
-            workspacePath,
+            workspacePath: entry.workspacePath,
         });
         entry.runDetails.set(runId, details);
     }
@@ -486,7 +490,7 @@ async function handleRequest(entry, req, res) {
             await rerunFailedJobs({
                 repository: entry.state.data.repository.nameWithOwner,
                 runId,
-                workspacePath,
+                workspacePath: entry.workspacePath,
             });
             entry.failureDiagnostics.delete(runId);
             entry.runDetails.delete(runId);
@@ -528,6 +532,7 @@ async function startServer(options) {
         },
         targetedRunUpdates: new Map(),
         url: undefined,
+        workspacePath: options.workspacePath,
     };
 
     const server = createServer((req, res) => {
@@ -586,7 +591,7 @@ function summarize(data) {
     };
 }
 
-await joinSession({
+copilotSession = await joinSession({
     canvases: [
         createCanvas({
             id: "actions-dashboard",
@@ -695,6 +700,7 @@ await joinSession({
                         days: ctx.input?.days ?? 90,
                         limit: ctx.input?.limit ?? 30,
                         repository: ctx.input?.repository,
+                        workspacePath: await currentWorkingDirectory(),
                     },
                 );
                 if (isNew) {
