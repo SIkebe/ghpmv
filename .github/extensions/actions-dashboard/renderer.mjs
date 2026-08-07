@@ -687,7 +687,9 @@ function renderPullRequest(pr, error) {
 
   const attention = pr.checks.filter((check) => check.bucket !== "success").slice(0, 8);
   const list = node("div", "check-list");
-  if (!attention.length) {
+  if (!pr.checks.length) {
+    list.append(node("div", "check-row", "No checks have reported yet."));
+  } else if (!attention.length) {
     list.append(node("div", "check-row", "All reported checks have passed."));
   } else {
     for (const check of attention) {

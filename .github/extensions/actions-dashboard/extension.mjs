@@ -166,6 +166,19 @@ function mergeRunUpdates(entry, runs) {
     return history;
 }
 
+function isRunAtLeastAsNew(candidate, baseline) {
+    if (candidate.runAttempt !== baseline.runAttempt) {
+        return candidate.runAttempt > baseline.runAttempt;
+    }
+    const candidateUpdatedAt = Date.parse(candidate.updatedAt);
+    const baselineUpdatedAt = Date.parse(baseline.updatedAt);
+    return (
+        Number.isFinite(candidateUpdatedAt) &&
+        Number.isFinite(baselineUpdatedAt) &&
+        candidateUpdatedAt >= baselineUpdatedAt
+    );
+}
+
 async function refreshRecentRuns(entry) {
     if (entry.refreshPromise) {
         await entry.refreshPromise;
@@ -187,13 +200,19 @@ async function refreshRecentRuns(entry) {
                 workspacePath: entry.workspacePath,
             });
             for (const run of runs) {
-                entry.targetedRunUpdates.delete(run.databaseId);
+                const targeted = entry.targetedRunUpdates.get(run.databaseId);
+                if (targeted && isRunAtLeastAsNew(run, targeted)) {
+                    entry.targetedRunUpdates.delete(run.databaseId);
+                }
             }
-            entry.incrementalRuns = [
-                ...runs,
-                ...entry.targetedRunUpdates.values(),
-            ];
-            return mergeRunUpdates(entry, runs);
+            const effectiveRuns = new Map(
+                runs.map((run) => [run.databaseId, run]),
+            );
+            for (const targeted of entry.targetedRunUpdates.values()) {
+                effectiveRuns.set(targeted.databaseId, targeted);
+            }
+            entry.incrementalRuns = [...effectiveRuns.values()];
+            return mergeRunUpdates(entry, entry.incrementalRuns);
         } catch (error) {
             entry.state = {
                 ...entry.state,
