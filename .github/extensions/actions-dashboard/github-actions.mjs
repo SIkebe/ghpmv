@@ -114,6 +114,11 @@ function buildMetrics(runs, days, now) {
         (run) => run.conclusion === "success",
     ).length;
     const failed = evaluated.length - success;
+    const neutral = selected.filter(
+        (run) =>
+            run.status === "completed" &&
+            ["neutral", "skipped"].includes(run.conclusion),
+    ).length;
     const noRerunSuccess = evaluated.filter(
         (run) => run.conclusion === "success" && run.runAttempt === 1,
     ).length;
@@ -132,6 +137,7 @@ function buildMetrics(runs, days, now) {
         active: selected.filter((run) => run.status !== "completed").length,
         days,
         failed,
+        neutral,
         noRerunSuccessRate: evaluated.length
             ? Math.round((noRerunSuccess / evaluated.length) * 1000) / 10
             : null,
@@ -418,7 +424,12 @@ function failureLogExcerpt(text) {
     const selected =
         interesting.size > 0
             ? [...interesting].sort((left, right) => left - right).slice(-160)
-            : lines.slice(-80).map((_, index) => lines.length - 80 + index);
+            : lines
+                  .slice(-80)
+                  .map(
+                      (_, index) =>
+                          Math.max(0, lines.length - 80) + index,
+                  );
 
     return selected
         .filter((index) => index >= 0)
@@ -746,7 +757,7 @@ export async function loadDashboard({
         runs,
         summary: {
             failed: selectedWindow.failed,
-            neutral: 0,
+            neutral: selectedWindow.neutral,
             running: selectedWindow.active,
             success: selectedWindow.success,
             total: selectedWindow.total,
