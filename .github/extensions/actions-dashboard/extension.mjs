@@ -35,10 +35,12 @@ function writeJson(res, statusCode, value) {
     res.end(JSON.stringify(value));
 }
 
-function broadcast(entry) {
-    const message = `event: update\ndata: ${JSON.stringify({
+function broadcast(entry, eventName = "update") {
+    const message = `event: ${eventName}\ndata: ${JSON.stringify({
+        error: entry.state.error,
         loading: entry.state.loading,
         healthUpdatedAt: entry.state.healthUpdatedAt,
+        recentError: entry.state.recentError,
         recentUpdatedAt: entry.state.recentUpdatedAt,
         updatedAt: entry.state.updatedAt,
     })}\n\n`;
@@ -68,7 +70,7 @@ async function refreshEntry(entry) {
         error: null,
         loading: true,
     };
-    broadcast(entry);
+    broadcast(entry, "status");
 
     entry.refreshPromise = (async () => {
         try {
@@ -171,7 +173,7 @@ async function refreshRecentRuns(entry) {
             throw error;
         } finally {
             entry.recentRefreshPromise = undefined;
-            broadcast(entry);
+            broadcast(entry, "recent");
         }
     })();
 
@@ -285,6 +287,16 @@ async function handleRequest(entry, req, res) {
         writeJson(res, 200, {
             ...entry.state,
             mutationToken: entry.mutationToken,
+        });
+        return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/state/recent") {
+        writeJson(res, 200, {
+            recentError: entry.state.recentError,
+            recentUpdatedAt: entry.state.recentUpdatedAt,
+            runs: entry.state.data?.runs.slice(0, entry.options.limit) ?? [],
+            workflows: entry.state.data?.workflows ?? [],
         });
         return;
     }

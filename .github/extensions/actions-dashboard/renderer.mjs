@@ -1045,6 +1045,43 @@ async function loadState() {
   if (!response.ok) throw new Error("Unable to load dashboard state.");
   render(await response.json());
 }
+async function loadRecentState() {
+  if (!dashboard) return loadState();
+  const response = await fetch("/api/state/recent", { cache: "no-store" });
+  if (!response.ok) throw new Error("Unable to load recent run updates.");
+  const state = await response.json();
+  const mergedRuns = new Map(dashboard.runs.map((run) => [run.databaseId, run]));
+  for (const run of state.runs) mergedRuns.set(run.databaseId, run);
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+  dashboard = {
+    ...dashboard,
+    runs: [...mergedRuns.values()]
+      .filter((run) => new Date(run.createdAt).getTime() >= cutoff)
+      .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
+    workflows: state.workflows,
+  };
+  const nextCacheTimestamp = state.recentUpdatedAt;
+  if (cacheTimestamp && nextCacheTimestamp !== cacheTimestamp) {
+    runDetailCache.clear();
+    failureDiagnosticCache.clear();
+  }
+  cacheTimestamp = nextCacheTimestamp;
+  recentUpdatedAt = nextCacheTimestamp;
+  elements.error.hidden = !state.recentError;
+  elements.error.textContent = state.recentError || "";
+  renderWorkflows(dashboard.workflows);
+  renderWorkflowOptions(dashboard.workflows);
+  renderRuns();
+}
+
+function applyStatusEvent(event) {
+  const state = JSON.parse(event.data);
+  elements.refresh.disabled = state.loading;
+  elements.refresh.classList.toggle("loading", state.loading);
+  const error = state.error || state.recentError;
+  elements.error.hidden = !error;
+  elements.error.textContent = error || "";
+}
 
 let fullRefreshPending = false;
 let recentRefreshPending = false;
@@ -1088,6 +1125,8 @@ elements.loadMore.addEventListener("click", () => {
 });
 const events = new EventSource("/events");
 events.addEventListener("update", () => loadState().catch(() => undefined));
+events.addEventListener("recent", () => loadRecentState().catch(() => undefined));
+events.addEventListener("status", applyStatusEvent);
 loadState().catch((error) => { elements.error.hidden = false; elements.error.textContent = error.message; });
 setInterval(() => requestRefresh("/api/refresh/recent", false), 60 * 1000);
 setInterval(() => requestRefresh("/api/refresh", true), 15 * 60 * 1000);
