@@ -17,10 +17,12 @@
 | 層 | 場所 | 目的 | 外部依存 | 実行タイミング |
 |---|---|---|---|---|
 | 単体・ロジックテスト | `tests/Ghpmv.Core.Tests`、`tests/Ghpmv.Browser.Tests` の非 E2E テスト | CSV 解析、snapshot model、mapping、verify 差分、import conflict、UI snapshot serialization を検証する。 | なし | すべてのローカル変更と PR。 |
-| 実 API 統合テスト | `tests/Ghpmv.Integration.Tests` | GraphQL 接続、export/import/verify、collaborator/repository link、user-owned project、item resume/relink を実 GitHub API で検証する。 | `GHPMV_TEST_TOKEN` と fixture 用 org/project 変数。未設定時は skip。 | secrets が使えるリポジトリ CI の PR。API 変更時のローカル検証。 |
+| 実 API 統合テスト | `tests/Ghpmv.Integration.Tests` | GraphQL 接続、export/import/verify、View の API 設定、organization Issue Field lifecycle、collaborator/repository link、user-owned project、item resume/relink を実 GitHub API で検証する。 | `GHPMV_TEST_TOKEN` と fixture 用 org/project 変数。ローカルと資格情報のない PR では skip。 | secrets が使えるリポジトリ CI の PR、毎日の scheduled run、手動実行、API 変更時のローカル検証。 |
 | ブラウザー E2E テスト | `tests/Ghpmv.Browser.Tests` の E2E テスト | Playwright と GitHub Projects UI 経由で collaborator export、View round-trip、Workflow round-trip を検証する。 | `GHPMV_BROWSER_STATE`、`GHPMV_TEST_TOKEN`、source/target fixture org。未設定時は skip。 | `src/Ghpmv.Core/Browser` 変更時とリリース前に手動実行。scheduled/nightly は未実装。 |
 | 手動移行テスト | [MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md) | GEI repository migration、`ghpmv export`、mapping CSV 補完、`ghpmv import`、`ghpmv verify`、UI 目視確認までの実運用フローを検証する。 | source/target org、PAT、browser profile、必要に応じて EMU/GHEC-DR 環境。 | リリース候補前、移行手順の検証前。 |
 | CI packaging smoke test | `.github/workflows/ci.yml` | Release build、self-contained publish、framework-dependent publish、`--version` 起動を確認する。 | GitHub Actions runner、`global.json` で指定した .NET SDK。 | build/test 成功後のすべての PR。 |
+
+`IssueFieldLifecycleIntegrationTests` は共有 fixture の既存 field を再利用せず、毎回一意な organization Issue Field を作成します。これにより `createIssueField` の初回作成経路を必ず通し、Project への link、read-back、update、delete まで確認します。
 
 ## ローカル実行
 
@@ -85,13 +87,16 @@ selector や UI 前提が変わった場合は、実装修正と合わせて [BR
 
 ## CI 方針
 
-PR workflow の `.github/workflows/ci.yml` は、次の 3 段階で検証します。
+PR workflow の `.github/workflows/ci.yml` は、次の 4 段階で検証します。
 
 1. `ghalint` で GitHub Actions workflow の品質を確認する。
 2. `build-test` で restore、warnings as errors の build、Ubuntu / Windows の deterministic tests を行う。
-3. `publish` で self-contained / framework-dependent の成果物を作成し、実行可能な成果物に対して `--version` smoke test を行う。
+3. reusable workflow の `.github/workflows/live-api.yml` で実 GitHub API 統合テストを実行する。
+4. `publish` で self-contained / framework-dependent の成果物を作成し、実行可能な成果物に対して `--version` smoke test を行う。
 
-通常の `Test deterministic suites` step では、`tests/Ghpmv.Core.Tests` と `tests/Ghpmv.Browser.Tests` の非 E2E テストだけを実行します。これにより、実 API / browser E2E を認証情報なしで実行して skip だけが並ぶ状態を避けます。実 API 統合テストは、Ubuntu の `Test real GitHub API integration` step で引き続き明示的に実行し、repository secrets / variables がある環境で live GitHub API の coverage を維持します。
+通常の `Test deterministic suites` step では、`tests/Ghpmv.Core.Tests` と `tests/Ghpmv.Browser.Tests` の非 E2E テストだけを実行します。実 API 統合テストは専用の `Live GitHub API` check に分離し、repository secrets / variables がある PR で実行します。fork PR など資格情報を利用できない PR では安全に実行を省略し、`pull_request_target` は使用しません。
+
+`.github/workflows/live-api.yml` は毎日 18:17 UTC（03:17 JST）にも default branch から実行され、`workflow_dispatch` で手動実行できます。scheduled/manual run では token 未設定と test skip を失敗扱いにします。共有 fixture への mutation が競合しないよう、PR を含むすべての live API run は同じ concurrency group で直列化します。
 
 ## 変更内容別の検証目安
 
@@ -100,9 +105,9 @@ PR workflow の `.github/workflows/ci.yml` は、次の 3 段階で検証しま�
 | 変更領域 | 最小検証 | 広げる条件 |
 |---|---|---|
 | Snapshot record、mapping CSV、verify diff logic | `tests/Ghpmv.Core.Tests` | snapshot schema や verify output が import/export contract に影響する場合。 |
-| GraphQL query、pagination、rate-limit、import/export mutation | 関連する `tests/Ghpmv.Integration.Tests` | query/mutation contract や GitHub 権限が関わる場合。 |
+| GraphQL query、pagination、rate-limit、import/export/View mutation | 関連する `tests/Ghpmv.Integration.Tests` | query/mutation contract や GitHub 権限が関わる場合。 |
 | Item import の resume/relink/archive/order | `ItemImporterLogicTests` と `tests/Ghpmv.Integration.Tests/ItemImporterTests.cs` | repository / user mapping の意味が変わる場合。 |
-| Browser selector、View/Workflow import/export、browser profile | `GHPMV_BROWSER_STATE` を設定した `tests/Ghpmv.Browser.Tests` | GitHub UI の挙動や UI discovery note が変わる場合。 |
+| Browser selector、View/Workflow の UI-only settings、browser profile | `GHPMV_BROWSER_STATE` を設定した `tests/Ghpmv.Browser.Tests` | GitHub UI の挙動や UI discovery note が変わる場合。View の name/layout/filter/visible fields は実 API 統合テストでも検証する。 |
 | CLI command routing、options、packaging、update check | 対象の CLI/core test と publish smoke test | release artifact や install 手順に影響する場合。 |
 | ドキュメントのみ | Markdown review。コマンドを変えた場合は可能な範囲で実行確認。 | テスト setup、credential、release gate、手動移行期待値を変える場合。 |
 

@@ -10,8 +10,8 @@ namespace Ghpmv.Integration.Tests;
 /// <summary>
 /// M5 integration tests: exports the fixture project, imports it into gpm-target and
 /// verifies that <see cref="ProjectVerifier"/> reports no differences beyond the
-/// views/workflows that only the browser module migrates (errors since M6/M7; this
-/// test imports via the API only). Then drifts the target on purpose — deletes one
+/// Views/Workflows omitted from this API-only fixture snapshot. Then drifts the target
+/// on purpose — deletes one
 /// custom field via <c>deleteProjectV2Field</c> and changes an item's Status value —
 /// and asserts both differences are detected as errors. The target project is deleted
 /// in a finally block. Requires the GHPMV_TEST_TOKEN environment variable (SSO-authorized).
@@ -125,8 +125,8 @@ public class VerifyTests
             };
 
             // 1) Right after a full API import the target matches the snapshot except for
-            //    views/workflows, which only the browser module migrates (errors since M7).
-            //    Items are eventually consistent, so poll until no other error remains.
+            //    Views/Workflows omitted by the known API fixture. Items are eventually
+            //    consistent, so poll until no other error remains.
             var matchReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
             Assert.True(postExportCalled);
             Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
@@ -215,7 +215,7 @@ public class VerifyTests
     private static string Describe(VerifyReport report)
         => string.Join(Environment.NewLine, report.Differences.Select(d => $"{d.Severity} {d.Category}: {d.Message}"));
 
-    /// <summary>Views/workflows are migrated only by the browser module, not by an API-only import.</summary>
+    /// <summary>The known API fixture omits Views/Workflows, while the target has defaults.</summary>
     private static bool IsBrowserCategory(VerifyDifference difference)
         => difference.Category is "View" or "Workflow";
 
