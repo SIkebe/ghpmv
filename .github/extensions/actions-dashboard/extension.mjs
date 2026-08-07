@@ -258,7 +258,7 @@ async function handleRequest(entry, req, res) {
         res.writeHead(200, {
             "Cache-Control": "no-store",
             "Content-Security-Policy":
-                "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; img-src 'none'; base-uri 'none'",
+                "default-src 'none'; connect-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'none'; base-uri 'none'",
             "Content-Type": "text/html; charset=utf-8",
         });
         res.end(dashboardHtml);
