@@ -170,6 +170,9 @@ function isRunAtLeastAsNew(candidate, baseline) {
     if (candidate.runAttempt !== baseline.runAttempt) {
         return candidate.runAttempt > baseline.runAttempt;
     }
+    if (baseline.pendingRerun) {
+        return true;
+    }
     const candidateUpdatedAt = Date.parse(candidate.updatedAt);
     const baselineUpdatedAt = Date.parse(baseline.updatedAt);
     return (
@@ -229,44 +232,68 @@ async function refreshRecentRuns(entry) {
     return entry.recentRefreshPromise;
 }
 
+function storeTargetedRun(entry, run) {
+    entry.targetedRunUpdates.set(run.databaseId, run);
+    entry.incrementalRuns = [
+        run,
+        ...entry.incrementalRuns.filter(
+            (candidate) => candidate.databaseId !== run.databaseId,
+        ),
+    ];
+    mergeRunUpdates(entry, [run]);
+}
+
 async function refreshRerun(entry, previousRun) {
+    const optimisticRun = {
+        ...previousRun,
+        conclusion: null,
+        pendingRerun: true,
+        runAttempt: previousRun.runAttempt + 1,
+        startedAt: null,
+        status: "queued",
+        updatedAt: new Date().toISOString(),
+    };
+    storeTargetedRun(entry, optimisticRun);
+    broadcast(entry, "recent");
+
+    let lastError = null;
     try {
-        let run;
-        for (const delay of [0, 1000, 2000]) {
+        for (const delay of [0, 1000, 2000, 4000, 8000, 15000]) {
             if (delay > 0) {
                 await new Promise((resolveDelay) =>
                     setTimeout(resolveDelay, delay),
                 );
             }
-            run = await loadRun({
-                repository: entry.state.data.repository.nameWithOwner,
-                runId: previousRun.databaseId,
-                workflowName: previousRun.workflowName,
-                workspacePath: entry.workspacePath,
-            });
-            if (
-                run.runAttempt > previousRun.runAttempt ||
-                run.status !== previousRun.status ||
-                run.updatedAt !== previousRun.updatedAt
-            ) {
-                break;
+            try {
+                const run = await loadRun({
+                    repository: entry.state.data.repository.nameWithOwner,
+                    runId: previousRun.databaseId,
+                    workflowName: previousRun.workflowName,
+                    workspacePath: entry.workspacePath,
+                });
+                lastError = null;
+                if (
+                    run.runAttempt > previousRun.runAttempt ||
+                    run.status !== previousRun.status ||
+                    run.updatedAt !== previousRun.updatedAt
+                ) {
+                    storeTargetedRun(entry, run);
+                    return;
+                }
+            } catch (error) {
+                lastError = error;
             }
         }
-        entry.targetedRunUpdates.set(run.databaseId, run);
-        entry.incrementalRuns = [
-            run,
-            ...entry.incrementalRuns.filter(
-                (candidate) => candidate.databaseId !== run.databaseId,
-            ),
-        ];
-        mergeRunUpdates(entry, [run]);
-    } catch (error) {
-        entry.state = {
-            ...entry.state,
-            recentError:
-                error instanceof Error ? error.message : String(error),
-        };
     } finally {
+        if (lastError) {
+            entry.state = {
+                ...entry.state,
+                recentError:
+                    lastError instanceof Error
+                        ? lastError.message
+                        : String(lastError),
+            };
+        }
         broadcast(entry, "recent");
     }
 }
