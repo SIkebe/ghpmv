@@ -125,6 +125,17 @@ public class WorkflowUiLogicTests
         => Assert.Equal(expected, WorkflowUiImporter.ShouldSaveAndTurnOn(enabled, isSaved));
 
     [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public void ShouldToggleWorkflow_only_selects_mismatched_enabled_state(
+        bool desiredEnabled,
+        bool currentEnabled,
+        bool expected)
+        => Assert.Equal(expected, WorkflowUiImporter.ShouldToggleWorkflow(desiredEnabled, currentEnabled));
+
+    [Theory]
     [InlineData(0, false, true, "Default")]
     [InlineData(0, false, false, "Duplicate")]
     [InlineData(0, true, false, "Existing")]

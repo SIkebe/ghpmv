@@ -427,7 +427,10 @@ public sealed class WorkflowUiImporter
             await RenameCurrentWorkflowAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
 
-        if (!workflow.Enabled)
+        var toggle = Sel.WorkflowToggle(page, workflow.Name).First;
+        await toggle.WaitForAsync(new() { Timeout = 10_000 }).ConfigureAwait(false);
+        var currentEnabled = await WorkflowUiExporter.ReadToggleStateAsync(toggle).ConfigureAwait(false);
+        if (ShouldToggleWorkflow(workflow.Enabled, currentEnabled))
         {
             await ToggleAsync(page, workflow.Name, cancellationToken).ConfigureAwait(false);
         }
@@ -625,6 +628,9 @@ public sealed class WorkflowUiImporter
 
     internal static bool ShouldSaveAndTurnOn(bool enabled, bool isSaved)
         => !enabled && !isSaved;
+
+    internal static bool ShouldToggleWorkflow(bool desiredEnabled, bool currentEnabled)
+        => desiredEnabled != currentEnabled;
 
     internal static AutoAddEntryPoint SelectAutoAddEntryPoint(
         int autoAddApplied,
