@@ -67,6 +67,13 @@ function elapsedMs(start, end) {
     return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+export function isUnsuccessfulConclusion(conclusion) {
+    return (
+        Boolean(conclusion) &&
+        !["success", "neutral", "skipped"].includes(conclusion)
+    );
+}
+
 function isEvaluated(run) {
     return (
         run.status === "completed" &&
@@ -96,6 +103,7 @@ function buildMetrics(runs, days, now) {
         .map((run) => elapsedMs(run.createdAt, run.startedAt))
         .filter((value) => value !== null);
     const runtimes = selected
+        .filter((run) => run.status === "completed")
         .map((run) => elapsedMs(run.startedAt, run.updatedAt))
         .filter((value) => value !== null);
 
@@ -277,7 +285,7 @@ function normalizeRun(run, workflowNames) {
         headSha: run.head_sha,
         number: run.run_number,
         runAttempt: run.run_attempt ?? 1,
-        startedAt: run.run_started_at ?? run.created_at,
+        startedAt: run.run_started_at ?? null,
         status: run.status,
         updatedAt: run.updated_at,
         url: run.html_url,
@@ -327,13 +335,19 @@ export async function loadRunDetails({
             url: job.url,
         }))
         .sort((left, right) => {
-            const leftFailed = left.conclusion === "failure" ? 0 : 1;
-            const rightFailed = right.conclusion === "failure" ? 0 : 1;
+            const leftFailed = isUnsuccessfulConclusion(left.conclusion)
+                ? 0
+                : 1;
+            const rightFailed = isUnsuccessfulConclusion(right.conclusion)
+                ? 0
+                : 1;
             return leftFailed - rightFailed || left.name.localeCompare(right.name);
         });
 
     return {
-        failedJobs: jobs.filter((job) => job.conclusion === "failure").length,
+        failedJobs: jobs.filter((job) =>
+            isUnsuccessfulConclusion(job.conclusion),
+        ).length,
         jobs,
         metadata: {
             actor: metadata.actor?.login ?? null,

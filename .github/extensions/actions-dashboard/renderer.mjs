@@ -163,6 +163,15 @@ h2 { font-size: 18px; font-weight: var(--font-weight-semibold, 600); line-height
   text-transform: uppercase;
 }
 .muted { color: var(--text-color-muted, #656d76); margin-top: 3px; }
+.sr-only {
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
 button, input, select { font: inherit; }
 button, select { cursor: pointer; }
 .primary-button {
@@ -461,6 +470,7 @@ const failureDiagnosticCache = new Map();
 const expandedRunIds = new Set();
 let recentUpdatedAt = null;
 let mutationToken = null;
+let cacheTimestamp = null;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -559,7 +569,16 @@ function renderWorkflows(workflows) {
     const card = node("article", "workflow-card");
     const title = node("div", "workflow-title");
     const kind = !workflow.latestStatus ? "neutral" : workflow.latestStatus !== "completed" ? "running" : workflow.latestConclusion === "success" ? "success" : "failed";
-    title.append(node("span", null, workflow.name), statusDot(kind));
+    const latestStatus = !workflow.latestStatus
+      ? "no recent runs"
+      : workflow.latestStatus !== "completed"
+        ? workflow.latestStatus
+        : workflow.latestConclusion;
+    title.append(
+      node("span", null, workflow.name),
+      statusDot(kind),
+      node("span", "sr-only", "Latest status: " + latestStatus),
+    );
     const track = node("div", "progress-track");
     const bar = node("div", "progress-bar");
     bar.style.width = (workflow.firstPassRate || 0) + "%";
@@ -866,16 +885,17 @@ function renderRuns() {
     const status = node("span", "badge " + statusKind(run));
     status.append(statusDot(statusKind(run)), document.createTextNode(statusLabel(run)));
     const statusCell = document.createElement("td"); statusCell.append(status);
-    const startedCell = node("td", null, relativeTime(run.startedAt));
-    startedCell.title = new Date(run.startedAt).toLocaleString();
+    const effectiveStart = run.startedAt || run.createdAt;
+    const startedCell = node("td", null, run.startedAt ? relativeTime(run.startedAt) : "Queued " + relativeTime(run.createdAt));
+    startedCell.title = new Date(effectiveStart).toLocaleString();
     row.append(
       runCell,
       node("td", null, run.workflowName),
       node("td", "mono", run.headBranch || "—"),
       statusCell,
       startedCell,
-      node("td", "mono", formatMs(new Date(run.startedAt) - new Date(run.createdAt))),
-      node("td", "mono", formatMs((run.status === "completed" ? new Date(run.updatedAt) : new Date()) - new Date(run.startedAt))),
+      node("td", "mono", formatMs(run.startedAt ? new Date(run.startedAt) - new Date(run.createdAt) : null)),
+      node("td", "mono", formatMs(run.startedAt ? (run.status === "completed" ? new Date(run.updatedAt) : new Date()) - new Date(run.startedAt) : null)),
     );
 
     const detailRow = document.createElement("tr");
@@ -913,7 +933,13 @@ function render(state) {
   if (!state.data) return;
   dashboard = state.data;
   mutationToken = state.mutationToken;
-  recentUpdatedAt = state.recentUpdatedAt || state.updatedAt;
+  const nextCacheTimestamp = state.recentUpdatedAt || state.updatedAt;
+  if (cacheTimestamp && nextCacheTimestamp !== cacheTimestamp) {
+    runDetailCache.clear();
+    failureDiagnosticCache.clear();
+  }
+  cacheTimestamp = nextCacheTimestamp;
+  recentUpdatedAt = nextCacheTimestamp;
   const health = dashboard.health;
   elements.repositoryName.textContent = dashboard.repository.nameWithOwner;
   elements.updatedAt.textContent = "Health updated " + relativeTime(state.healthUpdatedAt || state.updatedAt) + " · " + health.windowDays + "-day health · " + health.selectedWindow.total + " runs";

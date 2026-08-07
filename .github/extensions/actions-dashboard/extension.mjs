@@ -12,6 +12,7 @@ import {
     loadFailureDiagnostics,
     loadRecentRuns,
     loadRunDetails,
+    isUnsuccessfulConclusion,
     rerunFailedJobs,
 } from "./github-actions.mjs";
 import { appJavaScript, dashboardHtml, dashboardStyles } from "./renderer.mjs";
@@ -131,6 +132,8 @@ async function refreshRecentRuns(entry) {
                 entry.state.data.runs.map((run) => [run.databaseId, run]),
             );
             for (const run of runs) {
+                entry.failureDiagnostics.delete(run.databaseId);
+                entry.runDetails.delete(run.databaseId);
                 mergedRuns.set(run.databaseId, run);
             }
             const history = [...mergedRuns.values()]
@@ -172,7 +175,7 @@ async function refreshRecentRuns(entry) {
 async function getFailureDiagnostics(entry, runId) {
     const details = await getRunDetails(entry, runId);
     const failedJobIds = details.jobs
-        .filter((job) => job.conclusion === "failure")
+        .filter((job) => isUnsuccessfulConclusion(job.conclusion))
         .map((job) => job.databaseId);
     if (failedJobIds.length === 0) {
         throw new CanvasError(
@@ -231,6 +234,17 @@ async function getRunDetails(entry, runId) {
 
 async function handleRequest(entry, req, res) {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (req.headers.host !== entry.host) {
+        writeJson(res, 421, { error: "Unexpected Host header." });
+        return;
+    }
+    if (
+        req.method !== "GET" &&
+        req.headers.origin !== entry.origin
+    ) {
+        writeJson(res, 403, { error: "Cross-origin request rejected." });
+        return;
+    }
 
     if (req.method === "GET" && url.pathname === "/") {
         res.writeHead(200, {
@@ -369,7 +383,7 @@ async function handleRequest(entry, req, res) {
         if (
             !run ||
             run.status !== "completed" ||
-            ["success", "neutral", "skipped"].includes(run.conclusion)
+            !isUnsuccessfulConclusion(run.conclusion)
         ) {
             writeJson(res, 409, {
                 error: "Only a loaded failed run can be rerun.",
@@ -439,6 +453,8 @@ async function startServer(options) {
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     entry.server = server;
+    entry.host = `127.0.0.1:${port}`;
+    entry.origin = `http://${entry.host}`;
     entry.url = `http://127.0.0.1:${port}/`;
     return entry;
 }
