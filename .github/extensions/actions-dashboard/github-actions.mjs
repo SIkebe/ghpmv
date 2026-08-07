@@ -628,7 +628,7 @@ async function loadRunRange({
     }
 
     return {
-        complete: totalCount < 1000 || runs.length >= totalCount,
+        complete: totalCount < 1000,
         runs,
     };
 }
