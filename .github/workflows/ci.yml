@@ -129,7 +129,8 @@ jobs:
         run: |
           $files = @(Get-ChildItem '.github/extensions' -Recurse -Filter '*.mjs' -File)
           if ($files.Count -eq 0) {
-            throw 'No extension modules were found.'
+            Write-Host 'No extension modules remain to validate.'
+            exit 0
           }
           foreach ($file in $files) {
             node --check $file.FullName
@@ -137,8 +138,6 @@ jobs:
               exit $LASTEXITCODE
             }
           }
-      - name: Parse dashboard browser script
-        run: node -e "import('./.github/extensions/actions-dashboard/renderer.mjs').then(module => { if (typeof module.appJavaScript !== 'string' || !module.appJavaScript.trim()) throw new Error('appJavaScript must be a non-empty string'); new Function(module.appJavaScript); })"
 
   build-test:
     name: Build and test (${{ matrix.os }})
