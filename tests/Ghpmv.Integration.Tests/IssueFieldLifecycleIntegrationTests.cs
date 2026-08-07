@@ -95,22 +95,32 @@ public class IssueFieldLifecycleIntegrationTests
         }
         finally
         {
-            if (projectId is not null)
+            try
             {
-                await DeleteProjectAsync(client, projectId);
+                if (projectId is not null)
+                {
+                    await DeleteProjectAsync(client, projectId);
+                }
             }
-
-            var remainingIssueFieldId = await FindIssueFieldIdAsync(
-                client,
-                fieldName,
-                CancellationToken.None);
-            if (remainingIssueFieldId is not null)
+            finally
             {
-                await DeleteIssueFieldAsync(client, remainingIssueFieldId);
+                try
+                {
+                    var remainingIssueFieldId = await FindIssueFieldIdAsync(
+                        client,
+                        fieldName,
+                        CancellationToken.None);
+                    if (remainingIssueFieldId is not null)
+                    {
+                        await DeleteIssueFieldAsync(client, remainingIssueFieldId);
+                    }
+                }
+                finally
+                {
+                    DeleteDirectoryIfPresent(createLogDirectory);
+                    DeleteDirectoryIfPresent(updateLogDirectory);
+                }
             }
-
-            DeleteDirectoryIfPresent(createLogDirectory);
-            DeleteDirectoryIfPresent(updateLogDirectory);
         }
     }
 
