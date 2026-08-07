@@ -61,7 +61,9 @@ jobs:
             }
             if (
               $path.StartsWith('docs/') -or
+              $path -eq 'examples/README.md' -or
               $path -eq '.github/copilot-instructions.md' -or
+              $path -eq 'PLAN.md' -or
               $path -match '^(\.gitattributes|\.gitignore|LICENSE(?:\..*)?|README(?:\..*)?)$'
             ) {
               continue
@@ -127,6 +129,10 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Validate extension modules
         run: |
+          if (-not (Test-Path '.github/extensions' -PathType Container)) {
+            Write-Host 'No extension directory remains to validate.'
+            exit 0
+          }
           $files = @(Get-ChildItem '.github/extensions' -Recurse -Filter '*.mjs' -File)
           if ($files.Count -eq 0) {
             Write-Host 'No extension modules remain to validate.'
