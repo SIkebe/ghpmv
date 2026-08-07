@@ -49,6 +49,27 @@ async function tryRunGhText(args, workspacePath) {
     }
 }
 
+async function mapWithConcurrency(items, limit, worker) {
+    const results = new Array(items.length);
+    let nextIndex = 0;
+
+    async function consume() {
+        while (nextIndex < items.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            results[index] = await worker(items[index], index);
+        }
+    }
+
+    await Promise.all(
+        Array.from(
+            { length: Math.min(limit, items.length) },
+            () => consume(),
+        ),
+    );
+    return results;
+}
+
 function percentile(values, fraction) {
     if (values.length === 0) {
         return null;
@@ -93,10 +114,10 @@ function buildMetrics(runs, days, now) {
         (run) => run.conclusion === "success",
     ).length;
     const failed = evaluated.length - success;
-    const firstPassSuccess = evaluated.filter(
+    const noRerunSuccess = evaluated.filter(
         (run) => run.conclusion === "success" && run.runAttempt === 1,
     ).length;
-    const rerunRecoveries = evaluated.filter(
+    const successfulReruns = evaluated.filter(
         (run) => run.conclusion === "success" && run.runAttempt > 1,
     ).length;
     const queueTimes = selected
@@ -111,12 +132,12 @@ function buildMetrics(runs, days, now) {
         active: selected.filter((run) => run.status !== "completed").length,
         days,
         failed,
-        firstPassRate: evaluated.length
-            ? Math.round((firstPassSuccess / evaluated.length) * 1000) / 10
+        noRerunSuccessRate: evaluated.length
+            ? Math.round((noRerunSuccess / evaluated.length) * 1000) / 10
             : null,
         queueP50Ms: percentile(queueTimes, 0.5),
         queueP95Ms: percentile(queueTimes, 0.95),
-        rerunRecoveries,
+        successfulReruns,
         runtimeP50Ms: percentile(runtimes, 0.5),
         runtimeP95Ms: percentile(runtimes, 0.95),
         success,
@@ -130,8 +151,9 @@ function buildMetrics(runs, days, now) {
 function buildWorkflowSummary(runs, now, configuredWorkflows) {
     const workflows = new Map(
         configuredWorkflows.map((workflow) => [
-            workflow.name,
+            String(workflow.id),
             {
+                id: String(workflow.id),
                 latestConclusion: null,
                 latestStatus: null,
                 name: workflow.name,
@@ -142,7 +164,10 @@ function buildWorkflowSummary(runs, now, configuredWorkflows) {
     );
 
     for (const run of runs) {
-        const workflow = workflows.get(run.workflowName) ?? {
+        const workflowKey =
+            run.workflowId ?? `name:${run.workflowName}`;
+        const workflow = workflows.get(workflowKey) ?? {
+            id: workflowKey,
             latestConclusion: run.conclusion,
             latestStatus: run.status,
             name: run.workflowName,
@@ -154,27 +179,27 @@ function buildWorkflowSummary(runs, now, configuredWorkflows) {
             workflow.latestStatus = run.status;
         }
         workflow.runs.push(run);
-        workflows.set(run.workflowName, workflow);
+        workflows.set(workflowKey, workflow);
     }
 
     return [...workflows.values()]
         .map((workflow) => ({
             ...buildMetrics(workflow.runs, 90, now),
+            id: workflow.id,
             latestConclusion: workflow.latestConclusion,
             latestStatus: workflow.latestStatus,
             name: workflow.name,
             state: workflow.state,
         }))
         .sort((left, right) => {
-            const leftRate = left.firstPassRate ?? 101;
-            const rightRate = right.firstPassRate ?? 101;
+            const leftRate = left.noRerunSuccessRate ?? 101;
+            const rightRate = right.noRerunSuccessRate ?? 101;
             return leftRate - rightRate || left.name.localeCompare(right.name);
         });
 }
 
 function buildTrend(runs, days, now) {
-    const start = new Date(now.getTime() - (days - 1) * DAY_MS);
-    start.setUTCHours(0, 0, 0, 0);
+    const start = new Date(now.getTime() - days * DAY_MS);
     const bucketCount = Math.ceil(days / 7);
     const buckets = Array.from({ length: bucketCount }, (_, index) => ({
         failed: 0,
@@ -233,6 +258,7 @@ function normalizeCheck(check) {
             "timed_out",
             "action_required",
             "startup_failure",
+            "stale",
         ].includes(state)
     ) {
         bucket = "failed";
@@ -289,6 +315,7 @@ function normalizeRun(run, workflowNames) {
         status: run.status,
         updatedAt: run.updated_at,
         url: run.html_url,
+        workflowId: String(run.workflow_id),
         workflowName: workflowName(run, workflowNames),
     };
 }
@@ -405,7 +432,7 @@ export async function loadFailureDiagnostics({
     runId,
     workspacePath,
 }) {
-    const [logText, artifactData, annotationPages] = await Promise.all([
+    const [logText, artifactPages, annotationPages] = await Promise.all([
         tryRunGhText(
             [
                 "run",
@@ -420,12 +447,20 @@ export async function loadFailureDiagnostics({
         tryRunGh(
             [
                 "api",
+                "--method",
+                "GET",
                 `repos/${repository}/actions/runs/${runId}/artifacts`,
+                "--paginate",
+                "--slurp",
+                "-f",
+                "per_page=100",
             ],
             workspacePath,
         ),
-        Promise.all(
-            jobIds.map((jobId) =>
+        mapWithConcurrency(
+            jobIds,
+            4,
+            (jobId) =>
                 tryRunGh(
                     [
                         "api",
@@ -439,7 +474,6 @@ export async function loadFailureDiagnostics({
                     ],
                     workspacePath,
                 ),
-            ),
         ),
     ]);
 
@@ -454,13 +488,15 @@ export async function loadFailureDiagnostics({
             startLine: annotation.start_line,
             title: annotation.title || null,
         }));
-    const artifacts = (artifactData?.artifacts ?? []).map((artifact) => ({
-        createdAt: artifact.created_at,
-        expired: artifact.expired,
-        expiresAt: artifact.expires_at,
-        name: artifact.name,
-        sizeBytes: artifact.size_in_bytes,
-    }));
+    const artifacts = (artifactPages ?? [])
+        .flatMap((page) => page.artifacts ?? [])
+        .map((artifact) => ({
+            createdAt: artifact.created_at,
+            expired: artifact.expired,
+            expiresAt: artifact.expires_at,
+            name: artifact.name,
+            sizeBytes: artifact.size_in_bytes,
+        }));
 
     return {
         annotations,
@@ -512,6 +548,7 @@ export async function loadRecentRuns({
                 "status",
                 "conclusion",
                 "workflowName",
+                "workflowDatabaseId",
                 "createdAt",
                 "startedAt",
                 "updatedAt",
@@ -527,8 +564,88 @@ export async function loadRecentRuns({
         displayTitle: run.displayTitle ?? "Untitled run",
         headBranch: run.headBranch ?? "",
         runAttempt: run.attempt ?? 1,
+        workflowId: run.workflowDatabaseId
+            ? String(run.workflowDatabaseId)
+            : `name:${run.workflowName ?? "Unknown workflow"}`,
         workflowName: run.workflowName ?? "Unknown workflow",
     }));
+}
+
+async function loadRunRange({
+    end,
+    repository,
+    start,
+    workspacePath,
+}) {
+    const pages = await runGh(
+        [
+            "api",
+            "--method",
+            "GET",
+            `repos/${repository}/actions/runs`,
+            "--paginate",
+            "--slurp",
+            "-f",
+            "per_page=100",
+            "-f",
+            `created=${start.toISOString()}..${end.toISOString()}`,
+        ],
+        workspacePath,
+    );
+    const runs = pages.flatMap((page) => page.workflow_runs ?? []);
+    const totalCount = pages[0]?.total_count ?? runs.length;
+    const rangeMs = end.getTime() - start.getTime();
+
+    if (totalCount >= 1000 && rangeMs > 60 * 60 * 1000) {
+        const midpoint = new Date(start.getTime() + Math.floor(rangeMs / 2));
+        const left = await loadRunRange({
+            end: midpoint,
+            repository,
+            start,
+            workspacePath,
+        });
+        const right = await loadRunRange({
+            end,
+            repository,
+            start: midpoint,
+            workspacePath,
+        });
+        return {
+            complete: left.complete && right.complete,
+            runs: [...left.runs, ...right.runs],
+        };
+    }
+
+    return {
+        complete: totalCount < 1000 || runs.length >= totalCount,
+        runs,
+    };
+}
+
+async function loadRunHistory(repository, since, now, workspacePath) {
+    const ranges = [];
+    let start = new Date(since);
+    while (start < now) {
+        const end = new Date(
+            Math.min(start.getTime() + 7 * DAY_MS, now.getTime()),
+        );
+        ranges.push({ end, repository, start, workspacePath });
+        start = end;
+    }
+
+    const results = await mapWithConcurrency(
+        ranges,
+        3,
+        (range) => loadRunRange(range),
+    );
+    const uniqueRuns = new Map();
+    for (const run of results.flatMap((result) => result.runs)) {
+        uniqueRuns.set(run.id, run);
+    }
+    return {
+        complete: results.every((result) => result.complete),
+        runs: [...uniqueRuns.values()],
+    };
 }
 
 export async function loadDashboard({
@@ -551,22 +668,9 @@ export async function loadDashboard({
     const nameWithOwner = repositoryData.nameWithOwner;
     const since = new Date(Date.now() - 90 * DAY_MS).toISOString();
 
-    const [pages, workflowData, pullRequestData] = await Promise.all([
-        runGh(
-            [
-                "api",
-                "--method",
-                "GET",
-                `repos/${nameWithOwner}/actions/runs`,
-                "--paginate",
-                "--slurp",
-                "-f",
-                "per_page=100",
-                "-f",
-                `created=>=${since}`,
-            ],
-            workspacePath,
-        ),
+    const historyNow = new Date();
+    const [history, workflowData, pullRequestData] = await Promise.all([
+        loadRunHistory(nameWithOwner, since, historyNow, workspacePath),
         runGh(
             [
                 "workflow",
@@ -598,8 +702,7 @@ export async function loadDashboard({
             workflow.name,
         ]),
     );
-    const runs = pages
-        .flatMap((page) => page.workflow_runs ?? [])
+    const runs = history.runs
         .map((run) => normalizeRun(run, workflowNames))
         .filter((run) => new Date(run.createdAt).getTime() >= Date.parse(since))
         .sort(
@@ -629,6 +732,7 @@ export async function loadDashboard({
             ),
             selectedWindow,
             trend: buildTrend(runs, days, now),
+            historyComplete: history.complete,
             windowDays: days,
             windows,
         },

@@ -44,7 +44,7 @@ export const dashboardHtml = `<!doctype html>
         <div class="table-wrap compact-table">
           <table>
             <thead>
-              <tr><th>Window</th><th>Success</th><th>First pass</th><th>Failures</th></tr>
+              <tr><th>Window</th><th>Success</th><th>No rerun</th><th>Failures</th></tr>
             </thead>
             <tbody id="windows"></tbody>
           </table>
@@ -66,7 +66,7 @@ export const dashboardHtml = `<!doctype html>
       <div class="panel-header">
         <div>
           <h2>Workflow reliability</h2>
-          <p class="muted">90-day health, ordered by weakest first-pass rate</p>
+          <p class="muted">90-day health, ordered by weakest no-rerun success rate</p>
         </div>
       </div>
       <div id="workflows" class="workflow-grid"></div>
@@ -519,7 +519,7 @@ function statusDot(kind) {
 function renderSummary(metrics, defaultBranch, defaultBranchName) {
   const cards = [
     ["Success rate", percent(metrics.successRate), metrics.success + " successful", "good"],
-    ["First-pass rate", percent(metrics.firstPassRate), metrics.rerunRecoveries + " recovered reruns", "good"],
+    ["No-rerun success", percent(metrics.noRerunSuccessRate), metrics.successfulReruns + " successful reruns", "good"],
     ["Default branch", percent(defaultBranch.successRate), defaultBranch.total + " runs on " + (defaultBranchName || "default"), "good"],
     ["Failures", String(metrics.failed), metrics.active + " currently active", metrics.failed ? "bad" : "good"],
     ["P95 queue", formatMs(metrics.queueP95Ms), "P50 " + formatMs(metrics.queueP50Ms), "info"],
@@ -539,7 +539,7 @@ function renderWindows(windows) {
     row.append(
       node("td", null, days + " days"),
       node("td", null, percent(metrics.successRate)),
-      node("td", null, percent(metrics.firstPassRate)),
+      node("td", null, percent(metrics.noRerunSuccessRate)),
       node("td", null, String(metrics.failed)),
     );
     return row;
@@ -568,7 +568,9 @@ function renderWorkflows(workflows) {
   elements.workflows.replaceChildren(...workflows.map((workflow) => {
     const card = node("article", "workflow-card");
     const title = node("div", "workflow-title");
-    const kind = !workflow.latestStatus ? "neutral" : workflow.latestStatus !== "completed" ? "running" : workflow.latestConclusion === "success" ? "success" : "failed";
+    const kind = !workflow.latestStatus
+      ? "neutral"
+      : statusKind({ status: workflow.latestStatus, conclusion: workflow.latestConclusion });
     const latestStatus = !workflow.latestStatus
       ? "no recent runs"
       : workflow.latestStatus !== "completed"
@@ -581,7 +583,7 @@ function renderWorkflows(workflows) {
     );
     const track = node("div", "progress-track");
     const bar = node("div", "progress-bar");
-    bar.style.width = (workflow.firstPassRate || 0) + "%";
+    bar.style.width = (workflow.noRerunSuccessRate || 0) + "%";
     track.append(bar);
     const details = node("div", "workflow-details");
     if (workflow.total) {
@@ -594,7 +596,7 @@ function renderWorkflows(workflows) {
     } else {
       details.append(node("span", null, "No runs in 90 days"), node("span", null, workflow.state));
     }
-    card.append(title, node("div", "workflow-rate", workflow.total ? percent(workflow.firstPassRate) + " first pass" : "No recent data"), track, details);
+    card.append(title, node("div", "workflow-rate", workflow.total ? percent(workflow.noRerunSuccessRate) + " no rerun" : "No recent data"), track, details);
     return card;
   }));
 }
@@ -642,9 +644,9 @@ function renderPullRequest(pr) {
 
 function renderWorkflowOptions(workflows) {
   const selected = elements.workflowFilter.value;
-  const options = [new Option("All workflows", "all"), ...workflows.map((workflow) => new Option(workflow.name, workflow.name))];
+  const options = [new Option("All workflows", "all"), ...workflows.map((workflow) => new Option(workflow.name, workflow.id))];
   elements.workflowFilter.replaceChildren(...options);
-  if (workflows.some((workflow) => workflow.name === selected)) elements.workflowFilter.value = selected;
+  if (workflows.some((workflow) => workflow.id === selected)) elements.workflowFilter.value = selected;
 }
 function filteredRuns() {
   if (!dashboard) return [];
@@ -653,7 +655,7 @@ function filteredRuns() {
   const workflow = elements.workflowFilter.value;
   const filtered = dashboard.runs.filter((run) => {
     const matchesSearch = !search || run.displayTitle.toLocaleLowerCase().includes(search) || run.headBranch.toLocaleLowerCase().includes(search);
-    return matchesSearch && (status === "all" || statusKind(run) === status) && (workflow === "all" || run.workflowName === workflow);
+    return matchesSearch && (status === "all" || statusKind(run) === status) && (workflow === "all" || run.workflowId === workflow);
   });
   const hasFilters = Boolean(search) || status !== "all" || workflow !== "all";
   return hasFilters ? filtered : filtered.slice(0, dashboard.recentLimit);
@@ -704,6 +706,7 @@ function renderJob(job) {
         node("span", null, step.number + ". " + step.name),
         result,
       );
+      row.append(node("span", "sr-only", "Status: " + statusLabel(step)));
       steps.append(row);
     }
     card.append(steps);
@@ -942,7 +945,8 @@ function render(state) {
   recentUpdatedAt = nextCacheTimestamp;
   const health = dashboard.health;
   elements.repositoryName.textContent = dashboard.repository.nameWithOwner;
-  elements.updatedAt.textContent = "Health updated " + relativeTime(state.healthUpdatedAt || state.updatedAt) + " · " + health.windowDays + "-day health · " + health.selectedWindow.total + " runs";
+  elements.updatedAt.textContent = "Health updated " + relativeTime(state.healthUpdatedAt || state.updatedAt) + " · " + health.windowDays + "-day health · " + health.selectedWindow.total + " runs" +
+    (health.historyComplete ? "" : " · baseline incomplete");
   renderSummary(health.selectedWindow, health.defaultBranch, dashboard.repository.defaultBranch);
   renderWindows(health.windows);
   renderTrend(health.trend);
