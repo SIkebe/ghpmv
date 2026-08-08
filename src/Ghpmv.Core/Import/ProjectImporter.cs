@@ -77,6 +77,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
@@ -195,6 +196,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
@@ -256,6 +258,20 @@ public sealed class ProjectImporter
 
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
+
+    private static void ValidateProjectFieldContracts(ProjectSnapshot snapshot)
+    {
+        var invalidMultiSelect = snapshot.Fields.FirstOrDefault(field =>
+            field.IssueField is null
+            && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+            && field.Options is not { Count: > 0 });
+        if (invalidMultiSelect is not null)
+        {
+            throw new InvalidDataException(
+                $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
+                "GitHub requires at least one option when creating the field and ignores empty option updates.");
+        }
+    }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)
     {
@@ -466,12 +482,13 @@ public sealed class ProjectImporter
                 {
                     OnProgress?.Invoke($"warning: field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
                 }
-                else if (field.DataType is "SINGLE_SELECT" or "MULTI_SELECT"
-                    && field.Options is not null)
+                else if (field.Options is { } selectOptions
+                    && (field.DataType == "SINGLE_SELECT"
+                        || (field.DataType == "MULTI_SELECT" && selectOptions.Count > 0)))
                 {
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                        $"Overwriting options of existing field '{field.Name}' with {field.Options.Count} snapshot options..."));
-                    await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, field.Options, maps, cancellationToken).ConfigureAwait(false);
+                        $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
+                    await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
                 }
                 else if (field.DataType == "ITERATION")
                 {

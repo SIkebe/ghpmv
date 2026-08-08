@@ -838,8 +838,10 @@ public class ProjectImporterLogicTests
         }
     }
 
-    [Fact]
-    public async Task Import_clears_existing_ordinary_multi_select_options_when_snapshot_options_are_empty()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Import_rejects_ordinary_multi_select_without_options_before_api_calls(bool optionsAreNull)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -858,26 +860,23 @@ public class ProjectImporterLogicTests
                     {
                         Name = "Areas",
                         DataType = "MULTI_SELECT",
-                        Options = [],
+                        Options = optionsAreNull ? null : [],
                     },
                 ],
             };
 
-            var result = await new ProjectImporter(client)
-            {
-                OperationLogDirectory = directory,
-            }.ImportIntoAsync(
-                snapshot,
-                "target",
-                7,
-                TestContext.Current.CancellationToken);
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() =>
+                new ProjectImporter(client)
+                {
+                    OperationLogDirectory = directory,
+                }.ImportIntoAsync(
+                    snapshot,
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
 
-            var request = Assert.Single(
-                handler.RequestBodies,
-                body => body.Contains("updateProjectV2Field", StringComparison.Ordinal));
-            using var document = JsonDocument.Parse(request);
-            Assert.Empty(document.RootElement.GetProperty("variables").GetProperty("options").EnumerateArray());
-            Assert.Empty(result.OptionIds["Areas"]);
+            Assert.Contains("Project multi-select field 'Areas' must define at least one option", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(handler.RequestBodies);
         }
         finally
         {
@@ -1010,14 +1009,6 @@ public class ProjectImporterLogicTests
                         {"id":"PVTMSFO_platform","name":"Platform"},
                         {"id":"PVTMSFO_sdk","name":"SDK"}
                       ]
-                    }}}}
-                    """,
-                _ when body.Contains("updateProjectV2Field(", StringComparison.Ordinal)
-                    && body.Contains(@"""options"":[]", StringComparison.Ordinal) =>
-                    """
-                    {"data":{"updateProjectV2Field":{"projectV2Field":{
-                      "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
-                      "multiSelectOptions":[]
                     }}}}
                     """,
                 _ when body.Contains("updateProjectV2Field(", StringComparison.Ordinal) =>
