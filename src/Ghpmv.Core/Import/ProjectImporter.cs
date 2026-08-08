@@ -467,7 +467,7 @@ public sealed class ProjectImporter
                     OnProgress?.Invoke($"warning: field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
                 }
                 else if (field.DataType is "SINGLE_SELECT" or "MULTI_SELECT"
-                    && field.Options is { Count: > 0 })
+                    && field.Options is not null)
                 {
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Overwriting options of existing field '{field.Name}' with {field.Options.Count} snapshot options..."));

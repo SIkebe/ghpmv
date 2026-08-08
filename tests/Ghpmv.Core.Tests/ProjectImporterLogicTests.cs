@@ -839,6 +839,53 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_clears_existing_ordinary_multi_select_options_when_snapshot_options_are_empty()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new OrdinaryMultiSelectFieldStubHandler(existing: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
+                        DataType = "MULTI_SELECT",
+                        Options = [],
+                    },
+                ],
+            };
+
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            }.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var request = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateProjectV2Field", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            Assert.Empty(document.RootElement.GetProperty("variables").GetProperty("options").EnumerateArray());
+            Assert.Empty(result.OptionIds["Areas"]);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Import_rejects_ambiguous_ordinary_multi_select_and_linked_issue_field_identity()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
@@ -963,6 +1010,14 @@ public class ProjectImporterLogicTests
                         {"id":"PVTMSFO_platform","name":"Platform"},
                         {"id":"PVTMSFO_sdk","name":"SDK"}
                       ]
+                    }}}}
+                    """,
+                _ when body.Contains("updateProjectV2Field(", StringComparison.Ordinal)
+                    && body.Contains(@"""options"":[]", StringComparison.Ordinal) =>
+                    """
+                    {"data":{"updateProjectV2Field":{"projectV2Field":{
+                      "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                      "multiSelectOptions":[]
                     }}}}
                     """,
                 _ when body.Contains("updateProjectV2Field(", StringComparison.Ordinal) =>
