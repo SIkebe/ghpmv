@@ -145,6 +145,31 @@ public class ProjectVerifierTests
                 : item).ToList(),
         };
 
+    private static ProjectSnapshot WithOrdinaryMultiSelectField(ProjectSnapshot snapshot, IReadOnlyList<string> values)
+        => snapshot with
+        {
+            Fields =
+            [
+                .. snapshot.Fields,
+                new FieldSnapshot
+                {
+                    Name = "Areas",
+                    DataType = "MULTI_SELECT",
+                    Options = [Option("m1", "Platform", "PURPLE"), Option("m2", "SDK", "GREEN")],
+                },
+            ],
+            Items = snapshot.Items.Select(item => item.Type == "ISSUE"
+                ? item with
+                {
+                    FieldValues =
+                    [
+                        .. item.FieldValues,
+                        new FieldValueSnapshot { FieldName = "Areas", IsIssueField = false, MultiSelectOptionNames = values },
+                    ],
+                }
+                : item).ToList(),
+        };
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);
@@ -700,6 +725,18 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Ordinary_multi_select_values_are_order_independent()
+    {
+        var source = WithOrdinaryMultiSelectField(BuildSnapshot(), ["Platform", "SDK"]);
+        var target = WithOrdinaryMultiSelectField(BuildSnapshot(), ["SDK", "Platform"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Empty(report.Differences);
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
     public void Legacy_issue_field_value_without_discriminator_uses_field_definition()
     {
         var target = WithMultiSelectIssueField(BuildSnapshot(), ["Platform"]);
@@ -785,6 +822,21 @@ public class ProjectVerifierTests
             difference.Severity == VerifySeverity.Error
             && difference.Category == "Item"
             && difference.Message.Contains("field 'Teams' value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Ordinary_multi_select_values_with_delimiters_are_compared_structurally()
+    {
+        var source = WithOrdinaryMultiSelectField(BuildSnapshot(), ["A, B", "C"]);
+        var target = WithOrdinaryMultiSelectField(BuildSnapshot(), ["A", "B, C"]);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "Item"
+            && difference.Message.Contains("field 'Areas' value mismatch", StringComparison.Ordinal));
+        Assert.False(report.IsMatch);
     }
 
     [Fact]

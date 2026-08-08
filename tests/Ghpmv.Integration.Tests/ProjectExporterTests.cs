@@ -115,6 +115,11 @@ public class ProjectExporterTests
         Assert.Equal("ALL", teams.IssueField.Visibility);
         Assert.Equal("Teams involved in the issue", teams.IssueField.Description);
         Assert.Equal(["Platform", "SDK", "Docs"], teams.Options!.Select(o => o.Name));
+
+        var areas = snapshot.Fields.Single(f => f.Name == "Fixture Areas");
+        Assert.Equal("MULTI_SELECT", areas.DataType);
+        Assert.Null(areas.IssueField);
+        Assert.Equal(["Backend", "Frontend", "Operations"], areas.Options!.Select(o => o.Name));
     }
 
     [Fact]
@@ -244,6 +249,11 @@ public class ProjectExporterTests
         Assert.Equal("Alpha", ValueOf(draft1, "Fixture Select")?.SingleSelectOptionName);
         Assert.Equal("Beta", ValueOf(draft2, "Fixture Select")?.SingleSelectOptionName);
         Assert.Equal("Gamma", ValueOf(draft3, "Fixture Select")?.SingleSelectOptionName);
+
+        // MULTI_SELECT preserves multiple selections and option order from the snapshot.
+        Assert.Equal(["Backend", "Frontend"], ValueOf(draft1, "Fixture Areas")?.MultiSelectOptionNames);
+        Assert.Equal(["Operations"], ValueOf(draft2, "Fixture Areas")?.MultiSelectOptionNames);
+        Assert.Equal(["Frontend"], ValueOf(draft3, "Fixture Areas")?.MultiSelectOptionNames);
 
         // ITERATION includes a completed iteration (Sprint 0) as a value.
         Assert.Equal("Sprint 0", ValueOf(draft1, "Fixture Sprint")?.IterationTitle);

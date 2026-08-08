@@ -723,6 +723,7 @@ public sealed class ProjectExporter
                 or "ProjectV2ItemFieldNumberValue"
                 or "ProjectV2ItemFieldDateValue"
                 or "ProjectV2ItemFieldSingleSelectValue"
+                or "ProjectV2ItemFieldMultiSelectValue"
                 or "ProjectV2ItemFieldIterationValue"
                 or "ProjectV2ItemIssueFieldValue"))
             {
@@ -819,6 +820,16 @@ public sealed class ProjectExporter
                     FieldName = fieldName,
                     IsIssueField = false,
                     SingleSelectOptionName = GetOptionalString(node, "name"),
+                },
+                "ProjectV2ItemFieldMultiSelectValue" => new FieldValueSnapshot
+                {
+                    FieldName = fieldName,
+                    IsIssueField = false,
+                    MultiSelectOptionNames =
+                    [
+                        .. node.GetProperty("options").EnumerateArray()
+                            .Select(option => option.GetProperty("name").GetString() ?? string.Empty),
+                    ],
                 },
                 _ => new FieldValueSnapshot
                 {
@@ -951,6 +962,7 @@ public sealed class ProjectExporter
                       ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
+                      ... on ProjectV2ItemFieldMultiSelectValue { options { name } field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
                       ... on ProjectV2ItemIssueFieldValue {
                         field { ... on ProjectV2FieldCommon { id databaseId name } }

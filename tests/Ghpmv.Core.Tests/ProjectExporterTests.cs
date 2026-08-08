@@ -623,6 +623,76 @@ public class ProjectExporterTests
         Assert.Equal(2, handler.RequestBodies.Count);
     }
 
+    [Fact]
+    public async Task Export_reads_ordinary_multi_select_field_definitions_and_item_values()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{
+              "title":"Roadmap","shortDescription":null,"readme":null,"public":false,"closed":false,
+              "views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}
+            }}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"items":{
+              "nodes":[{
+                "type":"DRAFT_ISSUE","isArchived":false,
+                "content":{"title":"Draft","body":null,"creator":null,"createdAt":null,"assignees":{"nodes":[]}},
+                "fieldValues":{"nodes":[{
+                  "__typename":"ProjectV2ItemFieldMultiSelectValue",
+                  "field":{"name":"Areas"},
+                  "options":[{"name":"Platform"},{"name":"SDK"}]
+                }]}
+              }],
+              "pageInfo":{"hasNextPage":false,"endCursor":null}
+            }}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[
+              {"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title","dataType":"TITLE"},
+              {"__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas",
+               "dataType":"MULTI_SELECT","multiSelectOptions":[
+                 {"id":"PVTMSFO_platform","name":"Platform","color":"PURPLE","description":"Platform work"},
+                 {"id":"PVTMSFO_sdk","name":"SDK","color":"GREEN","description":null}
+               ]}
+            ]}}}}}
+            """);
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        var field = snapshot.Fields.Single(candidate => candidate.Name == "Areas");
+        Assert.Equal("MULTI_SELECT", field.DataType);
+        Assert.Null(field.IssueField);
+        Assert.Equal(
+            [
+                ("PVTMSFO_platform", "Platform", "PURPLE", "Platform work"),
+                ("PVTMSFO_sdk", "SDK", "GREEN", null),
+            ],
+            field.Options!.Select(option => (option.Id, option.Name, option.Color, option.Description)));
+
+        var value = Assert.Single(Assert.Single(snapshot.Items).FieldValues);
+        Assert.Equal("Areas", value.FieldName);
+        Assert.Equal(false, value.IsIssueField);
+        Assert.Equal(["Platform", "SDK"], value.MultiSelectOptionNames);
+
+        Assert.Equal(3, handler.RequestBodies.Count);
+        Assert.Contains("ProjectV2ItemFieldMultiSelectValue", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("options { name }", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("ProjectV2MultiSelectField", handler.RequestBodies[2], StringComparison.Ordinal);
+        Assert.Contains("multiSelectOptions", handler.RequestBodies[2], StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            handler.RequestBodies,
+            body => body.Contains("issueFields", StringComparison.Ordinal));
+    }
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);

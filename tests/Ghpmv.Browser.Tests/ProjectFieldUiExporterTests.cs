@@ -91,20 +91,29 @@ public class ProjectFieldUiExporterTests
     }
 
     [Fact]
-    public void ParseCatalog_rejects_unsupported_ordinary_multi_select_fields()
+    public void ParseCatalog_accepts_ordinary_multi_select_fields_with_options()
     {
-        var exception = Assert.Throws<InvalidOperationException>(() =>
-            ProjectFieldUiExporter.ParseCatalog(
-                """
-                [{
-                  "dataType":"multiSelect","id":1,"name":"Teams","position":1,
-                  "settings":{"options":[
-                    {"id":"sdk","name":"SDK","color":"GREEN","description":null}
-                  ]},"issueFieldId":null
-                }]
-                """));
+        var catalog = ProjectFieldUiExporter.ParseCatalog(
+            """
+            [{
+              "dataType":"multiSelect","id":1,"name":"Teams","position":1,
+              "settings":{"options":[
+                {"id":"platform","name":"Platform","color":"PURPLE","description":"Platform work"},
+                {"id":"sdk","name":"SDK","color":"GREEN","description":null}
+              ]},"issueFieldId":null
+            }]
+            """);
 
-        Assert.Contains("unsupported ordinary multi-select field 'Teams'", exception.Message, StringComparison.Ordinal);
+        var entry = Assert.Single(catalog.Entries);
+        Assert.False(entry.IsIssueField);
+        Assert.Equal("Teams", entry.Field.Name);
+        Assert.Equal("MULTI_SELECT", entry.Field.DataType);
+        Assert.Equal(
+            [
+                ("platform", "Platform", "PURPLE", "Platform work"),
+                ("sdk", "SDK", "GREEN", null),
+            ],
+            entry.Field.Options!.Select(option => (option.Id, option.Name, option.Color, option.Description)));
     }
 
     [Theory]

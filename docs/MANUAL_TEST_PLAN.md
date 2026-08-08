@@ -55,7 +55,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 |---|---|---|
 | Repository / Issues / Pull Requests | GEI + 目視 / `gh` | `ghpmv` のスコープ外。Project item relink の前提条件。 |
 | Project metadata | `ghpmv verify` + 目視 | title / shortDescription / README / public / closed state。 |
-| Fields | `ghpmv verify` + 目視 | Text / Number / Date / Single-select / Iteration / organization multi-select Issue Field / Status options。 |
+| Fields | `ghpmv verify` + 目視 | Text / Number / Date / Single-select / Multi-select / Iteration / organization multi-select Issue Field / Status options。 |
 | Items | `ghpmv verify` + 目視 | Draft / Issue / PR / archived / assigned draft。 |
 | Field values | `ghpmv verify` + 目視 | Unicode、emoji、number、date、single-select option、multi-select options、iteration。 |
 | Item order | `ghpmv verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
@@ -106,7 +106,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Issue 2 件
 - open Pull Request 1 件
 - Project `gpm-fixture`
-- custom fields(Text / Number / Date / Single-select / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
+- custom fields(Text / Number / Date / Single-select / Multi-select (`Fixture Areas`) / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 
@@ -566,7 +566,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Project title が import 時指定どおり。
 - [ ] short description が一致。
 - [ ] README が改行・emoji を含めて概ね一致。
-- [ ] Text / Number / Date / Single-select / Iteration fields と organization multi-select Issue Field が存在する。
+- [ ] Text / Number / Date / Single-select / Multi-select / Iteration fields と organization multi-select Issue Field が存在する。
 - [ ] Single-select options の name / color / description が一致。
 - [ ] Iteration の completed / current / future 相当が再現されている。
 

@@ -9,7 +9,7 @@ namespace Ghpmv.Core.Import;
 /// <summary>
 /// Imports a <see cref="ProjectSnapshot"/> into a target organization (M3):
 /// creates the project, applies metadata (README, description, visibility, closed state),
-/// creates all custom fields (TEXT/NUMBER/DATE/SINGLE_SELECT/ITERATION), recreates and
+/// creates all custom fields (TEXT/NUMBER/DATE/SINGLE_SELECT/MULTI_SELECT/ITERATION), recreates and
 /// links organization Issue Fields (including MULTI_SELECT), overwrites the built-in
 /// Status field options, and recreates API-writable View settings.
 /// Completed iterations are recreated as past-dated iterations; the API accepts past
@@ -21,12 +21,13 @@ public sealed class ProjectImporter
 
     /// <summary>Data types that <c>createProjectV2Field</c> supports; everything else is a built-in field.</summary>
     private static readonly HashSet<string> CreatableDataTypes =
-        new(["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"], StringComparer.Ordinal);
+        new(["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "MULTI_SELECT", "ITERATION"], StringComparer.Ordinal);
 
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotNormalFieldNames = [];
+    private HashSet<string> _snapshotMultiSelectNormalFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
     private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
     private HashSet<string> _targetIssueFieldNames = [];
@@ -76,6 +77,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
@@ -194,6 +196,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
 
@@ -256,10 +259,29 @@ public sealed class ProjectImporter
     private Task InvokeBeforeWriteAsync(CancellationToken cancellationToken)
         => BeforeWriteAsync?.Invoke(cancellationToken) ?? Task.CompletedTask;
 
+    private static void ValidateProjectFieldContracts(ProjectSnapshot snapshot)
+    {
+        var invalidMultiSelect = snapshot.Fields.FirstOrDefault(field =>
+            field.IssueField is null
+            && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal)
+            && field.Options is not { Count: > 0 });
+        if (invalidMultiSelect is not null)
+        {
+            throw new InvalidDataException(
+                $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
+                "GitHub requires at least one option when creating the field and ignores empty option updates.");
+        }
+    }
+
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)
     {
         _snapshotNormalFieldNames = snapshot.Fields
             .Where(field => field.IssueField is null)
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectNormalFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is null
+                && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
@@ -377,7 +399,8 @@ public sealed class ProjectImporter
         }
 
         List<TargetIssueField> targetIssueFields = [];
-        if (OwnerType == ProjectOwnerType.Organization && _snapshotIssueFieldNames.Count > 0)
+        if (OwnerType == ProjectOwnerType.Organization
+            && (_snapshotIssueFieldNames.Count > 0 || _snapshotMultiSelectNormalFieldNames.Count > 0))
         {
             targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         }
@@ -416,12 +439,6 @@ public sealed class ProjectImporter
 
             if (!CreatableDataTypes.Contains(field.DataType))
             {
-                if (string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
-                {
-                    Warn(
-                        $"Project multi-select field '{field.Name}' cannot be imported because GitHub's Project field APIs do not support creating it or applying its values.");
-                }
-
                 continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
             }
 
@@ -465,11 +482,13 @@ public sealed class ProjectImporter
                 {
                     OnProgress?.Invoke($"warning: field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
                 }
-                else if (field.DataType == "SINGLE_SELECT" && field.Options is { Count: > 0 })
+                else if (field.Options is { } selectOptions
+                    && (field.DataType == "SINGLE_SELECT"
+                        || (field.DataType == "MULTI_SELECT" && selectOptions.Count > 0)))
                 {
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                        $"Overwriting options of existing field '{field.Name}' with {field.Options.Count} snapshot options..."));
-                    await UpdateSingleSelectOptionsAsync(target.Id, field.Options, maps, cancellationToken).ConfigureAwait(false);
+                        $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
+                    await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
                 }
                 else if (field.DataType == "ITERATION")
                 {
@@ -1204,7 +1223,9 @@ public sealed class ProjectImporter
         if (_snapshotIssueFieldNames.Count == 0)
         {
             var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-            return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+            var directNodes = data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().ToArray();
+            ThrowIfAmbiguousTargetMultiSelectFields(directNodes);
+            return [.. directNodes.Select(maps.Register)];
         }
 
         List<JsonElement> nodes;
@@ -1233,10 +1254,13 @@ public sealed class ProjectImporter
             }
         }
 
+        ThrowIfAmbiguousTargetMultiSelectFields(nodes);
         Dictionary<string, JsonElement> details = [];
         var detailIds = nodes
             .Where(node => node.TryGetProperty("__typename", out var typeName)
-                && typeName.GetString() is "ProjectV2SingleSelectField" or "ProjectV2IterationField")
+                && typeName.GetString() is "ProjectV2SingleSelectField"
+                    or "ProjectV2MultiSelectField"
+                    or "ProjectV2IterationField")
             .Select(node => node.GetProperty("id").GetString() ?? string.Empty)
             .ToArray();
         if (detailIds.Length > 0)
@@ -1333,6 +1357,22 @@ public sealed class ProjectImporter
         ];
     }
 
+    private void ThrowIfAmbiguousTargetMultiSelectFields(IEnumerable<JsonElement> nodes)
+    {
+        var ambiguousMultiSelect = nodes
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && string.Equals(typeName.GetString(), "ProjectV2MultiSelectField", StringComparison.Ordinal))
+            .Select(node => node.GetProperty("name").GetString() ?? string.Empty)
+            .FirstOrDefault(name =>
+                _snapshotMultiSelectNormalFieldNames.Contains(name)
+                && _targetMultiSelectIssueFieldNames.Contains(name));
+        if (ambiguousMultiSelect is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Target project field '{ambiguousMultiSelect}' is ambiguous: GitHub's GraphQL API cannot distinguish an ordinary MULTI_SELECT field from a same-named linked organization Issue Field. Rename or remove the target collision before importing.");
+        }
+    }
+
     private async Task<List<JsonElement>> FetchFieldNodesByNameAsync(
         string projectId,
         CancellationToken cancellationToken)
@@ -1396,6 +1436,7 @@ public sealed class ProjectImporter
                 name = field.Name,
                 dataType = field.DataType,
                 options = field.DataType == "SINGLE_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
+                multiSelectOptions = field.DataType == "MULTI_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
                 iterationConfiguration = field.DataType == "ITERATION" && field.IterationConfiguration is { } configuration
                     ? BuildIterationConfigurationInput(field.Name, configuration)
                     : null,
@@ -1521,22 +1562,47 @@ public sealed class ProjectImporter
             $"Pending field operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
     }
 
-    private async Task UpdateSingleSelectOptionsAsync(string fieldId, IReadOnlyList<SingleSelectOptionSnapshot> options, FieldMaps maps, CancellationToken cancellationToken)
+    private async Task UpdateSelectOptionsAsync(
+        string fieldId,
+        string fieldName,
+        string dataType,
+        IReadOnlyList<SingleSelectOptionSnapshot> options,
+        FieldMaps maps,
+        CancellationToken cancellationToken)
     {
-        var data = await _client.MutationAsync(
-            "updateProjectV2Field",
-            """
-            mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!, $clientMutationId: String!) {
-              updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options, clientMutationId: $clientMutationId }) {
-                projectV2Field {
-                  __typename
-                  ... on ProjectV2FieldCommon { id name dataType }
-                  ... on ProjectV2SingleSelectField { options { id name } }
+        var mutation = dataType == "MULTI_SELECT"
+            ? """
+              mutation($fieldId: ID!, $options: [ProjectV2MultiSelectFieldOptionInput!]!, $clientMutationId: String!) {
+                updateProjectV2Field(input: { fieldId: $fieldId, multiSelectOptions: $options, clientMutationId: $clientMutationId }) {
+                  projectV2Field {
+                    __typename
+                    ... on ProjectV2FieldCommon { id name dataType }
+                    ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
+                  }
                 }
               }
-            }
-            """,
-            new { fieldId, options = BuildOptionInputs(options) },
+              """
+            : """
+              mutation($fieldId: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!, $clientMutationId: String!) {
+                updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: $options, clientMutationId: $clientMutationId }) {
+                  projectV2Field {
+                    __typename
+                    ... on ProjectV2FieldCommon { id name dataType }
+                    ... on ProjectV2SingleSelectField { options { id name } }
+                  }
+                }
+              }
+              """;
+        IReadOnlyDictionary<string, string>? existingOptionIds = null;
+        if (dataType == "MULTI_SELECT")
+        {
+            maps.OptionIds.TryGetValue(fieldName, out existingOptionIds);
+        }
+
+        var data = await _client.MutationAsync(
+            "updateProjectV2Field",
+            mutation,
+            new { fieldId, options = BuildOptionInputs(options, existingOptionIds) },
             MutationRetryPolicy.Idempotent,
             target: fieldId,
             requiredResultPath: "projectV2Field.id",
@@ -1545,9 +1611,27 @@ public sealed class ProjectImporter
         maps.Register(data.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));
     }
 
-    /// <summary>Builds option inputs without ids so the target issues fresh option IDs (PLAN §1.2).</summary>
-    private static object[] BuildOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
-        => [.. options.Select(o => new { name = o.Name, color = o.Color, description = o.Description ?? string.Empty })];
+    private static object[] BuildOptionInputs(
+        IReadOnlyList<SingleSelectOptionSnapshot> options,
+        IReadOnlyDictionary<string, string>? existingOptionIds = null)
+        =>
+        [
+            .. options.Select(option =>
+            {
+                var input = new Dictionary<string, object?>
+                {
+                    ["name"] = option.Name,
+                    ["color"] = option.Color,
+                    ["description"] = option.Description ?? string.Empty,
+                };
+                if (existingOptionIds?.TryGetValue(option.Name, out var existingOptionId) == true)
+                {
+                    input["id"] = existingOptionId;
+                }
+
+                return (object)input;
+            }),
+        ];
 
     private static object[] BuildIssueFieldOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
         => [.. options.Select((option, priority) => new
@@ -1696,6 +1780,7 @@ public sealed class ProjectImporter
                 : typeName switch
                 {
                     "ProjectV2SingleSelectField" => "SINGLE_SELECT",
+                    "ProjectV2MultiSelectField" => "MULTI_SELECT",
                     "ProjectV2IterationField" => "ITERATION",
                     _ when dataTypes?.TryGetValue(id, out var value) == true => value,
                     _ => string.Empty,
@@ -1703,7 +1788,9 @@ public sealed class ProjectImporter
 
             FieldIds[name] = id;
 
-            if (node.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Array)
+            if ((node.TryGetProperty("options", out var options)
+                    || node.TryGetProperty("multiSelectOptions", out options))
+                && options.ValueKind == JsonValueKind.Array)
             {
                 var map = new Dictionary<string, string>(StringComparer.Ordinal);
                 foreach (var option in options.EnumerateArray())
@@ -1794,6 +1881,7 @@ public sealed class ProjectImporter
                   __typename
                   ... on ProjectV2FieldCommon { id name dataType }
                   ... on ProjectV2SingleSelectField { options { id name } }
+                  ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
                   ... on ProjectV2IterationField {
                     configuration {
                       iterations { id title }
@@ -1830,6 +1918,7 @@ public sealed class ProjectImporter
             __typename
             ... on ProjectV2FieldCommon { id name }
             ... on ProjectV2SingleSelectField { options { id name } }
+            ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
             ... on ProjectV2IterationField {
               configuration {
                 iterations { id title }
@@ -1871,11 +1960,12 @@ public sealed class ProjectImporter
 
     private const string CreateFieldMutation =
         """
-        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput, $clientMutationId: String!) {
-          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, iterationConfiguration: $iterationConfiguration, clientMutationId: $clientMutationId }) {
+        mutation($projectId: ID!, $name: String!, $dataType: ProjectV2CustomFieldType!, $options: [ProjectV2SingleSelectFieldOptionInput!], $multiSelectOptions: [ProjectV2MultiSelectFieldOptionInput!], $iterationConfiguration: ProjectV2IterationFieldConfigurationInput, $clientMutationId: String!) {
+          createProjectV2Field(input: { projectId: $projectId, name: $name, dataType: $dataType, singleSelectOptions: $options, multiSelectOptions: $multiSelectOptions, iterationConfiguration: $iterationConfiguration, clientMutationId: $clientMutationId }) {
             projectV2Field {
               ... on ProjectV2FieldCommon { id name dataType }
               ... on ProjectV2SingleSelectField { options { id name } }
+              ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
               ... on ProjectV2IterationField {
                 configuration {
                   iterations { id title }

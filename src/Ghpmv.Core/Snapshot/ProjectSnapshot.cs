@@ -76,7 +76,7 @@ public sealed record FieldSnapshot
 {
     public required string Name { get; init; }
 
-    /// <summary>GraphQL <c>ProjectV2FieldType</c> (TEXT, NUMBER, DATE, SINGLE_SELECT, ITERATION, TITLE, ...).</summary>
+    /// <summary>GraphQL <c>ProjectV2FieldType</c> (TEXT, NUMBER, DATE, SINGLE_SELECT, MULTI_SELECT, ITERATION, TITLE, ...).</summary>
     public required string DataType { get; init; }
 
     public IReadOnlyList<SingleSelectOptionSnapshot>? Options { get; init; }

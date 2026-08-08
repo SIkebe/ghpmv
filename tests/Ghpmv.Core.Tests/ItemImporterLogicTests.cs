@@ -198,6 +198,121 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
+    public async Task Import_applies_ordinary_multi_select_value_with_target_option_ids()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-multi-select-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"repository":{"issueOrPullRequest":{"id":"I_target"}}}}""",
+                """{"data":{"node":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                """{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_target"}}}}""",
+                """{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_target"}}}}""",
+                """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"positioned"}}}""");
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                    },
+                ],
+                Views = [],
+                Workflows = [],
+                Items =
+                [
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE",
+                        Position = 0,
+                        IsArchived = false,
+                        Repository = "source/repo",
+                        Number = 7,
+                        FieldValues =
+                        [
+                            new FieldValueSnapshot
+                            {
+                                FieldName = "Areas",
+                                IsIssueField = false,
+                                MultiSelectOptionNames = ["SDK", "Platform"],
+                            },
+                        ],
+                    },
+                ],
+            };
+            var target = new ImportResult
+            {
+                ProjectId = "PVT_target",
+                ProjectNumber = 7,
+                Url = "https://github.com/orgs/target/projects/7",
+                Outcome = ProjectImportOutcome.Created,
+                FieldIds = new Dictionary<string, string> { ["Areas"] = "PVTMSF_areas" },
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>
+                {
+                    ["Areas"] = new Dictionary<string, string>
+                    {
+                        ["Platform"] = "PVTMSFO_platform",
+                        ["SDK"] = "PVTMSFO_sdk",
+                    },
+                },
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(),
+            };
+            var importer = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>
+                {
+                    ["source/repo"] = "target/repo",
+                },
+            };
+
+            var result = await importer.ImportAsync(
+                snapshot,
+                target,
+                directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(result.Warnings);
+            var request = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateProjectV2ItemFieldValue", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            Assert.Contains(
+                "value: $value",
+                document.RootElement.GetProperty("query").GetString(),
+                StringComparison.Ordinal);
+            var variables = document.RootElement.GetProperty("variables");
+            Assert.Equal("PVT_target", variables.GetProperty("projectId").GetString());
+            Assert.Equal("PVTI_target", variables.GetProperty("itemId").GetString());
+            Assert.Equal("PVTMSF_areas", variables.GetProperty("fieldId").GetString());
+            Assert.Equal(
+                ["PVTMSFO_sdk", "PVTMSFO_platform"],
+                variables.GetProperty("value").GetProperty("multiSelectOptionIds")
+                    .EnumerateArray().Select(id => id.GetString()));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("setIssueFieldValue", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ImportLog_round_trips_through_the_file()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
