@@ -48,6 +48,26 @@ public class FixtureProjectBuilderTests
         Assert.Equal(["Platform", "SDK"], value.MultiSelectOptionNames);
     }
 
+    [Fact]
+    public void Demo_fixture_exercises_ordinary_project_multi_select_fields()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+
+        var field = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Areas");
+        Assert.Equal("MULTI_SELECT", field.DataType);
+        Assert.Null(field.IssueField);
+        Assert.Equal(["Backend", "Frontend", "Operations"], field.Options!.Select(option => option.Name));
+
+        var draft = Assert.Single(snapshot.Items, item => item.Draft?.Title == "Fixture draft 1");
+        var value = Assert.Single(draft.FieldValues, value => value.FieldName == field.Name);
+        Assert.Equal(false, value.IsIssueField);
+        Assert.Equal(["Backend", "Frontend"], value.MultiSelectOptionNames);
+    }
+
     [Theory]
     [InlineData(false, false, false, true)]
     [InlineData(true, true, false, true)]

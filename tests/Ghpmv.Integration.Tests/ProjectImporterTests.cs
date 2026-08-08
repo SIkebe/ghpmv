@@ -66,7 +66,7 @@ public class ProjectImporterTests
             Assert.Equal(snapshot.Project.Public, imported.Public);
             Assert.Equal(snapshot.Project.Closed, imported.Closed);
 
-            string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "ITERATION"];
+            string[] creatable = ["TEXT", "NUMBER", "DATE", "SINGLE_SELECT", "MULTI_SELECT", "ITERATION"];
             foreach (var sourceField in snapshot.Fields.Where(f => creatable.Contains(f.DataType)))
             {
                 if (sourceField.Options is { Count: > 0 })

@@ -716,6 +716,38 @@ public sealed class ItemImporter
 
                 valueInput = new { singleSelectOptionId = optionId };
             }
+            else if (value.MultiSelectOptionNames is not null)
+            {
+                if (!target.OptionIds.TryGetValue(value.FieldName, out var options))
+                {
+                    Warn(warnings, $"{label}: field '{value.FieldName}' has no target option ids; skipping the value.");
+                    allApplied = false;
+                    continue;
+                }
+
+                var optionIds = new List<string>(value.MultiSelectOptionNames.Count);
+                var missingOptions = new List<string>();
+                foreach (var optionName in value.MultiSelectOptionNames)
+                {
+                    if (options.TryGetValue(optionName, out var optionId))
+                    {
+                        optionIds.Add(optionId);
+                    }
+                    else
+                    {
+                        missingOptions.Add(optionName);
+                    }
+                }
+
+                if (missingOptions.Count > 0)
+                {
+                    Warn(warnings, $"{label}: options '{string.Join("', '", missingOptions)}' of field '{value.FieldName}' have no target ids; skipping the value.");
+                    allApplied = false;
+                    continue;
+                }
+
+                valueInput = new { multiSelectOptionIds = optionIds };
+            }
             else if (value.IterationTitle is not null)
             {
                 if (!target.IterationIds.TryGetValue(value.FieldName, out var iterations)

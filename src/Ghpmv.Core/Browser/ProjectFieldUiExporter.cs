@@ -90,12 +90,6 @@ public sealed class ProjectFieldUiExporter
             {
                 _ = RequiredScalarString(element, "issueFieldId");
             }
-            else if (dataType == "MULTI_SELECT")
-            {
-                throw new InvalidOperationException(
-                    $"The Projects UI field catalog contained unsupported ordinary multi-select field '{name}'.");
-            }
-
             if (!identities.Add((name, isIssueField)))
             {
                 throw new InvalidOperationException(

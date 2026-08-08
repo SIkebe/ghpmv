@@ -294,7 +294,7 @@ public sealed class FixtureProjectBuilder
             {
                 Title = title,
                 ShortDescription = "gpm fixture project",
-                Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Iteration)\n- An organization multi-select Issue Field with multiple selected values\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
+                Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Multi-select / Iteration)\n- An organization multi-select Issue Field with multiple selected values\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
                 Public = false,
                 Closed = false,
             },
@@ -344,6 +344,17 @@ public sealed class FixtureProjectBuilder
                 },
                 new FieldSnapshot
                 {
+                    Name = "Fixture Areas",
+                    DataType = "MULTI_SELECT",
+                    Options =
+                    [
+                        new SingleSelectOptionSnapshot { Id = "backend", Name = "Backend", Color = "PURPLE", Description = "Backend work" },
+                        new SingleSelectOptionSnapshot { Id = "frontend", Name = "Frontend", Color = "BLUE", Description = "Frontend work" },
+                        new SingleSelectOptionSnapshot { Id = "operations", Name = "Operations", Color = "YELLOW", Description = "Operations work" },
+                    ],
+                },
+                new FieldSnapshot
+                {
                     Name = "Fixture Teams",
                     DataType = "MULTI_SELECT",
                     Options =
@@ -364,11 +375,11 @@ public sealed class FixtureProjectBuilder
             Items =
             [
                 Draft(0, "Fixture draft 1", false, [],
-                    Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), Sprint("Sprint 0"), Status("Todo")),
+                    Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), ProjectMultiSelect("Backend", "Frontend"), Sprint("Sprint 0"), Status("Todo")),
                 Draft(1, "Fixture draft 2", false, [],
-                    Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), Sprint("Sprint 1"), Status("In Progress")),
+                    Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), ProjectMultiSelect("Operations"), Sprint("Sprint 1"), Status("In Progress")),
                 Draft(2, "Fixture draft 3", false, [],
-                    Text("plain ascii text"), Number(0), Date(today.AddDays(26)), Select("Gamma"), Sprint("Sprint 2"), Status("Done")),
+                    Text("plain ascii text"), Number(0), Date(today.AddDays(26)), Select("Gamma"), ProjectMultiSelect("Frontend"), Sprint("Sprint 2"), Status("Done")),
                 new ItemSnapshot
                 {
                     Type = "ISSUE",
@@ -376,9 +387,9 @@ public sealed class FixtureProjectBuilder
                     IsArchived = false,
                     Repository = repositoryFullName,
                     Number = 1,
-                    FieldValues = [Status("Todo"), MultiSelect("Platform", "SDK")],
+                    FieldValues = [Status("Todo"), ProjectMultiSelect("Backend", "Operations"), IssueMultiSelect("Platform", "SDK")],
                 },
-                new ItemSnapshot { Type = "PULL_REQUEST", Position = 4, IsArchived = false, Repository = repositoryFullName, Number = pullRequestNumber, FieldValues = [Status("In Progress")] },
+                new ItemSnapshot { Type = "PULL_REQUEST", Position = 4, IsArchived = false, Repository = repositoryFullName, Number = pullRequestNumber, FieldValues = [Status("In Progress"), ProjectMultiSelect("Frontend", "Operations")] },
                 Draft(5, "Fixture archived draft", true, [], Status("Done")),
                 Draft(6, "Fixture assigned draft", false, [viewerLogin], Status("Todo")),
             ],
@@ -398,7 +409,8 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot Number(double value) => new() { FieldName = "Fixture Number", Number = value };
         static FieldValueSnapshot Date(DateTime value) => new() { FieldName = "Fixture Date", Date = value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) };
         static FieldValueSnapshot Select(string value) => new() { FieldName = "Fixture Select", SingleSelectOptionName = value };
-        static FieldValueSnapshot MultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
+        static FieldValueSnapshot ProjectMultiSelect(params string[] values) => new() { FieldName = "Fixture Areas", IsIssueField = false, MultiSelectOptionNames = values };
+        static FieldValueSnapshot IssueMultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
     }
@@ -503,7 +515,8 @@ public sealed class FixtureProjectBuilder
         foreach (var item in snapshot.Items)
         {
             var selectValues = item.FieldValues
-                .Where(value => value.SingleSelectOptionName is not null)
+                .Where(value => value.SingleSelectOptionName is not null
+                    || value is { IsIssueField: not true, MultiSelectOptionNames: not null })
                 .ToArray();
             if (selectValues.Length == 0)
             {
@@ -531,11 +544,32 @@ public sealed class FixtureProjectBuilder
                 foreach (var value in selectValues)
                 {
                     if (!project.FieldIds.TryGetValue(value.FieldName, out var fieldId)
-                        || !project.OptionIds.TryGetValue(value.FieldName, out var options)
-                        || !options.TryGetValue(value.SingleSelectOptionName!, out var optionId))
+                        || !project.OptionIds.TryGetValue(value.FieldName, out var options))
                     {
                         throw new InvalidOperationException(
-                            $"Fixture select value '{value.FieldName}={value.SingleSelectOptionName}' was not mapped.");
+                            $"Fixture select field '{value.FieldName}' was not mapped.");
+                    }
+
+                    object valueInput;
+                    if (value.SingleSelectOptionName is { } optionName)
+                    {
+                        if (!options.TryGetValue(optionName, out var optionId))
+                        {
+                            throw new InvalidOperationException(
+                                $"Fixture select value '{value.FieldName}={optionName}' was not mapped.");
+                        }
+
+                        valueInput = new { singleSelectOptionId = optionId };
+                    }
+                    else
+                    {
+                        var optionIds = value.MultiSelectOptionNames!
+                            .Select(optionName => options.TryGetValue(optionName, out var optionId)
+                                ? optionId
+                                : throw new InvalidOperationException(
+                                    $"Fixture multi-select value '{value.FieldName}={optionName}' was not mapped."))
+                            .ToArray();
+                        valueInput = new { multiSelectOptionIds = optionIds };
                     }
 
                     await _graphQl.MutationAsync(
@@ -552,7 +586,7 @@ public sealed class FixtureProjectBuilder
                             projectId = project.ProjectId,
                             itemId = itemReference.Id,
                             fieldId,
-                            value = new { singleSelectOptionId = optionId },
+                            value = valueInput,
                         },
                         MutationRetryPolicy.Idempotent,
                         target: itemReference.Id,

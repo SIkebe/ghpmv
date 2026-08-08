@@ -81,7 +81,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 |---|---|
 | Project | Description, README, visibility, and closed state. A changed title is informational because import supports title overrides. |
 | Field | Field presence/type, select option order/name/color/description, Issue Field description/visibility/linkage, and iteration dates/durations. |
-| Item | Counts/types, issue and pull request identity, draft body, field values (including multi-select Issue Fields), active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
+| Item | Counts/types, issue and pull request identity, draft body, field values (including Project and Issue Field multi-select values), active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
 | View | Name/layout plus GraphQL filter, visible fields/order, grouping, and sorting. Browser mode adds slice, swimlanes, field sums, and roadmap dates/zoom/markers. |
 | Workflow | Name/enabled state. Browser mode adds content types, status, filter, and repository. |
 | Collaborator | Browser-captured explicit user/team collaborators and roles. Inherited and base-role access is excluded. |

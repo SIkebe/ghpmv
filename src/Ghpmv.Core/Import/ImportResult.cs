@@ -26,7 +26,7 @@ public sealed record ImportResult
     /// <summary>Field name → field node ID.</summary>
     public required IReadOnlyDictionary<string, string> FieldIds { get; init; }
 
-    /// <summary>Field name → (single-select option name → option ID).</summary>
+    /// <summary>Field name → (single- or multi-select option name → option ID).</summary>
     public required IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> OptionIds { get; init; }
 
     /// <summary>Field name → (iteration title → iteration ID). Includes completed iterations.</summary>

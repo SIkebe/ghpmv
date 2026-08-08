@@ -166,12 +166,12 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_warns_when_ordinary_multi_select_field_cannot_be_migrated()
+    public async Task Import_routes_ordinary_multi_select_through_project_field_mutations()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
         {
-            using var handler = new IssueFieldStubHandler();
+            using var handler = new OrdinaryMultiSelectFieldStubHandler(existing: false);
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
@@ -190,7 +190,7 @@ public class ProjectImporterLogicTests
                 [
                     new FieldSnapshot
                     {
-                        Name = "Teams",
+                        Name = "Areas",
                         DataType = "MULTI_SELECT",
                         Options =
                         [
@@ -210,15 +210,15 @@ public class ProjectImporterLogicTests
                 7,
                 TestContext.Current.CancellationToken);
 
-            Assert.DoesNotContain("Teams", result.FieldIds);
+            Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
+            Assert.Empty(importer.Warnings);
             Assert.Contains(
-                importer.Warnings,
-                warning => warning.Contains(
-                    "Project multi-select field 'Teams' cannot be imported",
-                    StringComparison.Ordinal));
-            Assert.DoesNotContain(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("createIssueField", StringComparison.Ordinal)
+                    || body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
         {
@@ -227,7 +227,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_warns_for_existing_ordinary_multi_select_alongside_linked_multi_select()
+    public async Task Import_updates_existing_ordinary_multi_select_alongside_linked_multi_select()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -273,16 +273,21 @@ public class ProjectImporterLogicTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
-            Assert.Contains(
-                importer.Warnings,
-                warning => warning.Contains(
-                    "Project multi-select field 'Areas' cannot be imported",
-                    StringComparison.Ordinal));
+            Assert.Equal("PVTMSFO_platform_updated", result.OptionIds["Areas"]["Platform"]);
+            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            Assert.Empty(importer.Warnings);
             var fieldByNameRequest = Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("field(name:", StringComparison.Ordinal));
             Assert.Contains("ProjectV2FieldCommon", fieldByNameRequest, StringComparison.Ordinal);
             Assert.Contains("ProjectV2MultiSelectField", fieldByNameRequest, StringComparison.Ordinal);
+            Assert.Contains("multiSelectOptions", fieldByNameRequest, StringComparison.Ordinal);
+            Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateProjectV2Field", StringComparison.Ordinal));
+            Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
         }
         finally
         {
@@ -676,6 +681,161 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Fact]
+    public async Task Import_creates_ordinary_multi_select_field_with_options_and_registers_option_ids()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new OrdinaryMultiSelectFieldStubHandler(existing: false);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot
+                            {
+                                Id = "source-platform",
+                                Name = "Platform",
+                                Color = "PURPLE",
+                                Description = "Platform work",
+                            },
+                            new SingleSelectOptionSnapshot
+                            {
+                                Id = "source-sdk",
+                                Name = "SDK",
+                                Color = "GREEN",
+                            },
+                        ],
+                    },
+                ],
+            };
+
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            }.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var request = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            Assert.Contains(
+                "multiSelectOptions: $multiSelectOptions",
+                document.RootElement.GetProperty("query").GetString(),
+                StringComparison.Ordinal);
+            var variables = document.RootElement.GetProperty("variables");
+            Assert.Equal("MULTI_SELECT", variables.GetProperty("dataType").GetString());
+            var options = variables.GetProperty("multiSelectOptions");
+            Assert.Equal(["Platform", "SDK"], options.EnumerateArray().Select(option => option.GetProperty("name").GetString()));
+            Assert.Equal(["PURPLE", "GREEN"], options.EnumerateArray().Select(option => option.GetProperty("color").GetString()));
+            Assert.Equal("Platform work", options[0].GetProperty("description").GetString());
+
+            Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
+            Assert.Equal("PVTMSFO_platform", result.OptionIds["Areas"]["Platform"]);
+            Assert.Equal("PVTMSFO_sdk", result.OptionIds["Areas"]["SDK"]);
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("createIssueField", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_updates_ordinary_multi_select_options_and_registers_replaced_option_ids()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new OrdinaryMultiSelectFieldStubHandler(existing: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot
+                            {
+                                Id = "source-platform",
+                                Name = "Platform",
+                                Color = "PURPLE",
+                                Description = "Platform work",
+                            },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                    },
+                ],
+            };
+
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            }.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var request = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateProjectV2Field", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            Assert.Contains(
+                "multiSelectOptions:",
+                document.RootElement.GetProperty("query").GetString(),
+                StringComparison.Ordinal);
+            var variables = document.RootElement.GetProperty("variables");
+            Assert.Equal("PVTMSF_areas", variables.GetProperty("fieldId").GetString());
+            Assert.Equal(
+                [
+                    ("Platform", "PURPLE", "Platform work"),
+                    ("SDK", "GREEN", string.Empty),
+                ],
+                variables.GetProperty("options").EnumerateArray()
+                    .Select(option => (
+                        option.GetProperty("name").GetString(),
+                        option.GetProperty("color").GetString(),
+                        option.GetProperty("description").GetString())));
+
+            Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
+            Assert.Equal("PVTMSFO_platform_updated", result.OptionIds["Areas"]["Platform"]);
+            Assert.Equal("PVTMSFO_sdk_updated", result.OptionIds["Areas"]["SDK"]);
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2Field", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -707,6 +867,60 @@ public class ProjectImporterLogicTests
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json"),
+            };
+        }
+    }
+
+    private sealed class OrdinaryMultiSelectFieldStubHandler(bool existing) : HttpMessageHandler
+    {
+        public List<string> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            RequestBodies.Add(body);
+            var response = body switch
+            {
+                _ when body.Contains("projectV2(number:", StringComparison.Ordinal) =>
+                    """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false}}}}""",
+                _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
+                    """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
+                    existing
+                        ? """
+                          {"data":{"node":{"fields":{"nodes":[{
+                            "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                            "multiSelectOptions":[{"id":"PVTMSFO_old","name":"Old"}]
+                          }]}}}}
+                          """
+                        : """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
+                _ when body.Contains("createProjectV2Field(", StringComparison.Ordinal) =>
+                    """
+                    {"data":{"createProjectV2Field":{"projectV2Field":{
+                      "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                      "multiSelectOptions":[
+                        {"id":"PVTMSFO_platform","name":"Platform"},
+                        {"id":"PVTMSFO_sdk","name":"SDK"}
+                      ]
+                    }}}}
+                    """,
+                _ when body.Contains("updateProjectV2Field(", StringComparison.Ordinal) =>
+                    """
+                    {"data":{"updateProjectV2Field":{"projectV2Field":{
+                      "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                      "multiSelectOptions":[
+                        {"id":"PVTMSFO_platform_updated","name":"Platform"},
+                        {"id":"PVTMSFO_sdk_updated","name":"SDK"}
+                      ]
+                    }}}}
+                    """,
+                _ => throw new InvalidOperationException($"Unexpected request: {body}"),
+            };
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };
         }
     }
@@ -743,7 +957,14 @@ public class ProjectImporterLogicTests
                 _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
-                    ordinaryFields
+                    ordinaryMultiSelect
+                        ? """
+                          {"data":{"node":{"fields":{"nodes":[{
+                            "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                            "multiSelectOptions":[{"id":"PVTMSFO_old","name":"Old"}]
+                          }]}}}}
+                          """
+                        : ordinaryFields
                         ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes"},{"__typename":"ProjectV2Field","id":"PVTF_estimate","name":"Estimate"},{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}]}}}}"""
                         : existingSameNamedLink
                         ? """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_teams","name":"Teams"},{"__typename":"ProjectV2Field","id":"PVTF_linked_teams","name":"Teams"}]}}}}"""
@@ -767,7 +988,14 @@ public class ProjectImporterLogicTests
                         ? FieldByNameResponse()
                         : """{"data":{"node":null},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("nodes(ids:", StringComparison.Ordinal) =>
-                    ordinaryFields
+                    ordinaryMultiSelect && body.Contains("PVTMSF_areas", StringComparison.Ordinal)
+                        ? """
+                          {"data":{"nodes":[{
+                            "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                            "multiSelectOptions":[{"id":"PVTMSFO_old","name":"Old"}]
+                          }]}}
+                          """
+                        : ordinaryFields
                         && body.Contains("PVTF_notes", StringComparison.Ordinal)
                         && body.Contains("PVTF_estimate", StringComparison.Ordinal)
                         ? """{"data":{"nodes":[{"id":"PVTF_notes","dataType":"TEXT"},{"id":"PVTF_estimate","dataType":"NUMBER"}]}}"""
@@ -820,6 +1048,15 @@ public class ProjectImporterLogicTests
                       "options":[
                         {"id":"IFO_platform_updated","name":"Platform","color":"PURPLE","description":null},
                         {"id":"IFO_sdk_updated","name":"SDK","color":"GREEN","description":null}
+                      ]
+                    }}}}
+                    """,
+                _ when ordinaryMultiSelect && body.Contains("updateProjectV2Field(", StringComparison.Ordinal) =>
+                    """
+                    {"data":{"updateProjectV2Field":{"projectV2Field":{
+                      "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
+                      "multiSelectOptions":[
+                        {"id":"PVTMSFO_platform_updated","name":"Platform"}
                       ]
                     }}}}
                     """,

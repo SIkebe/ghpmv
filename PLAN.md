@@ -28,9 +28,10 @@ GitHub Projects V2 を組織間/製品間で移行する CLI ツール。
 | Project 作成 / 更新(README, 説明, public) | ✅ | `createProjectV2`, `updateProjectV2` |
 | **Iteration フィールド作成** | ✅ **新規対応済み** | `CreateProjectV2FieldInput.iterationConfiguration` (`ProjectV2IterationFieldConfigurationInput`: `duration`, `startDate`, `iterations[]`) が現行スキーマに存在 |
 | Single-select フィールド(色・説明付き) | ✅ | `ProjectV2SingleSelectFieldOptionInput` (`color`, `description`, `id` による option ID 保持) |
+| Multi-select フィールド(色・説明付き) | ✅ | `ProjectV2MultiSelectFieldOptionInput` と `ProjectV2ItemFieldMultiSelectValue`。選択肢は名前で target ID に remap |
 | **Status フィールドの option 書き換え** | ✅ | `updateProjectV2Field`(既存フィールドの `singleSelectOptions` 上書き可) |
 | アイテム追加(Issue/PR/Draft) | ✅ | `addProjectV2ItemById`, `addProjectV2DraftIssue`(assignee 対応) |
-| フィールド値の設定 | ✅ | `updateProjectV2ItemFieldValue`(text/number/date/single-select/iteration) |
+| フィールド値の設定 | ✅ | `updateProjectV2ItemFieldValue`(text/number/date/single-select/multi-select/iteration) |
 | **アイテムの並び順** | ✅ | `updateProjectV2ItemPosition` |
 | アイテムのアーカイブ状態 | ✅ | `archiveProjectV2Item` / `unarchiveProjectV2Item` |
 | コラボレーター | ✅ | `updateProjectV2Collaborators` |
@@ -146,7 +147,7 @@ graph LR
 | データ | 手段 | 備考 |
 |---|---|---|
 | Project 本体(title, README, 説明, 公開状態) | GraphQL | |
-| フィールド: TEXT / NUMBER / DATE / SINGLE_SELECT / ITERATION | GraphQL | Iteration は `iterationConfiguration`。完了済み iteration は startDate を過去日にして再現 |
+| フィールド: TEXT / NUMBER / DATE / SINGLE_SELECT / MULTI_SELECT / ITERATION | GraphQL | Multi-select option は名前で target ID に remap。Iteration は `iterationConfiguration`。完了済み iteration は startDate を過去日にして再現 |
 | Status フィールド option(色・説明) | GraphQL | `updateProjectV2Field` で既定 option を上書き |
 | Item(Issue / PR / Draft) | GraphQL | Issue/PR はリポジトリマッピング CSV + 同一 Issue/PR number で解決(GEI 等で target 側に同番号 item が存在する前提)。Draft は本文冒頭に元作成者・日時を注記 |
 | フィールド値 | GraphQL | iteration 値は title マッチで新 iterationId に解決 |
