@@ -744,6 +744,7 @@ public class ProjectImporterLogicTests
             Assert.Equal(["Platform", "SDK"], options.EnumerateArray().Select(option => option.GetProperty("name").GetString()));
             Assert.Equal(["PURPLE", "GREEN"], options.EnumerateArray().Select(option => option.GetProperty("color").GetString()));
             Assert.Equal("Platform work", options[0].GetProperty("description").GetString());
+            Assert.All(options.EnumerateArray(), option => Assert.False(option.TryGetProperty("id", out _)));
 
             Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
             Assert.Equal("PVTMSFO_platform", result.OptionIds["Areas"]["Platform"]);
@@ -759,7 +760,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_updates_ordinary_multi_select_options_and_registers_replaced_option_ids()
+    public async Task Import_updates_ordinary_multi_select_options_and_preserves_matching_option_ids()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
@@ -814,17 +815,18 @@ public class ProjectImporterLogicTests
             Assert.Equal("PVTMSF_areas", variables.GetProperty("fieldId").GetString());
             Assert.Equal(
                 [
-                    ("Platform", "PURPLE", "Platform work"),
-                    ("SDK", "GREEN", string.Empty),
+                    ("PVTMSFO_platform", "Platform", "PURPLE", "Platform work"),
+                    (null, "SDK", "GREEN", string.Empty),
                 ],
                 variables.GetProperty("options").EnumerateArray()
                     .Select(option => (
+                        option.TryGetProperty("id", out var id) ? id.GetString() : null,
                         option.GetProperty("name").GetString(),
                         option.GetProperty("color").GetString(),
                         option.GetProperty("description").GetString())));
 
             Assert.Equal("PVTMSF_areas", result.FieldIds["Areas"]);
-            Assert.Equal("PVTMSFO_platform_updated", result.OptionIds["Areas"]["Platform"]);
+            Assert.Equal("PVTMSFO_platform", result.OptionIds["Areas"]["Platform"]);
             Assert.Equal("PVTMSFO_sdk_updated", result.OptionIds["Areas"]["SDK"]);
             Assert.DoesNotContain(
                 handler.RequestBodies,
@@ -892,7 +894,10 @@ public class ProjectImporterLogicTests
                         ? """
                           {"data":{"node":{"fields":{"nodes":[{
                             "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
-                            "multiSelectOptions":[{"id":"PVTMSFO_old","name":"Old"}]
+                            "multiSelectOptions":[
+                              {"id":"PVTMSFO_platform","name":"Platform"},
+                              {"id":"PVTMSFO_old","name":"Old"}
+                            ]
                           }]}}}}
                           """
                         : """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_title","name":"Title","dataType":"TITLE"}]}}}}""",
@@ -911,7 +916,7 @@ public class ProjectImporterLogicTests
                     {"data":{"updateProjectV2Field":{"projectV2Field":{
                       "__typename":"ProjectV2MultiSelectField","id":"PVTMSF_areas","name":"Areas","dataType":"MULTI_SELECT",
                       "multiSelectOptions":[
-                        {"id":"PVTMSFO_platform_updated","name":"Platform"},
+                        {"id":"PVTMSFO_platform","name":"Platform"},
                         {"id":"PVTMSFO_sdk_updated","name":"SDK"}
                       ]
                     }}}}

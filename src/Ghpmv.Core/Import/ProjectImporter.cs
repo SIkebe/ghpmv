@@ -464,7 +464,7 @@ public sealed class ProjectImporter
                 {
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                         $"Overwriting options of existing field '{field.Name}' with {field.Options.Count} snapshot options..."));
-                    await UpdateSelectOptionsAsync(target.Id, field.DataType, field.Options, maps, cancellationToken).ConfigureAwait(false);
+                    await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, field.Options, maps, cancellationToken).ConfigureAwait(false);
                 }
                 else if (field.DataType == "ITERATION")
                 {
@@ -1521,6 +1521,7 @@ public sealed class ProjectImporter
 
     private async Task UpdateSelectOptionsAsync(
         string fieldId,
+        string fieldName,
         string dataType,
         IReadOnlyList<SingleSelectOptionSnapshot> options,
         FieldMaps maps,
@@ -1549,10 +1550,16 @@ public sealed class ProjectImporter
                 }
               }
               """;
+        IReadOnlyDictionary<string, string>? existingOptionIds = null;
+        if (dataType == "MULTI_SELECT")
+        {
+            maps.OptionIds.TryGetValue(fieldName, out existingOptionIds);
+        }
+
         var data = await _client.MutationAsync(
             "updateProjectV2Field",
             mutation,
-            new { fieldId, options = BuildOptionInputs(options) },
+            new { fieldId, options = BuildOptionInputs(options, existingOptionIds) },
             MutationRetryPolicy.Idempotent,
             target: fieldId,
             requiredResultPath: "projectV2Field.id",
@@ -1561,9 +1568,27 @@ public sealed class ProjectImporter
         maps.Register(data.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));
     }
 
-    /// <summary>Builds option inputs without ids so the target issues fresh option IDs (PLAN §1.2).</summary>
-    private static object[] BuildOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
-        => [.. options.Select(o => new { name = o.Name, color = o.Color, description = o.Description ?? string.Empty })];
+    private static object[] BuildOptionInputs(
+        IReadOnlyList<SingleSelectOptionSnapshot> options,
+        IReadOnlyDictionary<string, string>? existingOptionIds = null)
+        =>
+        [
+            .. options.Select(option =>
+            {
+                var input = new Dictionary<string, object?>
+                {
+                    ["name"] = option.Name,
+                    ["color"] = option.Color,
+                    ["description"] = option.Description ?? string.Empty,
+                };
+                if (existingOptionIds?.TryGetValue(option.Name, out var existingOptionId) == true)
+                {
+                    input["id"] = existingOptionId;
+                }
+
+                return (object)input;
+            }),
+        ];
 
     private static object[] BuildIssueFieldOptionInputs(IReadOnlyList<SingleSelectOptionSnapshot> options)
         => [.. options.Select((option, priority) => new
