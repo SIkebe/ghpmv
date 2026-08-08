@@ -27,6 +27,7 @@ public sealed class ProjectImporter
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
     private HashSet<string> _snapshotNormalFieldNames = [];
+    private HashSet<string> _snapshotMultiSelectNormalFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
     private HashSet<string> _snapshotMultiSelectIssueFieldNames = [];
     private HashSet<string> _targetIssueFieldNames = [];
@@ -262,6 +263,11 @@ public sealed class ProjectImporter
             .Where(field => field.IssueField is null)
             .Select(field => field.Name)
             .ToHashSet(StringComparer.Ordinal);
+        _snapshotMultiSelectNormalFieldNames = snapshot.Fields
+            .Where(field => field.IssueField is null
+                && string.Equals(field.DataType, "MULTI_SELECT", StringComparison.Ordinal))
+            .Select(field => field.Name)
+            .ToHashSet(StringComparer.Ordinal);
         _snapshotIssueFieldNames = snapshot.Fields
             .Where(field => field.IssueField is not null)
             .Select(field => field.Name)
@@ -377,7 +383,8 @@ public sealed class ProjectImporter
         }
 
         List<TargetIssueField> targetIssueFields = [];
-        if (OwnerType == ProjectOwnerType.Organization && _snapshotIssueFieldNames.Count > 0)
+        if (OwnerType == ProjectOwnerType.Organization
+            && (_snapshotIssueFieldNames.Count > 0 || _snapshotMultiSelectNormalFieldNames.Count > 0))
         {
             targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         }
@@ -1199,7 +1206,9 @@ public sealed class ProjectImporter
         if (_snapshotIssueFieldNames.Count == 0)
         {
             var data = await _client.QueryAsync(FieldsQuery, new { id = projectId }, cancellationToken).ConfigureAwait(false);
-            return [.. data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().Select(maps.Register)];
+            var directNodes = data.GetProperty("node").GetProperty("fields").GetProperty("nodes").EnumerateArray().ToArray();
+            ThrowIfAmbiguousTargetMultiSelectFields(directNodes);
+            return [.. directNodes.Select(maps.Register)];
         }
 
         List<JsonElement> nodes;
@@ -1228,6 +1237,7 @@ public sealed class ProjectImporter
             }
         }
 
+        ThrowIfAmbiguousTargetMultiSelectFields(nodes);
         Dictionary<string, JsonElement> details = [];
         var detailIds = nodes
             .Where(node => node.TryGetProperty("__typename", out var typeName)
@@ -1328,6 +1338,22 @@ public sealed class ProjectImporter
                     : maps.Register(fieldNode, dataTypes);
             }),
         ];
+    }
+
+    private void ThrowIfAmbiguousTargetMultiSelectFields(IEnumerable<JsonElement> nodes)
+    {
+        var ambiguousMultiSelect = nodes
+            .Where(node => node.TryGetProperty("__typename", out var typeName)
+                && string.Equals(typeName.GetString(), "ProjectV2MultiSelectField", StringComparison.Ordinal))
+            .Select(node => node.GetProperty("name").GetString() ?? string.Empty)
+            .FirstOrDefault(name =>
+                _snapshotMultiSelectNormalFieldNames.Contains(name)
+                && _targetMultiSelectIssueFieldNames.Contains(name));
+        if (ambiguousMultiSelect is not null)
+        {
+            throw new GitHubGraphQLException(
+                $"Target project field '{ambiguousMultiSelect}' is ambiguous: GitHub's GraphQL API cannot distinguish an ordinary MULTI_SELECT field from a same-named linked organization Issue Field. Rename or remove the target collision before importing.");
+        }
     }
 
     private async Task<List<JsonElement>> FetchFieldNodesByNameAsync(

@@ -838,6 +838,58 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Fact]
+    public async Task Import_rejects_ambiguous_ordinary_multi_select_and_linked_issue_field_identity()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(
+                existing: true,
+                ordinaryMultiSelect: true,
+                ordinaryMultiSelectIssueFieldCollision: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Areas",
+                        DataType = "MULTI_SELECT",
+                        Options = [new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" }],
+                    },
+                ],
+            };
+
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+                new ProjectImporter(client)
+                {
+                    OperationLogDirectory = directory,
+                }.ImportIntoAsync(
+                    snapshot,
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("Target project field 'Areas' is ambiguous", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("linked organization Issue Field", exception.Message, StringComparison.Ordinal);
+            Assert.Contains(handler.RequestBodies, body => body.Contains("issueFields(first:", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                handler.RequestBodies,
+                body => body.Contains("createProjectV2Field", StringComparison.Ordinal)
+                    || body.Contains("updateProjectV2Field", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -889,6 +941,8 @@ public class ProjectImporterLogicTests
                     """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false}}}}""",
                 _ when body.Contains("updateProjectV2(", StringComparison.Ordinal) =>
                     """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
+                    """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
                 _ when body.Contains("fields(first:", StringComparison.Ordinal) =>
                     existing
                         ? """
@@ -941,7 +995,8 @@ public class ProjectImporterLogicTests
         bool ordinaryFields = false,
         bool textIssueField = false,
         bool fieldByNameReturnsLinked = false,
-        bool ordinaryMultiSelect = false) : HttpMessageHandler
+        bool ordinaryMultiSelect = false,
+        bool ordinaryMultiSelectIssueFieldCollision = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -1010,7 +1065,14 @@ public class ProjectImporterLogicTests
                             ? NormalDataTypeResponse()
                             : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
-                    existing
+                    ordinaryMultiSelectIssueFieldCollision
+                        ? """
+                          {"data":{"organization":{"issueFields":{"nodes":[{
+                            "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
+                            "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
+                          }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                          """
+                        : existing
                         ? textIssueField
                             ? """
                               {"data":{"organization":{"issueFields":{"nodes":[{
@@ -1026,9 +1088,6 @@ public class ProjectImporterLogicTests
                                 "options":[
                                   {"id":"IFO_old","name":"Old","color":"GRAY","description":null}
                                 ]
-                              },{
-                                "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
-                                "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
                               }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                               """
                             : """
@@ -1039,9 +1098,6 @@ public class ProjectImporterLogicTests
                               {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null},
                               {"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}
                             ]
-                          },{
-                            "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
-                            "dataType":"MULTI_SELECT","description":null,"visibility":"ALL","options":[]
                           }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
                           """
                         : """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
