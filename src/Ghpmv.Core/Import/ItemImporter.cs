@@ -718,30 +718,17 @@ public sealed class ItemImporter
             }
             else if (value.MultiSelectOptionNames is not null)
             {
-                if (!target.OptionIds.TryGetValue(value.FieldName, out var options))
+                target.OptionIds.TryGetValue(value.FieldName, out var options);
+                if (!TryResolveOptionIds(
+                        value.MultiSelectOptionNames,
+                        options,
+                        out var optionIds,
+                        out var missingOptions))
                 {
-                    Warn(warnings, $"{label}: field '{value.FieldName}' has no target option ids; skipping the value.");
-                    allApplied = false;
-                    continue;
-                }
-
-                var optionIds = new List<string>(value.MultiSelectOptionNames.Count);
-                var missingOptions = new List<string>();
-                foreach (var optionName in value.MultiSelectOptionNames)
-                {
-                    if (options.TryGetValue(optionName, out var optionId))
-                    {
-                        optionIds.Add(optionId);
-                    }
-                    else
-                    {
-                        missingOptions.Add(optionName);
-                    }
-                }
-
-                if (missingOptions.Count > 0)
-                {
-                    Warn(warnings, $"{label}: options '{string.Join("', '", missingOptions)}' of field '{value.FieldName}' have no target ids; skipping the value.");
+                    var warning = options is null
+                        ? $"{label}: field '{value.FieldName}' has no target option ids; skipping the value."
+                        : $"{label}: options '{string.Join("', '", missingOptions)}' of field '{value.FieldName}' have no target ids; skipping the value.";
+                    Warn(warnings, warning);
                     allApplied = false;
                     continue;
                 }
@@ -898,10 +885,10 @@ public sealed class ItemImporter
 
         if (value.SingleSelectOptionName is not null)
         {
-            if (!TryResolveIssueFieldOptionIds(
-                    value.FieldName,
+            target.IssueFieldOptionIds.TryGetValue(value.FieldName, out var targetOptions);
+            if (!TryResolveOptionIds(
                     [value.SingleSelectOptionName],
-                    target,
+                    targetOptions,
                     out var optionIds,
                     out var missing))
             {
@@ -914,10 +901,10 @@ public sealed class ItemImporter
 
         if (value.MultiSelectOptionNames is not null)
         {
-            if (!TryResolveIssueFieldOptionIds(
-                    value.FieldName,
+            target.IssueFieldOptionIds.TryGetValue(value.FieldName, out var targetOptions);
+            if (!TryResolveOptionIds(
                     value.MultiSelectOptionNames,
-                    target,
+                    targetOptions,
                     out var optionIds,
                     out var missing))
             {
@@ -932,16 +919,15 @@ public sealed class ItemImporter
         return null;
     }
 
-    private static bool TryResolveIssueFieldOptionIds(
-        string fieldName,
+    private static bool TryResolveOptionIds(
         IReadOnlyList<string> optionNames,
-        ImportResult target,
+        IReadOnlyDictionary<string, string>? targetOptions,
         out string[] optionIds,
         out string[] missing)
     {
         var ids = new List<string>(optionNames.Count);
         var missingNames = new List<string>();
-        if (!target.IssueFieldOptionIds.TryGetValue(fieldName, out var targetOptions))
+        if (targetOptions is null)
         {
             missingNames.AddRange(optionNames);
         }
@@ -962,7 +948,7 @@ public sealed class ItemImporter
 
         optionIds = [.. ids];
         missing = [.. missingNames];
-        return missing.Length == 0;
+        return targetOptions is not null && missing.Length == 0;
     }
 
     private async Task<string?> ResolveTargetIssueIdAsync(ItemSnapshot item, CancellationToken cancellationToken)
