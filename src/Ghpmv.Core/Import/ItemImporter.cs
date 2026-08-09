@@ -684,12 +684,6 @@ public sealed class ItemImporter
                 continue;
             }
 
-            if (value.MultiSelectOptionNames is not null)
-            {
-                Warn(warnings, $"{label}: Project multi-select field '{value.FieldName}' cannot be imported because GitHub's Project field APIs do not support applying its values; skipping the value.");
-                continue;
-            }
-
             if (!target.FieldIds.TryGetValue(value.FieldName, out var fieldId))
             {
                 Warn(warnings, $"{label}: field '{value.FieldName}' does not exist in the target project; skipping the value.");
