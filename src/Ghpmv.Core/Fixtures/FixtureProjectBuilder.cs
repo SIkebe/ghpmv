@@ -722,17 +722,19 @@ public sealed class FixtureProjectBuilder
             await beforeWriteAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
+        {
+            repositoryState = repositoryState with { Status = ClaimedRepositoryStatus };
+            await SaveRepositoryClaimAsync(
+                operationDirectory,
+                repositoryState,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         await EnsureReadmeAsync(repositoryFullName, repositoryName, cancellationToken).ConfigureAwait(false);
         await EnsureIssuesAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         await EnsureBugLabelAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
         var pullRequestNumber = await EnsurePullRequestAsync(repositoryFullName, cancellationToken).ConfigureAwait(false);
-        if (repositoryState?.Status == FallbackPendingRepositoryStatus)
-        {
-            await SaveRepositoryClaimAsync(
-                operationDirectory,
-                repositoryState with { Status = ClaimedRepositoryStatus },
-                cancellationToken).ConfigureAwait(false);
-        }
 
         return pullRequestNumber;
     }

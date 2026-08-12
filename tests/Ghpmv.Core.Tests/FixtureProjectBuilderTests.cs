@@ -1337,7 +1337,7 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public async Task Existing_empty_repository_reaches_fixture_writes()
+    public async Task Existing_empty_repository_is_claimed_before_fixture_writes()
     {
         var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-fallback-write-").FullName;
         try
@@ -1387,7 +1387,7 @@ public class FixtureProjectBuilderTests
             var state = await File.ReadAllLinesAsync(
                 Path.Combine(operationDirectory, "fixture-repository.txt"),
                 TestContext.Current.CancellationToken);
-            Assert.Equal("fallback-pending", state[2]);
+            Assert.Equal("claimed", state[2]);
         }
         finally
         {
