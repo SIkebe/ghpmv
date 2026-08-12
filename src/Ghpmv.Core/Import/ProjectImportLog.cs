@@ -15,11 +15,15 @@ public sealed record ProjectImportLog
 
     public bool TryMarkImportCompleted(
         bool browserAutomationEnabled,
+        int projectWarningCount,
+        int itemWarningCount,
         int viewWarningCount,
         int workflowWarningCount)
     {
         if (CreatedProjectId is null
             || ImportCompleted is not false
+            || projectWarningCount > 0
+            || itemWarningCount > 0
             || (browserAutomationEnabled && (viewWarningCount > 0 || workflowWarningCount > 0)))
         {
             return false;

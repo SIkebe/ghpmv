@@ -509,6 +509,8 @@ public sealed class FixtureProjectBuilder
             cancellationToken).ConfigureAwait(false);
         if (!projectLog.TryMarkImportCompleted(
                 browserAutomationEnabled: false,
+                projectWarningCount: 0,
+                itemWarningCount: 0,
                 viewWarningCount: 0,
                 workflowWarningCount: 0))
         {

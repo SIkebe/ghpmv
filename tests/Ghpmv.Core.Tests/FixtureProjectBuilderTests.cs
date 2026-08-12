@@ -243,6 +243,55 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Completed_operation_revalidates_snapshot_before_shortcut()
+    {
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-completed-revalidate-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            Directory.CreateDirectory(operationDirectory);
+            await File.WriteAllLinesAsync(
+                Path.Combine(operationDirectory, "fixture-repository.txt"),
+                ["https://api.github.com", "example/fixture", "claimed", "1"],
+                TestContext.Current.CancellationToken);
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_1",
+                ImportCompleted = true,
+            }.SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            await new ImportLog
+            {
+                ProjectId = "PVT_1",
+                SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(
+                    FixtureProjectBuilder.CreateSnapshot("Fixture", "example/fixture", "original-user", 2)),
+            }.SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"different-user"}}}"""));
+            using var restHandler = new RecordingHandler(
+                JsonResponse("""{"id":1,"name":"fixture","private":true}"""),
+                JsonResponse("""[{"number":2}]"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
+
+            Assert.Contains("different fixture snapshot", exception.Message, StringComparison.Ordinal);
+            Assert.Equal([HttpMethod.Get, HttpMethod.Get], restHandler.RequestMethods);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Successful_fixture_stages_mark_the_operation_complete()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-complete-").FullName;
