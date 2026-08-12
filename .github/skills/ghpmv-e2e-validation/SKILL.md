@@ -32,6 +32,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 15. **内部 ID だけの選択肢を出さない。** `build-only`、`api-only` などの記録用 ID を choice に単独表示せず、各 choice に「何を実行するか」「実 resource を読み書きするか」を日本語で含める。ユーザーの依頼から推奨できる choice には `(Recommended)` を付ける。選択後は説明文ではなく対応する内部 ID を state に記録する。
 16. **Skill を実行する project session が terminal を所有する。** 親・兄弟 session で開いた terminal が画面に見えていても再利用しない。すでに検証用 nested session 内で Skill が起動された場合は、さらに nested session を作成しない。
 17. **in-flight command を再送しない。** command の sentinel が未到達なら実行中として扱い、同じ command、readiness probe、状態確認 command、後続 commandを terminal へ送らない。空出力や一時的な terminal transport error は再送理由にならない。
+18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT、`hidden prompt`、token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
 
 ## 実行 session と terminal ownership
 
@@ -45,6 +46,8 @@ terminal canvas の instance ID だけでなく、利用可能なら owning proj
 
 対話 terminal へ送る非対話 command は、送信直前に agent が command ごとの一意な `<command-id>` を生成し、可能な限り次の形で完了 sentinel と exit code を出す。`<command>` 自体の出力だけを見て早期に成功判定しない。一つの wrapper には native command を一つだけ入れる。restore と build など複数の native command は別々に送り、前の command の成功を確認するまで次を送らない。
 
+`send_terminal_input` へ渡す直前に、次の読みやすい複数行例を **改行を含まない一つの PowerShell statement line** へ直列化する。terminal action に複数行の text を渡してはならない。複数行 paste は行の実行順序を保証せず、完了 sentinel が native command より先に実行されることがある。
+
 ```powershell
 $global:LASTEXITCODE = 0
 & {
@@ -56,13 +59,19 @@ $ghpmvExitCode = if ($ghpmvInvocationSucceeded -and $ghpmvNativeExitCode -eq 0) 
 Write-Output "GHPMV_COMMAND_DONE:<command-id>:$ghpmvExitCode"
 ```
 
+実際の terminal input は次の一行形式にする。
+
+```powershell
+$global:LASTEXITCODE = 0; & { <command> }; $ghpmvInvocationSucceeded = $?; $ghpmvNativeExitCode = $LASTEXITCODE; $ghpmvExitCode = if ($ghpmvInvocationSucceeded -and $ghpmvNativeExitCode -eq 0) { 0 } elseif ($ghpmvNativeExitCode -ne 0) { $ghpmvNativeExitCode } else { 1 }; Write-Output "GHPMV_COMMAND_DONE:<command-id>:$ghpmvExitCode"
+```
+
 送信直前に `in-flight command` として terminal instance ID、`<command-id>`、command の目的または hash、期待 sentinel を記録する。一つの terminal で同時に持てる in-flight command は一つだけとし、未解決の記録がある間は `send_terminal_input` を再度呼ばない。
 
 terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として同じ instance の出力監視だけを継続し、ユーザーへ完了報告を求めず、command を再送しない。sentinel を確認した場合だけ in-flight state を clear して次の command へ進む。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
 
 session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
-browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で sign in を行ってください」と通知するだけで、質問カードや「完了したら返答」を表示しない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、`hidden prompt`、後続 Step の準備を混ぜない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
 | Step / 処理 | agent が自動確認するもの |
 |---|---|
@@ -266,7 +275,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 `github.com-to-ghec-dr` では source login に `--base-url` を付けず、target login に `--base-url <target-web-url>` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
 
-各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへログイン完了の返信を求めない。`Signed in as '<reported-login>'` から login を取り出し、期待 login と大文字小文字を区別せず一致すること、および exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
+各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへは現在開いている browser で期待 login として sign in することだけを案内し、ログイン完了の返信を求めない。この Step では PAT や `hidden prompt` に言及しない。`Signed in as '<reported-login>'` から login を取り出し、期待 login と大文字小文字を区別せず一致すること、および exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
 
 ## Step 4: Token を準備する
 
