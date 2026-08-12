@@ -32,8 +32,9 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 15. **内部 ID だけの選択肢を出さない。** `build-only`、`api-only` などの記録用 ID を choice に単独表示せず、各 choice に「何を実行するか」「実 resource を読み書きするか」を日本語で含める。ユーザーの依頼から推奨できる choice には `(Recommended)` を付ける。選択後は説明文ではなく対応する内部 ID を state に記録する。
 16. **Skill を実行する project session が terminal を所有する。** 親・兄弟 session で開いた terminal が画面に見えていても再利用しない。すでに検証用 nested session 内で Skill が起動された場合は、さらに nested session を作成しない。
 17. **in-flight command を再送しない。** command の sentinel が未到達なら実行中として扱い、同じ command、readiness probe、状態確認 command、後続 commandを terminal へ送らない。空出力や一時的な terminal transport error は再送理由にならない。
-18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT、`hidden prompt`、token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
+18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT や token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
 19. **terminal canvas と shell tool を混同しない。** readiness を確認した `token execution terminal` への入力は、その terminal instance の `send_terminal_input` action だけで行う。`powershell`、`task`、別 process の shell tool で同じ command を実行してはならない。terminal canvas を開いて出力を読めた時点で「agent が terminal に直接入力できる」と扱い、command を本文へ貼ってユーザーに再実行させる fallback へ切り替えない。
+20. **`hidden prompt` という語をユーザーへ表示しない。** PAT 入力時は「右側のターミナルに PAT 入力欄を表示します。入力中の文字は画面に表示されません」と説明する。内部 marker、sentinel、env var の実装説明ではなく、いま入力する PAT の用途と Enter を押す操作だけを案内する。
 
 ## 実行 session と terminal ownership
 
@@ -72,7 +73,7 @@ terminal 出力取得 action で、今回送信した `<command-id>` と完全�
 
 session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
-browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、`hidden prompt`、後続 Step の準備を混ぜない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
 | Step / 処理 | agent が自動確認するもの |
 |---|---|
@@ -117,7 +118,7 @@ token 入力時は次の流れを必須とする。
    - `<token-prompt-id>` は command 内へ解決済みの固定文字列として直接埋め込む。`$tokenPromptId` のような PowerShell variable にせず、`"$variable:$otherVariable"` 形式の colon interpolation を作らない。
    - readiness 済み terminal instance の `send_terminal_input` action へこの一行を一度だけ送る。別 process の shell toolへ渡してはならない。
 4. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で該当する PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
-5. terminal canvas は secret 入力完了時に agent を自動 wake しないため、この操作だけは `ask_user` で入力完了を確認する。質問カードには、現在入力する env var / organization / host / 用途と、terminal に表示される sentinel を明記する。
+5. terminal canvas は secret 入力完了時に agent を自動 wake しないため、この操作だけは `ask_user` で入力完了を確認する。質問カードには、右側 terminal に表示済みの PAT 入力欄へ、現在対象の organization / host / 用途の PAT を入力して Enter を押すことと、入力中の文字は表示されないことを平易に明記する。sentinel や marker はユーザーへ説明しない。
 6. 同じ token について待機メッセージ、出力 read、質問カードを繰り返さない。command を一度送信したら確認カードを一枚だけ表示し、ユーザーの応答を待つ。
 7. ユーザーの応答後、token 値を表示せず、現在記録している `<token-prompt-id>` と完全一致する readiness sentinel を確認する。scrollback 内の過去の固定 marker は成功扱いしない。確認できた場合だけ次の token prompt へ進む。sentinel がなければ一度だけ状態を説明し、その token だけを再入力するか確認する。
 8. すべての token が ready になった後、agent が同じ terminal instance へ preflight / fixture / export / GEI / import / verify command を送信する。token を参照する command を、別 process で動く shell tool へ切り替えない。
@@ -279,11 +280,11 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 `github.com-to-ghec-dr` では source login に `--base-url` を付けず、target login に `--base-url <target-web-url>` を付ける。ログインユーザーと、その profile で使用する API token の所有者が一致することを確認する。
 
-各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへは現在開いている browser で期待 login として sign in することだけを案内し、ログイン完了の返信を求めない。この Step では PAT や `hidden prompt` に言及しない。`Signed in as '<reported-login>'` から login を取り出し、期待 login と大文字小文字を区別せず一致すること、および exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
+各 `login` command は agent が起動し、browser sign-in 中も command の終了を監視する。ユーザーへは現在開いている browser で期待 login として sign in することだけを案内し、ログイン完了の返信を求めない。この Step では PAT や token 入力に言及しない。`Signed in as '<reported-login>'` から login を取り出し、期待 login と大文字小文字を区別せず一致すること、および exit code 0 を確認してから次の profile へ進み、保存先の browser state path を記録する。
 
 ## Step 4: Token を準備する
 
-**PAT の入力を求める前に、経路から exact `required token inventory` を作成する。** inventory には env var、host、organization、token owner、用途、token type、role、scope / permission、作成 URL status、hidden input 順を含める。次の env var を一件も省略しない。
+**PAT の入力を求める前に、経路から exact `required token inventory` を作成する。** inventory には env var、host、organization、token owner、用途、token type、role、scope / permission、作成 URL status、secure input 順を含める。次の env var を一件も省略しない。
 
 | 経路 | required token inventory |
 |---|---|
@@ -293,7 +294,7 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 `SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用で、ユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
 
-hidden input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
+secure input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
 
 **PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** `SOURCE_TOKEN` / `TARGET_TOKEN` の必要な全 token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
 
@@ -322,7 +323,7 @@ mode と repository preparation mode から作成した `required token inventor
 1. 新しい質問を出さず、確認済みの token type / host / organization / fixture 経路から、fine-grained を選んだ side の URL を内部で組み立てる。classic を選んだ side の fine-grained URL は生成しない。
 2. 次の assistant 本文に token plan と、fine-grained を選んだ token ごとの label、placeholder のない完全な raw autolink を実際に表示する。classic / GEI token の作成ページ URL も同じ本文に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
 3. URL を含むその同じ assistant response で、inventory 内の全 required PAT を対象に readiness 用 `ask_user` を一度だけ呼ぶ。
-4. choices は `必要な PAT をすべて作成・承認済み` と `まだ準備中` にする。一部 token だけを準備済みとして hidden input へ進まない。
+4. choices は `必要な PAT をすべて作成・承認済み` と `まだ準備中` にする。一部 token だけを準備済みとして secure input へ進まない。
 
 assistant response 本文に今回の完全な URL が一つも存在しない状態では、`PAT を準備できましたか？`、permission 確認、PAT terminal 入力のいずれにも進んではならない。URL を生成できない必須値がある場合だけ、その不足値を一つ質問する。
 
@@ -364,9 +365,15 @@ PAT URL を表示した turn は、URL の表示だけで終了してはなら�
 - token 値は会話へ貼らない。
 - classic PAT は表示した host の作成ページで指定 scope を選び、必要なら SSO authorize する。
 - GEI 経路では source / destination の classic PAT credential を両方準備する。
-- required inventory の全 PAT が準備できたら、共有 terminal の hidden prompt へ一件ずつ安全に入力する。
+- required inventory の全 PAT が準備できたら、agent が右側 terminal に PAT 入力欄を一件ずつ自動表示する。ユーザーは表示された入力欄へ PAT 値だけを入力して Enter を押す。入力中の文字は画面に表示されない。
 
-`必要な PAT をすべて作成・承認済み` の場合だけ hidden input へ進む。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
+URL を表示した assistant response に `ask_user` tool call がない状態は workflow failure とする。「必要な PAT をすべて作成・承認済みかを確認します」という予告文だけで turn を終了してはならない。
+
+`必要な PAT をすべて作成・承認済み` の回答を受けたら、遷移説明だけを返さず、同じ turn で最初の `Read-Host` command を `token execution terminal` の `send_terminal_input` actionへ送る。terminal 出力から PAT 入力待ちを確認した後、次の形式の入力完了質問を一枚だけ表示する。
+
+> 右側のターミナルに `<ENV_VAR> for <organization> on <host> (<purpose>)` という PAT 入力欄を表示しました。そこへ該当する PAT 値だけを入力して Enter を押してください。入力中の文字は画面に表示されません。
+
+choice は `<ENV_VAR> の入力を完了` とする。command、sentinel、marker、`Read-Host`、`hidden prompt` という内部用語を質問カードへ表示しない。`まだ準備中` または Cancel / Skipped の場合は pause し、URL を再生成したり PAT 入力へ進んだりしない。
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
@@ -417,7 +424,7 @@ source / destination の role status が `migrator-pending` の間は、次の s
 
 同じ classic PAT を `ghpmv` と GEI で再利用する場合は、該当する scope の和集合が必要になる。不要な `admin:org` を `ghpmv` 専用 token に追加させない。
 
-role status が `owner` または `migrator-active` になった後、hidden input より前の token plan に次の作成ページを表示する。source は GitHub.com 固定である。destination が data residency の場合だけ確認済み tenant host を使う。
+role status が `owner` または `migrator-active` になった後、secure input より前の token plan に次の作成ページを表示する。source は GitHub.com 固定である。destination が data residency の場合だけ確認済み tenant host を使う。
 
 - GEI source: `https://github.com/settings/tokens/new`
 - GEI destination on GitHub.com: `https://github.com/settings/tokens/new`
