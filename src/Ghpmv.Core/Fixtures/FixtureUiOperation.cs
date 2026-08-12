@@ -28,24 +28,35 @@ public static class FixtureUiOperation
         }
     }
 
-    public static bool IsCompleted(string completionPath, int projectNumber)
+    public static bool IsCompleted(
+        string completionPath,
+        int projectNumber,
+        string snapshotFingerprint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(completionPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshotFingerprint);
         if (!File.Exists(completionPath))
         {
             return false;
         }
 
-        var expected = projectNumber.ToString(CultureInfo.InvariantCulture);
-        return string.Equals(File.ReadAllText(completionPath, Encoding.UTF8).Trim(), expected, StringComparison.Ordinal);
+        var lines = File.ReadAllLines(completionPath, Encoding.UTF8);
+        return lines.Length == 2
+            && string.Equals(
+                lines[0],
+                projectNumber.ToString(CultureInfo.InvariantCulture),
+                StringComparison.Ordinal)
+            && string.Equals(lines[1], snapshotFingerprint, StringComparison.Ordinal);
     }
 
     public static async Task MarkCompletedAsync(
         string completionPath,
         int projectNumber,
+        string snapshotFingerprint,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(completionPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(snapshotFingerprint);
         var directory = Path.GetDirectoryName(completionPath)
             ?? throw new ArgumentException("The completion path must include a directory.", nameof(completionPath));
         Directory.CreateDirectory(directory);
@@ -54,7 +65,9 @@ public static class FixtureUiOperation
         {
             await File.WriteAllTextAsync(
                 temporaryPath,
-                projectNumber.ToString(CultureInfo.InvariantCulture),
+                projectNumber.ToString(CultureInfo.InvariantCulture)
+                    + Environment.NewLine
+                    + snapshotFingerprint,
                 Encoding.UTF8,
                 cancellationToken).ConfigureAwait(false);
             File.Move(temporaryPath, completionPath, overwrite: true);

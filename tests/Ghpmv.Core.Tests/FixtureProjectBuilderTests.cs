@@ -27,13 +27,14 @@ public class FixtureProjectBuilderTests
     }
 
     [Theory]
-    [InlineData("7", 7, true)]
-    [InlineData(" 7\r\n", 7, true)]
-    [InlineData("", 7, false)]
-    [InlineData("8", 7, false)]
-    public void Fixture_ui_completion_marker_requires_the_expected_project_number(
+    [InlineData("7\nsnapshot-a", 7, "snapshot-a", true)]
+    [InlineData("7", 7, "snapshot-a", false)]
+    [InlineData("7\nsnapshot-b", 7, "snapshot-a", false)]
+    [InlineData("8\nsnapshot-a", 7, "snapshot-a", false)]
+    public void Fixture_ui_completion_marker_requires_the_expected_project_and_snapshot(
         string marker,
         int projectNumber,
+        string snapshotFingerprint,
         bool expected)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-ui-marker-").FullName;
@@ -42,7 +43,9 @@ public class FixtureProjectBuilderTests
             var completionPath = Path.Combine(directory, "fixture-ui-complete");
             File.WriteAllText(completionPath, marker);
 
-            Assert.Equal(expected, FixtureUiOperation.IsCompleted(completionPath, projectNumber));
+            Assert.Equal(
+                expected,
+                FixtureUiOperation.IsCompleted(completionPath, projectNumber, snapshotFingerprint));
         }
         finally
         {
@@ -61,9 +64,13 @@ public class FixtureProjectBuilderTests
             await FixtureUiOperation.MarkCompletedAsync(
                 completionPath,
                 projectNumber: 7,
+                snapshotFingerprint: "snapshot-a",
                 TestContext.Current.CancellationToken);
 
-            Assert.True(FixtureUiOperation.IsCompleted(completionPath, projectNumber: 7));
+            Assert.True(FixtureUiOperation.IsCompleted(
+                completionPath,
+                projectNumber: 7,
+                snapshotFingerprint: "snapshot-a"));
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally
@@ -340,6 +347,39 @@ public class FixtureProjectBuilderTests
             Assert.False((await ProjectImportLog.LoadAsync(
                 directory,
                 TestContext.Current.CancellationToken)).ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Legacy_item_log_project_id_is_persisted_for_completion()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-project-id-").FullName;
+        try
+        {
+            var projectLog = new ProjectImportLog { ImportCompleted = false };
+            await projectLog.SaveAsync(directory, TestContext.Current.CancellationToken);
+            var itemLog = new ImportLog
+            {
+                ProjectId = "PVT_legacy",
+                SourceSnapshotFingerprint = "fingerprint",
+            };
+
+            var changed = await FixtureProjectBuilder.PersistLegacyProjectIdAsync(
+                projectLog,
+                itemLog,
+                directory,
+                TestContext.Current.CancellationToken);
+
+            Assert.True(changed);
+            Assert.Equal(
+                "PVT_legacy",
+                (await ProjectImportLog.LoadAsync(
+                    directory,
+                    TestContext.Current.CancellationToken)).CreatedProjectId);
         }
         finally
         {

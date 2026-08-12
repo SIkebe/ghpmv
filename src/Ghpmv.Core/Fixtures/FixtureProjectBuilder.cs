@@ -521,6 +521,22 @@ public sealed class FixtureProjectBuilder
         return true;
     }
 
+    internal static async Task<bool> PersistLegacyProjectIdAsync(
+        ProjectImportLog projectLog,
+        ImportLog? itemLog,
+        string operationDirectory,
+        CancellationToken cancellationToken)
+    {
+        if (projectLog.CreatedProjectId is not null || itemLog is null)
+        {
+            return false;
+        }
+
+        projectLog.CreatedProjectId = itemLog.ProjectId;
+        await projectLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     internal static void ValidateNewProjectRequirement(
         string organization,
         string title,

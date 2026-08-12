@@ -1069,6 +1069,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var snapshot = FixtureUiSnapshotFactory.Create(parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
+        var fixtureUiFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
 
         var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
         var deployment = apiBaseUrl is null
@@ -1085,7 +1086,10 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         using var fixtureUiOperationLock = FixtureUiOperation.AcquireLock(fixtureViewOperationDirectory);
         if (fixtureResult?.ShouldSkipUiSetup(
                 projectExplicitlySelected: parseResult.GetValue(fixtureProjectOption) is not null,
-                uiSetupCompleted: FixtureUiOperation.IsCompleted(uiCompletionPath, projectNumber.Value)) is true)
+                uiSetupCompleted: FixtureUiOperation.IsCompleted(
+                    uiCompletionPath,
+                    projectNumber.Value,
+                    fixtureUiFingerprint)) is true)
         {
             if (authenticatedFixtureUiSession is not null)
             {
@@ -1173,6 +1177,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             await FixtureUiOperation.MarkCompletedAsync(
                 uiCompletionPath,
                 projectNumber.Value,
+                fixtureUiFingerprint,
                 CancellationToken.None);
         }
 
