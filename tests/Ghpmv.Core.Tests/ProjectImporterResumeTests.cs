@@ -342,6 +342,35 @@ public class ProjectImporterResumeTests
     }
 
     [Fact]
+    public async Task Strict_reservation_keeps_pending_operation_when_confirmation_is_interrupted()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-strict-project-confirmation-").FullName;
+        try
+        {
+            using var handler = new ProjectResumeHandler(directory)
+            {
+                CreateSucceeds = true,
+                FailConfirmationAfterCreate = true,
+            };
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => importer.ReserveProjectAsync("target", "Project", cancellationToken));
+
+            var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_created", log.CreatedProjectId);
+            Assert.NotNull(log.PendingProject);
+            Assert.Empty(handler.DeletedProjectIds);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Strict_reservation_refuses_compensation_when_durable_project_id_changed()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -858,6 +887,8 @@ public class ProjectImporterResumeTests
 
         public bool HideCreatedAfterCreate { get; init; }
 
+        public bool FailConfirmationAfterCreate { get; init; }
+
         public bool ReplaceDurableProjectIdAfterCreate { get; init; }
 
         public bool ReturnReplacementOnResume { get; init; }
@@ -882,6 +913,11 @@ public class ProjectImporterResumeTests
             var (query, variables) = await ReadAsync(request, cancellationToken);
             if (query.Contains("projectsV2(first:", StringComparison.Ordinal))
             {
+                if (FailConfirmationAfterCreate && CreateMutationCount > 0)
+                {
+                    throw new HttpRequestException("Reservation confirmation was interrupted.");
+                }
+
                 if (CreateMutationCount > 0 && ReplaceDurableProjectIdAfterCreate && !_durableProjectIdReplaced)
                 {
                     var log = await ProjectImportLog.LoadAsync(Directory, cancellationToken);

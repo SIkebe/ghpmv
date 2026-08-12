@@ -139,12 +139,6 @@ public sealed class ProjectImporter
         }
 
         await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
-        if (_operationLog is not null)
-        {
-            _operationLog.PendingProject = null;
-            await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-        }
-
         var reservedProjectId = _operationLog?.CreatedProjectId
             ?? throw new InvalidOperationException("The reserved Project ID was not recorded.");
         var confirmedMatches = await ConfirmReservedProjectAsync(
@@ -157,13 +151,18 @@ public sealed class ProjectImporter
             project => !string.Equals(project.Id, reservedProjectId, StringComparison.Ordinal));
         if (!reservedProjectIsVisible || unrelatedProjectIsVisible)
         {
-            await ReleaseReservedProjectCoreAsync(reservedProjectId, CancellationToken.None).ConfigureAwait(false);
+            await ReleaseReservedProjectCoreAsync(
+                reservedProjectId,
+                CancellationToken.None,
+                allowPendingProject: true).ConfigureAwait(false);
             throw new InvalidOperationException(
                 unrelatedProjectIsVisible
                     ? $"Project '{title}' has an unrelated same-title Project in {OwnerDescription} '{ownerLogin}'. The Project created by this operation was removed."
                     : $"Project '{reservedProjectId}' created by this operation was not visible after reservation confirmation and was removed.");
         }
 
+        _operationLog.PendingProject = null;
+        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }
 
