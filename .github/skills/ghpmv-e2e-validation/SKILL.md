@@ -33,6 +33,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 16. **Skill を実行する project session が terminal を所有する。** 親・兄弟 session で開いた terminal が画面に見えていても再利用しない。すでに検証用 nested session 内で Skill が起動された場合は、さらに nested session を作成しない。
 17. **in-flight command を再送しない。** command の sentinel が未到達なら実行中として扱い、同じ command、readiness probe、状態確認 command、後続 commandを terminal へ送らない。空出力や一時的な terminal transport error は再送理由にならない。
 18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT、`hidden prompt`、token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
+19. **terminal canvas と shell tool を混同しない。** readiness を確認した `token execution terminal` への入力は、その terminal instance の `send_terminal_input` action だけで行う。`powershell`、`task`、別 process の shell tool で同じ command を実行してはならない。terminal canvas を開いて出力を読めた時点で「agent が terminal に直接入力できる」と扱い、command を本文へ貼ってユーザーに再実行させる fallback へ切り替えない。
 
 ## 実行 session と terminal ownership
 
@@ -112,6 +113,9 @@ token 入力時は次の流れを必須とする。
 1. token prompt は **一度に一つだけ**送信する。source / target / GEI source / GEI target の複数 `Read-Host` を同じ `send_terminal_input` call や同じ PowerShell block に入れない。
 2. prompt label には env var、organization、host、用途をすべて入れる。`Source PAT` / `Target PAT` や「1個目 / 2個目」だけで区別しない。
 3. token prompt を送る直前に一意な `<token-prompt-id>` を生成して記録する。`Read-Host`、環境変数代入、`GHPMV_<token>_(READY|MISSING):<token-prompt-id>` sentinel を一行の PowerShell command として送信する。複数行 paste による順序反転を避ける。
+   - token prompt は対話 command なので、上記の汎用 `GHPMV_COMMAND_DONE` wrapper、`$global:LASTEXITCODE`、`$ghpmvExitCode` を付けない。
+   - `<token-prompt-id>` は command 内へ解決済みの固定文字列として直接埋め込む。`$tokenPromptId` のような PowerShell variable にせず、`"$variable:$otherVariable"` 形式の colon interpolation を作らない。
+   - readiness 済み terminal instance の `send_terminal_input` action へこの一行を一度だけ送る。別 process の shell toolへ渡してはならない。
 4. terminal が secret 入力待ちになったことを確認し、ユーザーに **terminal 上で該当する PAT 値だけを手入力**してもらう。PAT を会話、質問カード、terminal action の引数へ貼らせない。
 5. terminal canvas は secret 入力完了時に agent を自動 wake しないため、この操作だけは `ask_user` で入力完了を確認する。質問カードには、現在入力する env var / organization / host / 用途と、terminal に表示される sentinel を明記する。
 6. 同じ token について待機メッセージ、出力 read、質問カードを繰り返さない。command を一度送信したら確認カードを一枚だけ表示し、ユーザーの応答を待つ。
@@ -303,7 +307,7 @@ fine-grained PAT を選んだ token は URL status を `pending` にする。sou
 
 source と target の両方が fine-grained の場合は、**Source fine-grained PAT** と **Target fine-grained PAT** の見出しを付け、同じ assistant 本文に両方の clickable URL を表示する。permission の文章だけを列挙して URL を省略してはならない。URL を `ask_user.question` や `choices` に埋め込まない。
 
-agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance へ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。agent が操作できない場合は、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
+agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance の `send_terminal_input` actionへ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。readiness command を送信して出力を読めた terminal は操作可能であるため、shell tool を試したり、`Read-Host` command を本文へ掲載してユーザーに実行させたりしない。agent が terminal canvas を開くことも入力 action を呼ぶこともできない場合に限り、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
 mode と repository preparation mode から作成した `required token inventory` に存在する token だけを準備する。GEI 経路では ghpmv 用二件に加えて GEI 用二件も必須であり、四件すべてが ready になるまで preflight、fixture、export、GEI、import、verify のいずれにも進まない。
 
