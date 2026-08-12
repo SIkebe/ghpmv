@@ -953,6 +953,89 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Theory]
+    [InlineData("DATE", "TEXT", "exists with data type TEXT")]
+    [InlineData("ITERATION", "ITERATION", "iterations are not merged")]
+    public async Task Existing_field_gaps_are_collected_as_warnings(
+        string snapshotDataType,
+        string targetDataType,
+        string expectedWarning)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-warning-").FullName;
+        try
+        {
+            var typeName = targetDataType == "ITERATION"
+                ? "ProjectV2IterationField"
+                : "ProjectV2Field";
+            var fieldsResponse = JsonSerializer.Serialize(new
+            {
+                data = new
+                {
+                    node = new
+                    {
+                        fields = new
+                        {
+                            nodes = new[]
+                            {
+                                new
+                                {
+                                    __typename = typeName,
+                                    id = "PVTF_custom",
+                                    name = "Custom",
+                                    dataType = targetDataType,
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                fieldsResponse);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Project = MinimalSnapshot("Roadmap").Project with
+                {
+                    ShortDescription = null,
+                    Readme = null,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Custom",
+                        DataType = snapshotDataType,
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var warning = Assert.Single(importer.Warnings);
+            Assert.Contains(expectedWarning, warning, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,

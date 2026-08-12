@@ -859,7 +859,7 @@ public sealed class ProjectImporter
             {
                 if (!string.Equals(target.DataType, field.DataType, StringComparison.Ordinal))
                 {
-                    OnProgress?.Invoke($"warning: field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
+                    Warn($"field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
                 }
                 else if (field.Options is { } selectOptions
                     && (field.DataType == "SINGLE_SELECT"
@@ -871,7 +871,7 @@ public sealed class ProjectImporter
                 }
                 else if (field.DataType == "ITERATION")
                 {
-                    OnProgress?.Invoke($"warning: iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
+                    Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
                 }
                 else
                 {
