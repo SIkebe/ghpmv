@@ -28,27 +28,16 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Date fields and values | ✅ | |
 | Single-select fields and values | ✅ | Option name, color and description are migrated. |
 | Multi-select Project fields and values | ✅ | Option name, color and description are migrated. Selected options are remapped by name and restored through GraphQL. |
-| Organization Issue Fields, including multi-select | ✅ with browser automation / API best effort | GraphQL now enumerates multi-select Project fields and their options. Browser-assisted export still reads the underlying `issueFieldId` from the Projects UI so hidden or unset linked fields and same-name ordinary fields retain their exact identity. The organization API supplies description, visibility, and options. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
+| Organization Issue Fields, including multi-select | ✅ | GraphQL exposes `isIssueField` and the linked `issueField` definition directly on Project fields, so API-only export preserves hidden or unset linked fields and distinguishes same-name ordinary fields. Existing same-name target Issue Fields are updated to match the snapshot because they are organization-wide. User-owned Projects cannot host organization Issue Fields. |
 | Iteration fields and values | ✅ | Active and completed iterations are migrated. Completed iterations are recreated by using past dates. |
 | Built-in fields such as Title / Assignees / Repository / Labels / Milestone | ✅ for project/view configuration | Built-in fields are not recreated as custom fields. `ghpmv` preserves their use in project views where GitHub exposes them, but Issue/PR metadata values come from the target issues and pull requests, usually migrated by GEI. Draft issue title and draft assignees are handled separately. |
 | Field value history | ❌ | GitHub has no API to write historical field changes. Only current values are migrated. |
 
-### Current GraphQL limitations for linked Issue Fields
-
-GitHub added `MULTI_SELECT`, `ProjectV2MultiSelectField`, and multi-select options to the
-GraphQL schema on [2026-07-27](https://docs.github.com/en/graphql/overview/changelog/2026#schema-changes-for-2026-07-27).
-The remaining gap is the identity of an organization Issue Field linked into a Project.
-
-| Limitation | Impact | Current handling |
-|---|---|---|
-| `ProjectV2FieldConfiguration` exposes no underlying organization `issueFieldId`. | A linked field and an ordinary Project field can have the same name and data type. The public Project field connection cannot prove which one is linked when no item value identifies it. | The Projects UI catalog includes `issueFieldId`; browser-assisted export uses that linkage and enriches it from `organization.issueFields`. |
-| Linked multi-select fields are returned as `ProjectV2MultiSelectField`, the same public type used by ordinary Project multi-select fields. | GraphQL can enumerate the field, data type, and options, but the typename alone does not establish linkage. | API-only export correlates fields with observed Issue Field values and the organization catalog. Browser-assisted export preserves exact linkage, including hidden and unset fields. |
-| `ProjectV2ItemIssueFieldValue` exists only when a Project item has a value. | Item-value discovery alone cannot find an unset linked field. | Browser-assisted export enumerates the complete field catalog independently of items and views, so unset and hidden linked fields are retained. |
-| Hidden or unset linked fields have no `ProjectV2ItemIssueFieldValue` evidence. | Name/type correlation can be ambiguous, especially when an ordinary field has the same identity. | Browser-assisted export/verify uses the UI catalog for exact linkage. |
-
-The browser field catalog can be removed when the public Project field model exposes the
-underlying Issue Field identity directly. `FixtureProjectBuilderTests` enforces that every
-new snapshot field/value shape is represented in that fixture.
+GitHub added `isIssueField` and `issueField` to the Project field model on
+[2026-08-12](https://docs.github.com/en/graphql/overview/changelog/2026#schema-changes-for-2026-08-12).
+`ghpmv` reads this identity and the linked definition directly from the Project field
+connection. Item values are still read from `ProjectV2ItemIssueFieldValue`, but field
+discovery no longer depends on an item having a value or on browser page data.
 
 ## Project items
 

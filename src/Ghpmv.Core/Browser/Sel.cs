@@ -27,9 +27,6 @@ internal static class Sel
     /// <summary>The most recently opened menu.</summary>
     public static ILocator OpenMenu(IPage page) => page.GetByRole(AriaRole.Menu).Last;
 
-    /// <summary>Authoritative field catalog embedded in every Project view page.</summary>
-    public static ILocator ProjectFieldData(IPage page) => page.Locator("#memex-columns-data");
-
     /// <summary>
     /// Configuration menu item. D0: label and current value are combined in the accessible
     /// name ("Group by: &lt;value&gt;"), so the item is located by label prefix.

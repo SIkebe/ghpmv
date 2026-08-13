@@ -113,10 +113,8 @@ public class VerifyTests
                 client, TargetOrg, result.ProjectNumber, verificationSnapshot, cancellationToken);
 
             var postExportCalled = false;
-            var targetFieldCatalog = IntegrationFixtureSnapshot.CreateFieldCatalog(verificationSnapshot);
             var verifier = new ProjectVerifier(client)
             {
-                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(targetFieldCatalog),
                 PostExportAsync = (target, _) =>
                 {
                     postExportCalled = true;
@@ -143,12 +141,6 @@ public class VerifyTests
                 """,
                 new { fieldId = result.FieldIds[fieldName] },
                 cancellationToken);
-            targetFieldCatalog = targetFieldCatalog with
-            {
-                Entries = targetFieldCatalog.Entries
-                    .Where(entry => !string.Equals(entry.Field.Name, fieldName, StringComparison.Ordinal))
-                    .ToArray(),
-            };
 
             // ...and flip the Status value of one imported (non-archived) item.
             var statusItem = verificationSnapshot.Items

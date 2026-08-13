@@ -7,7 +7,7 @@ namespace Ghpmv.Integration.Tests;
 
 /// <summary>
 /// Verifies the organization Issue Field create, link, update, and delete lifecycle
-/// against the real GraphQL API without relying on the shared fixture catalog.
+/// against the real GraphQL API without relying on shared fixture field state.
 /// </summary>
 public class IssueFieldLifecycleIntegrationTests
 {
@@ -178,7 +178,6 @@ public class IssueFieldLifecycleIntegrationTests
         FieldSnapshot expected,
         CancellationToken cancellationToken)
     {
-        var apiExporter = new ProjectExporter(client);
         FieldSnapshot? field = null;
         for (var attempt = 0; attempt < 10; attempt++)
         {
@@ -187,34 +186,11 @@ public class IssueFieldLifecycleIntegrationTests
                 await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
             }
 
-            var apiSnapshot = await apiExporter.ExportAsync(
+            var snapshot = await new ProjectExporter(client).ExportAsync(
                 TargetOrg,
                 projectNumber,
                 cancellationToken);
-            if (!apiSnapshot.Fields.Any(candidate => candidate.Name == expected.Name))
-            {
-                continue;
-            }
-
-            var catalog = new ProjectFieldCatalog
-            {
-                Entries =
-                [
-                    .. apiSnapshot.Fields.Select(candidate =>
-                        new ProjectFieldCatalogEntry(
-                            candidate.Name == expected.Name ? expected : candidate,
-                            IsIssueField: candidate.Name == expected.Name)),
-                ],
-            };
-            var completeExporter = new ProjectExporter(client)
-            {
-                CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
-            };
-            var completeSnapshot = await completeExporter.ExportAsync(
-                TargetOrg,
-                projectNumber,
-                cancellationToken);
-            field = completeSnapshot.Fields.SingleOrDefault(candidate => candidate.Name == expected.Name);
+            field = snapshot.Fields.SingleOrDefault(candidate => candidate.Name == expected.Name);
             if (field is not null
                 && field.DataType == expected.DataType
                 && field.IssueField == expected.IssueField

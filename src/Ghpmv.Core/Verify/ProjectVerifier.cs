@@ -55,9 +55,6 @@ public sealed class ProjectVerifier
     /// </summary>
     public Func<ProjectSnapshot, CancellationToken, Task<ProjectSnapshot>>? PostExportAsync { get; set; }
 
-    /// <summary>Optional authoritative target field catalog provider.</summary>
-    public Func<int, CancellationToken, Task<ProjectFieldCatalog>>? CompleteFieldCatalogProviderAsync { get; set; }
-
     /// <summary>Exports the target project and compares it against <paramref name="source"/>.</summary>
     public async Task<VerifyReport> VerifyAsync(ProjectSnapshot source, string targetOrgLogin, int targetProjectNumber, CancellationToken cancellationToken = default)
     {
@@ -69,7 +66,6 @@ public sealed class ProjectVerifier
             OnProgress = OnProgress,
             OwnerType = OwnerType,
             PostExportAsync = PostExportAsync,
-            CompleteFieldCatalogProviderAsync = CompleteFieldCatalogProviderAsync,
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
         return Compare(source, target, RepositoryMapping, UserMapping, OrganizationMapping);
