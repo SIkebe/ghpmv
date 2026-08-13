@@ -105,7 +105,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_enriches_the_fixture_issue_field_from_the_live_organization_catalog()
+    public async Task Export_reads_the_fixture_issue_field_from_the_project_field_definition()
     {
         var snapshot = await ExportFixtureAsync();
 

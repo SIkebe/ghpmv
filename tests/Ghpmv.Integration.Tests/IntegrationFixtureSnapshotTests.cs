@@ -63,11 +63,10 @@ public class IntegrationFixtureSnapshotTests
             "Fixture pull request",
             result.Items.Single(item => item.Type == "PULL_REQUEST").FieldValues
                 .Single(value => value.FieldName == "Title").Text);
-        var fieldCatalog = IntegrationFixtureSnapshot.CreateFieldCatalog(result);
-        Assert.Contains(fieldCatalog.Fields, field => field.Name == "Title" && field.DataType == "TITLE");
-        Assert.Contains(fieldCatalog.Fields, field => field.Name == "Assignees" && field.DataType == "ASSIGNEES");
-        Assert.Contains(fieldCatalog.Fields, field => field.Name == "Linked pull requests" && field.DataType == "LINKED_PULL_REQUESTS");
-        Assert.Contains(fieldCatalog.Fields, field => field.Name == "Sub-issues progress" && field.DataType == "SUB_ISSUES_PROGRESS");
+        Assert.Contains(result.Fields, field => field.Name == "Title" && field.DataType == "TITLE");
+        Assert.Contains(result.Fields, field => field.Name == "Assignees" && field.DataType == "ASSIGNEES");
+        Assert.Contains(result.Fields, field => field.Name == "Linked pull requests" && field.DataType == "LINKED_PULL_REQUESTS");
+        Assert.Contains(result.Fields, field => field.Name == "Sub-issues progress" && field.DataType == "SUB_ISSUES_PROGRESS");
     }
 
     private static ItemSnapshot Draft(string title, int position) => new()

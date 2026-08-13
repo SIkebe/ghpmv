@@ -51,7 +51,6 @@ public class GraphQLClientIntegrationTests
         catch (GitHubGraphQLException exception)
         {
             Assert.Contains("No snapshot was written", exception.Message, StringComparison.Ordinal);
-            Assert.Contains("--enable-browser-automation", exception.Message, StringComparison.Ordinal);
         }
     }
 

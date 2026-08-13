@@ -1,4 +1,3 @@
-using Ghpmv.Core.Export;
 using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.GitHub;
@@ -72,30 +71,6 @@ internal static class IntegrationFixtureSnapshot
                     FieldValues = values,
                 };
             }).ToArray(),
-        };
-    }
-
-    public static ProjectFieldCatalog CreateFieldCatalog(ProjectSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        return new ProjectFieldCatalog
-        {
-            Entries =
-            [
-                .. snapshot.Fields.Select(field =>
-                    new ProjectFieldCatalogEntry(field, field.IssueField is not null)),
-            ],
-        };
-    }
-
-    public static ProjectExporter CreateKnownCatalogExporter(
-        GitHubGraphQLClient client,
-        ProjectSnapshot snapshot)
-    {
-        var catalog = CreateFieldCatalog(snapshot);
-        return new ProjectExporter(client)
-        {
-            CompleteFieldCatalogProviderAsync = (_, _) => Task.FromResult(catalog),
         };
     }
 

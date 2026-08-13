@@ -101,7 +101,7 @@ GitHub documents `read:project` for Project queries and `project` for queries an
 
 | Command | Classic PAT scopes |
 |---|---|
-| `ghpmv export` | `read:project`. For an organization Project containing Issue Fields, also add `read:org` to read the organization Issue Field catalog. Add `repo` when the source Project contains items or linked repositories from private repositories. |
+| `ghpmv export` | `read:project`. For an organization Project containing Issue Fields, also add `read:org` to read linked Issue Field definitions. Add `repo` when the source Project contains items or linked repositories from private repositories. |
 | `ghpmv import` | `project`. For an organization-owned target, also add `read:org` because `ghpmv` resolves the organization node ID; use `admin:org` instead when the snapshot contains Issue Fields because import creates or updates organization Issue Field definitions. Add `repo` when resolving private target repositories or writing Issue Field values (`public_repo` is sufficient when every affected repository is public). |
 | `ghpmv verify` | `read:project`. For an organization Project containing Issue Fields, also add `read:org`. Add `repo` when the target Project contains items or linked repositories from private repositories. |
 
@@ -199,11 +199,10 @@ ghpmv import --org target-org --in ./snapshot --enable-browser-automation
 ghpmv verify --org target-org --project 12 --in ./snapshot --enable-browser-automation
 ```
 
-Browser-assisted export and verify also read the complete server-rendered Project field
-catalog. GraphQL now enumerates multi-select Project fields, but does not expose the
-underlying organization `issueFieldId`; the browser catalog preserves exact linked-field
-identity for hidden, unset, or same-name fields. If the public field connection fails in
-API-only mode, `ghpmv` exits without writing or comparing a partial snapshot.
+Export and verify read exact linked-field identity from GraphQL
+`ProjectV2FieldCommon.isIssueField` and the applicable field's `issueField` definition.
+This preserves hidden, unset, or same-name fields without browser automation. If the public
+field connection fails, `ghpmv` exits without writing or comparing a partial snapshot.
 
 ### Cross-account migration (e.g. non-EMU source → EMU target)
 

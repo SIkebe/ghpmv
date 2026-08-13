@@ -59,7 +59,7 @@ public class ItemImporterTests
         };
         var title = NewTestTitle();
         var snapshot = source with { Project = source.Project with { Title = title } };
-        var exporter = IntegrationFixtureSnapshot.CreateKnownCatalogExporter(client, snapshot);
+        var exporter = new ProjectExporter(client);
 
         // Identity user mapping so the fixture's assigned draft keeps its assignee.
         var userMapping = snapshot.Items
