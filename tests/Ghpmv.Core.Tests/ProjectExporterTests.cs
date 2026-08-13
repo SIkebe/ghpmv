@@ -122,6 +122,8 @@ public class ProjectExporterTests
         Assert.Equal(
             "Project note",
             item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: false }).Text);
+        var teamsValue = item.FieldValues.Single(value => value is { FieldName: "Teams", IsIssueField: true });
+        Assert.Equal(["Platform", "SDK"], teamsValue.MultiSelectOptionNames);
         Assert.Equal(3, handler.RequestBodies.Count);
         Assert.Contains("isIssueField", handler.RequestBodies[2], StringComparison.Ordinal);
         Assert.Contains("issueField", handler.RequestBodies[2], StringComparison.Ordinal);
