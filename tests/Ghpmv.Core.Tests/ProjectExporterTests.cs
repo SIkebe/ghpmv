@@ -133,6 +133,36 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_paginates_project_fields_without_truncating_the_snapshot()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            FieldsResponse(
+                """
+                [{"__typename":"ProjectV2Field","id":"PVTF_first","name":"First","dataType":"TEXT",
+                  "isIssueField":false,"issueField":null}]
+                """,
+                hasNextPage: true,
+                endCursor: "field-cursor"),
+            FieldsResponse(
+                """
+                [{"__typename":"ProjectV2Field","id":"PVTF_second","name":"Second","dataType":"TEXT",
+                  "isIssueField":false,"issueField":null}]
+                """));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["First", "Second"], snapshot.Fields.Select(field => field.Name));
+        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Contains("\"after\":\"field-cursor\"", handler.RequestBodies[3], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_identifies_unset_linked_issue_field_without_item_value_evidence()
     {
         using var handler = new StubHandler(
@@ -348,8 +378,13 @@ public class ProjectExporterTests
         "\"views\":{\"nodes\":" + views + "},\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
         "}}}}";
 
-    private static string FieldsResponse(string fields) =>
-        "{\"data\":{\"organization\":{\"projectV2\":{\"fields\":{\"nodes\":" + fields + "}}}}}";
+    private static string FieldsResponse(
+        string fields,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
+        "{\"data\":{\"organization\":{\"projectV2\":{\"fields\":{\"nodes\":" + fields +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler) =>
         new(

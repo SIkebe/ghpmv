@@ -15,6 +15,7 @@ namespace Ghpmv.Core.Export;
 /// </summary>
 public sealed class ProjectExporter
 {
+    private const int FieldsPageSize = 50;
     private const int ItemsPageSize = 50;
 
     private readonly GitHubGraphQLClient _client;
@@ -181,11 +182,17 @@ public sealed class ProjectExporter
         int projectNumber,
         CancellationToken cancellationToken)
     {
-        var data = await _client.QueryAsync(
+        var nodes = new List<JsonElement>();
+        await foreach (var node in _client.QueryPaginatedAsync(
             FieldsQuery,
-            new { login = ownerLogin, number = projectNumber },
-            cancellationToken).ConfigureAwait(false);
-        return [.. data.GetProperty(OwnerField).GetProperty("projectV2").GetProperty("fields").GetProperty("nodes").EnumerateArray()];
+            new { login = ownerLogin, number = projectNumber, first = FieldsPageSize },
+            OwnerField + ".projectV2.fields",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            nodes.Add(node);
+        }
+
+        return nodes;
     }
 
     private static ProjectInfoSnapshot ParseProjectInfo(JsonElement project) => new()
@@ -680,10 +687,10 @@ public sealed class ProjectExporter
 
     private const string FieldsQueryTemplate =
         """
-        query($login: String!, $number: Int!) {
+        query($login: String!, $number: Int!, $first: Int!, $after: String) {
           __OWNER__(login: $login) {
             projectV2(number: $number) {
-              fields(first: 50) {
+              fields(first: $first, after: $after) {
                 nodes {
                   __typename
                   ... on ProjectV2FieldCommon { id name dataType isIssueField }
@@ -720,6 +727,7 @@ public sealed class ProjectExporter
                     }
                   }
                 }
+                pageInfo { hasNextPage endCursor }
               }
             }
           }
