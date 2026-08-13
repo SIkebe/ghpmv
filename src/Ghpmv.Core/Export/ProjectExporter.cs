@@ -200,11 +200,20 @@ public sealed class ProjectExporter
     private static List<FieldSnapshot> ParseFields(IReadOnlyList<JsonElement> fieldNodes)
     {
         var fields = new List<FieldSnapshot>();
+        var identities = new HashSet<(string Name, bool IsIssueField)>();
         foreach (var node in fieldNodes)
         {
             var name = node.GetProperty("name").GetString() ?? string.Empty;
             var dataType = node.GetProperty("dataType").GetString() ?? string.Empty;
-            if (node.GetProperty("isIssueField").GetBoolean())
+            var isIssueField = node.GetProperty("isIssueField").GetBoolean();
+            if (!identities.Add((name, isIssueField)))
+            {
+                throw new GitHubGraphQLException(
+                    $"The Project field connection contained duplicate field identity '{name}' " +
+                    $"({(isIssueField ? "linked" : "ordinary")}).");
+            }
+
+            if (isIssueField)
             {
                 if (!node.TryGetProperty("issueField", out var issueFieldNode)
                     || issueFieldNode.ValueKind != JsonValueKind.Object)

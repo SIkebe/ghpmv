@@ -210,6 +210,38 @@ public class ProjectExporterTests
         Assert.Contains("did not match its linked Issue Field", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false, "ordinary")]
+    [InlineData(true, "linked")]
+    public async Task Export_rejects_duplicate_field_identity(bool isIssueField, string identityKind)
+    {
+        var issueField = isIssueField
+            ? """
+              ,"issueField":{"__typename":"IssueFieldText","name":"Notes","dataType":"TEXT",
+                "description":null,"visibility":"ALL"}
+              """
+            : ""","issueField":null""";
+        var field =
+            $$"""
+            {"__typename":"ProjectV2Field","id":"PVTF_notes","name":"Notes","dataType":"TEXT",
+             "isIssueField":{{isIssueField.ToString().ToLowerInvariant()}}{{issueField}}}
+            """;
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            FieldsResponse($"[{field},{field}]"));
+        using var client = CreateClient(handler);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+            new ProjectExporter(client).ExportAsync(
+                "source",
+                1,
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains("duplicate field identity 'Notes'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"({identityKind})", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Export_fails_instead_of_writing_an_incomplete_snapshot_when_field_enumeration_fails()
     {
