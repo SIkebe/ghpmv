@@ -203,12 +203,19 @@ public class VerifyTests
                 return report;
             }
 
-            if (Stopwatch.GetElapsedTime(startedAt) >= VerificationTimeout)
+            var remaining = VerificationTimeout - Stopwatch.GetElapsedTime(startedAt);
+            if (remaining <= TimeSpan.Zero)
             {
                 return report;
             }
 
-            await Task.Delay(VerificationPollInterval, cancellationToken);
+            await Task.Delay(
+                remaining < VerificationPollInterval ? remaining : VerificationPollInterval,
+                cancellationToken);
+            if (Stopwatch.GetElapsedTime(startedAt) >= VerificationTimeout)
+            {
+                return report;
+            }
         }
     }
 
