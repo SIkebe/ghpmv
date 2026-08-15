@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
@@ -18,6 +19,9 @@ namespace Ghpmv.Integration.Tests;
 /// </summary>
 public class VerifyTests
 {
+    private static readonly TimeSpan VerificationPollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan VerificationTimeout = TimeSpan.FromMinutes(2);
+
     private static int FixtureProjectNumber => IntegrationTestSettings.FixtureProjectNumber;
     private static string FixtureRepo => IntegrationTestSettings.FixtureRepositoryFullName;
     private const string StatusFieldName = "Status";
@@ -127,7 +131,7 @@ public class VerifyTests
             //    consistent, so poll until no other error remains.
             var matchReport = await VerifyUntilAsync(verifier, verificationSnapshot, result.ProjectNumber, r => !HasNonBrowserError(r), cancellationToken);
             Assert.True(postExportCalled);
-            Assert.DoesNotContain(matchReport.Differences, d => d.Severity == VerifySeverity.Error && !IsBrowserCategory(d));
+            Assert.False(HasNonBrowserError(matchReport), Describe(matchReport));
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "View");
             Assert.Contains(matchReport.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Workflow");
 
@@ -190,7 +194,8 @@ public class VerifyTests
         ProjectVerifier verifier, ProjectSnapshot snapshot, int projectNumber, Func<VerifyReport, bool> predicate, CancellationToken cancellationToken)
     {
         VerifyReport report = null!;
-        for (var attempt = 0; attempt < 7; attempt++)
+        var startedAt = Stopwatch.GetTimestamp();
+        while (true)
         {
             report = await verifier.VerifyAsync(snapshot, TargetOrg, projectNumber, cancellationToken);
             if (predicate(report))
@@ -198,10 +203,20 @@ public class VerifyTests
                 return report;
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
-        }
+            var remaining = VerificationTimeout - Stopwatch.GetElapsedTime(startedAt);
+            if (remaining <= TimeSpan.Zero)
+            {
+                return report;
+            }
 
-        return report;
+            await Task.Delay(
+                remaining < VerificationPollInterval ? remaining : VerificationPollInterval,
+                cancellationToken);
+            if (Stopwatch.GetElapsedTime(startedAt) >= VerificationTimeout)
+            {
+                return report;
+            }
+        }
     }
 
     private static string Describe(VerifyReport report)
