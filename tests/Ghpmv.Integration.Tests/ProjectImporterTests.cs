@@ -392,15 +392,22 @@ public class ProjectImporterTests
 
         var sourceTitle = "ghpmv-status-source-" + Guid.NewGuid().ToString("N");
         var targetTitle = "ghpmv-status-target-" + Guid.NewGuid().ToString("N");
-        var (sourceProjectId, sourceProjectNumber) = await TemporaryProjectFixture.CreateAsync(
-            client, IntegrationTestSettings.SourceOrg, sourceTitle, cancellationToken);
+        string? sourceProjectId = null;
         string? targetProjectId = null;
+        var sourceCreationAttempted = false;
+        var targetCreationAttempted = false;
+        var testBodyCompleted = false;
         var sourceLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
         var targetLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        Directory.CreateDirectory(sourceLogDirectory);
-        Directory.CreateDirectory(targetLogDirectory);
         try
         {
+            Directory.CreateDirectory(sourceLogDirectory);
+            Directory.CreateDirectory(targetLogDirectory);
+            sourceCreationAttempted = true;
+            var sourceProject = await TemporaryProjectFixture.CreateAsync(
+                client, IntegrationTestSettings.SourceOrg, sourceTitle, cancellationToken);
+            sourceProjectId = sourceProject.Id;
+            var sourceProjectNumber = sourceProject.Number;
             var sourceSeed = StatusUpdateSnapshot(sourceTitle);
             var sourceSeedResult = await new StatusUpdateImporter(client)
             {
@@ -421,9 +428,12 @@ public class ProjectImporterTests
             Assert.Equal(5, sourceUpdates.Count);
             Assert.Equal(2, sourceUpdates.Count(update => update.Body == "Repeated **Markdown** body."));
 
-            var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
+            targetCreationAttempted = true;
+            var targetProject = await TemporaryProjectFixture.CreateAsync(
                 client, TargetOrg, targetTitle, cancellationToken);
-            targetProjectId = projectId;
+            targetProjectId = targetProject.Id;
+            var projectId = targetProject.Id;
+            var projectNumber = targetProject.Number;
             var target = TemporaryTarget(projectId, projectNumber);
             var importer = new StatusUpdateImporter(client);
 
@@ -500,17 +510,82 @@ public class ProjectImporterTests
             var rerunLog = await ImportLog.LoadAsync(targetLogDirectory, cancellationToken);
             Assert.NotNull(rerunLog);
             Assert.Equal(log.StatusUpdates, rerunLog.StatusUpdates);
+            testBodyCompleted = true;
         }
         finally
         {
-            if (targetProjectId is not null)
+            try
             {
-                await DeleteProjectAsync(client, targetProjectId);
+                try
+                {
+                    if (targetProjectId is not null)
+                    {
+                        await DeleteProjectAsync(client, targetProjectId);
+                    }
+                    else if (targetCreationAttempted)
+                    {
+                        await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                            client,
+                            TargetOrg,
+                            targetTitle,
+                            CancellationToken.None);
+                    }
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
             }
-
-            await DeleteProjectAsync(client, sourceProjectId);
-            TryDeleteDirectory(sourceLogDirectory);
-            TryDeleteDirectory(targetLogDirectory);
+            finally
+            {
+                try
+                {
+                    try
+                    {
+                        if (sourceProjectId is not null)
+                        {
+                            await DeleteProjectAsync(client, sourceProjectId);
+                        }
+                        else if (sourceCreationAttempted)
+                        {
+                            await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                                client,
+                                IntegrationTestSettings.SourceOrg,
+                                sourceTitle,
+                                CancellationToken.None);
+                        }
+                    }
+                    catch (Exception) when (!testBodyCompleted)
+                    {
+                        // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        try
+                        {
+                            TryDeleteDirectory(sourceLogDirectory);
+                        }
+                        catch (Exception) when (!testBodyCompleted)
+                        {
+                            // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                        }
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            TryDeleteDirectory(targetLogDirectory);
+                        }
+                        catch (Exception) when (!testBodyCompleted)
+                        {
+                            // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -295,11 +295,17 @@ public class VerifyTests
         Assert.Equal(5, source.StatusUpdates!.Count);
 
         var title = "ghpmv-status-update-test-" + Guid.NewGuid().ToString("N");
-        var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
-            client, TargetOrg, title, cancellationToken);
+        string? projectId = null;
+        var creationAttempted = false;
+        var testBodyCompleted = false;
         var logDirectory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
         try
         {
+            creationAttempted = true;
+            var createdProject = await TemporaryProjectFixture.CreateAsync(
+                client, TargetOrg, title, cancellationToken);
+            projectId = createdProject.Id;
+            var projectNumber = createdProject.Number;
             var target = new ImportResult
             {
                 ProjectId = projectId,
@@ -356,11 +362,40 @@ public class VerifyTests
                 && d.Category == "StatusUpdate"
                 && d.Message.Contains("status update count mismatch (source 5, target 6)", StringComparison.Ordinal));
             Assert.False(driftReport.IsMatch, Describe(driftReport));
+            testBodyCompleted = true;
         }
         finally
         {
-            await DeleteProjectAsync(client, projectId);
-            TryDeleteDirectory(logDirectory);
+            try
+            {
+                if (projectId is not null)
+                {
+                    await DeleteProjectAsync(client, projectId);
+                }
+                else if (creationAttempted)
+                {
+                    await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                        client,
+                        TargetOrg,
+                        title,
+                        CancellationToken.None);
+                }
+            }
+            catch (Exception) when (!testBodyCompleted)
+            {
+                // Preserve the creation/test failure rather than replacing it with cleanup failure.
+            }
+            finally
+            {
+                try
+                {
+                    TryDeleteDirectory(logDirectory);
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
+            }
         }
     }
 
