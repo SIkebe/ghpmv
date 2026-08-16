@@ -86,6 +86,7 @@ public class VerifyTests
 
         var logDirectory = Directory.CreateTempSubdirectory("ghpmv-m5-").FullName;
         ImportResult? result = null;
+        var testBodyCompleted = false;
         try
         {
             result = await new ProjectImporter(client)
@@ -188,15 +189,33 @@ public class VerifyTests
                 d.Severity == VerifySeverity.Error
                 && d.Category == "Item"
                 && d.Message.Contains($"'{StatusFieldName}' value mismatch", StringComparison.Ordinal));
+            testBodyCompleted = true;
         }
         finally
         {
-            if (result is not null)
+            try
             {
-                await DeleteProjectAsync(client, result.ProjectId);
+                if (result is not null)
+                {
+                    await DeleteProjectAsync(client, result.ProjectId);
+                }
+                else
+                {
+                    await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                        client,
+                        TargetOrg,
+                        snapshot.Project.Title,
+                        CancellationToken.None);
+                }
             }
-
-            TryDeleteDirectory(logDirectory);
+            catch (Exception) when (!testBodyCompleted)
+            {
+                // Preserve the test/import failure rather than replacing it with cleanup failure.
+            }
+            finally
+            {
+                TryDeleteDirectory(logDirectory);
+            }
         }
     }
 
