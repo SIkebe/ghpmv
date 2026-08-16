@@ -33,21 +33,30 @@ public class ProjectTemplateWriteSessionTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
 
-        var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
-            client, TargetOrg, NewTestTitle(), cancellationToken);
+        var projectTitle = NewTestTitle();
+        string? projectId = null;
+        int? projectNumber = null;
+        var creationAttempted = false;
+        var testBodyCompleted = false;
         var logDirectory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
         try
         {
-            await SetTemplateAsync(client, projectId, mark: true, cancellationToken);
-            Assert.True(await ReadTemplateFlagAsync(client, projectId, cancellationToken));
+            creationAttempted = true;
+            var project = await TemporaryProjectFixture.CreateAsync(
+                client, TargetOrg, projectTitle, cancellationToken);
+            projectId = project.Id;
+            projectNumber = project.Number;
+
+            await SetTemplateAsync(client, project.Id, mark: true, cancellationToken);
+            Assert.True(await ReadTemplateFlagAsync(client, project.Id, cancellationToken));
 
             var progress = new List<string>();
             var session = await ProjectTemplateWriteSession.PrepareAsync(
-                client, projectId, progress.Add, cancellationToken);
+                client, project.Id, progress.Add, cancellationToken);
 
             Assert.True(session.RestorationRequired);
             Assert.False(
-                await ReadTemplateFlagAsync(client, projectId, cancellationToken),
+                await ReadTemplateFlagAsync(client, project.Id, cancellationToken),
                 "PrepareAsync must unmark the template before status update writes.");
             Assert.Contains(
                 "Temporarily unmarking the target project as a template before status update writes...",
@@ -57,18 +66,18 @@ public class ProjectTemplateWriteSessionTests
             var snapshot = SnapshotWithStatusUpdates(NewTestTitle());
             var result = await new StatusUpdateImporter(client).ImportAsync(
                 snapshot,
-                TemporaryTarget(projectId, projectNumber),
+                TemporaryTarget(project.Id, project.Number),
                 logDirectory,
                 cancellationToken);
             Assert.Equal(2, result.Created);
             Assert.Equal(0, result.Resumed);
             Assert.Equal(0, result.AlreadyComplete);
-            Assert.False(await ReadTemplateFlagAsync(client, projectId, cancellationToken));
+            Assert.False(await ReadTemplateFlagAsync(client, project.Id, cancellationToken));
 
             await session.RestoreAsync(cancellationToken);
 
             Assert.True(
-                await ReadTemplateFlagAsync(client, projectId, cancellationToken),
+                await ReadTemplateFlagAsync(client, project.Id, cancellationToken),
                 "RestoreAsync must re-mark the project as a template.");
             Assert.Contains(
                 "Restoring the target project's template state as the final import stage...",
@@ -76,18 +85,50 @@ public class ProjectTemplateWriteSessionTests
 
             // Restore is idempotent: the CLI calls it on the happy path and again in finally.
             await session.RestoreAsync(cancellationToken);
-            Assert.True(await ReadTemplateFlagAsync(client, projectId, cancellationToken));
+            Assert.True(await ReadTemplateFlagAsync(client, project.Id, cancellationToken));
             Assert.Equal(
                 1,
                 progress.Count(message => string.Equals(
                     message,
                     "Restoring the target project's template state as the final import stage...",
                     StringComparison.Ordinal)));
+            testBodyCompleted = true;
         }
         finally
         {
-            await DeleteProjectAsync(client, projectId);
-            TryDeleteDirectory(logDirectory);
+            try
+            {
+                try
+                {
+                    if (projectId is not null && projectNumber is not null)
+                    {
+                        await DeleteProjectAsync(client, projectId);
+                    }
+                    else if (creationAttempted)
+                    {
+                        await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                            client,
+                            TargetOrg,
+                            projectTitle,
+                            CancellationToken.None);
+                    }
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
+            }
+            finally
+            {
+                try
+                {
+                    TryDeleteDirectory(logDirectory);
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
+            }
         }
     }
 
@@ -97,16 +138,25 @@ public class ProjectTemplateWriteSessionTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = new GitHubGraphQLClient(Token);
 
-        var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
-            client, TargetOrg, NewTestTitle(), cancellationToken);
+        var projectTitle = NewTestTitle();
+        string? projectId = null;
+        int? projectNumber = null;
+        var creationAttempted = false;
+        var testBodyCompleted = false;
         var logDirectory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
         try
         {
-            Assert.False(await ReadTemplateFlagAsync(client, projectId, cancellationToken));
+            creationAttempted = true;
+            var project = await TemporaryProjectFixture.CreateAsync(
+                client, TargetOrg, projectTitle, cancellationToken);
+            projectId = project.Id;
+            projectNumber = project.Number;
+
+            Assert.False(await ReadTemplateFlagAsync(client, project.Id, cancellationToken));
 
             var progress = new List<string>();
             var session = await ProjectTemplateWriteSession.PrepareAsync(
-                client, projectId, progress.Add, cancellationToken);
+                client, project.Id, progress.Add, cancellationToken);
 
             Assert.False(session.RestorationRequired);
             Assert.Empty(progress);
@@ -114,7 +164,7 @@ public class ProjectTemplateWriteSessionTests
             var snapshot = SnapshotWithStatusUpdates(NewTestTitle());
             var result = await new StatusUpdateImporter(client).ImportAsync(
                 snapshot,
-                TemporaryTarget(projectId, projectNumber),
+                TemporaryTarget(project.Id, project.Number),
                 logDirectory,
                 cancellationToken);
             Assert.Equal(2, result.Created);
@@ -122,13 +172,45 @@ public class ProjectTemplateWriteSessionTests
             await session.RestoreAsync(cancellationToken);
 
             // A project that was never a template must not become one.
-            Assert.False(await ReadTemplateFlagAsync(client, projectId, cancellationToken));
+            Assert.False(await ReadTemplateFlagAsync(client, project.Id, cancellationToken));
             Assert.Empty(progress);
+            testBodyCompleted = true;
         }
         finally
         {
-            await DeleteProjectAsync(client, projectId);
-            TryDeleteDirectory(logDirectory);
+            try
+            {
+                try
+                {
+                    if (projectId is not null && projectNumber is not null)
+                    {
+                        await DeleteProjectAsync(client, projectId);
+                    }
+                    else if (creationAttempted)
+                    {
+                        await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                            client,
+                            TargetOrg,
+                            projectTitle,
+                            CancellationToken.None);
+                    }
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
+            }
+            finally
+            {
+                try
+                {
+                    TryDeleteDirectory(logDirectory);
+                }
+                catch (Exception) when (!testBodyCompleted)
+                {
+                    // Preserve the creation/test failure rather than replacing it with cleanup failure.
+                }
+            }
         }
     }
 
