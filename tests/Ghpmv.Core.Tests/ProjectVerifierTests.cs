@@ -208,7 +208,10 @@ public class ProjectVerifierTests
             {"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
             """,
             """
-            {"data":{"organization":{"projectV2":{"fields":{"nodes":[]}}}}}
+            {"data":{"organization":{"projectV2":{"statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"fields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
             """);
         using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
         var source = BuildSnapshot();
@@ -1193,5 +1196,271 @@ public class ProjectVerifierTests
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    // ----- status updates -----
+
+    private static StatusUpdateSnapshot StatusUpdate(
+        string body,
+        string status,
+        string? startDate,
+        string? targetDate,
+        string createdAt,
+        string? creator = "octocat") => new()
+        {
+            Body = body,
+            Status = status,
+            StartDate = startDate,
+            TargetDate = targetDate,
+            Creator = creator,
+            CreatedAt = createdAt,
+            UpdatedAt = createdAt,
+        };
+
+    private static IReadOnlyList<StatusUpdateSnapshot> SourceStatusUpdates() =>
+    [
+        StatusUpdate("Complete.", "COMPLETE", "2026-01-01", "2026-04-15", "2026-01-05T09:00:00Z"),
+        StatusUpdate("On track.\n\n- API", "ON_TRACK", "2026-01-01", null, "2026-01-03T09:00:00Z"),
+        StatusUpdate("Kickoff.", "INACTIVE", null, null, "2026-01-01T09:00:00Z"),
+    ];
+
+    /// <summary>Builds the target sequence exactly as <c>StatusUpdateImporter</c> writes it.</summary>
+    private static IReadOnlyList<StatusUpdateSnapshot> ImportedStatusUpdates(IReadOnlyList<StatusUpdateSnapshot> source)
+        => [.. source.Select(update => update with { Body = StatusUpdateImporter.BuildImportedBody(update) })];
+
+    [Fact]
+    public void Status_updates_are_not_compared_when_the_source_predates_capture()
+    {
+        // BuildSnapshot() predates status update capture (StatusUpdates is null), so the
+        // category is omitted entirely rather than reported as NotVerified.
+        var source = BuildSnapshot();
+        Assert.Null(source.StatusUpdates);
+        var target = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Categories, category => category.Category == "StatusUpdate");
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "StatusUpdate");
+        Assert.Equal(0, report.NotVerifiedCount);
+        Assert.True(report.IsMatch);
+
+        var baseline = ProjectVerifier.Compare(BuildSnapshot(), BuildSnapshot());
+        Assert.Equal(
+            baseline.Categories.Select(category => category.Category),
+            report.Categories.Select(category => category.Category));
+    }
+
+    [Fact]
+    public void Status_update_category_is_present_and_matches_when_sequences_align()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var target = BuildSnapshot() with { StatusUpdates = ImportedStatusUpdates(SourceStatusUpdates()) };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var category = Assert.Single(report.Categories, category => category.Category == "StatusUpdate");
+        Assert.Equal(VerifyStatus.Match, category.Status);
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "StatusUpdate");
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Status_update_count_mismatch_is_an_error()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var imported = ImportedStatusUpdates(SourceStatusUpdates());
+        var target = BuildSnapshot() with { StatusUpdates = [.. imported.Take(2)] };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var difference = Assert.Single(
+            report.Differences,
+            difference => difference.Category == "StatusUpdate");
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal("status update count mismatch (source 3, target 2)", difference.Message);
+        Assert.Equal(
+            VerifyStatus.Mismatch,
+            Assert.Single(report.Categories, category => category.Category == "StatusUpdate").Status);
+    }
+
+    [Fact]
+    public void Extra_target_status_updates_are_errors()
+    {
+        var sourceUpdates = SourceStatusUpdates().Take(2).ToList();
+        var source = BuildSnapshot() with { StatusUpdates = sourceUpdates };
+        var target = BuildSnapshot() with { StatusUpdates = ImportedStatusUpdates(SourceStatusUpdates()) };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var difference = Assert.Single(
+            report.Differences,
+            difference => difference.Category == "StatusUpdate");
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal("status update count mismatch (source 2, target 3)", difference.Message);
+        Assert.Equal(
+            VerifyStatus.Mismatch,
+            Assert.Single(report.Categories, category => category.Category == "StatusUpdate").Status);
+        Assert.False(report.IsMatch);
+    }
+
+    [Fact]
+    public void Status_update_status_difference_is_an_error()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var imported = ImportedStatusUpdates(SourceStatusUpdates()).ToList();
+        imported[1] = imported[1] with { Status = "AT_RISK" };
+        var target = BuildSnapshot() with { StatusUpdates = imported };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var difference = Assert.Single(
+            report.Differences,
+            difference => difference.Category == "StatusUpdate");
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal(
+            "status update sequence 1: status mismatch (source ON_TRACK, target AT_RISK)",
+            difference.Message);
+    }
+
+    [Fact]
+    public void Status_update_start_and_target_date_differences_are_errors()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var imported = ImportedStatusUpdates(SourceStatusUpdates()).ToList();
+        imported[0] = imported[0] with { StartDate = "2026-02-02" };
+        imported[1] = imported[1] with { TargetDate = "2026-09-09" };
+        var target = BuildSnapshot() with { StatusUpdates = imported };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var messages = report.Differences
+            .Where(difference => difference.Category == "StatusUpdate")
+            .Select(difference => difference.Message)
+            .ToList();
+        Assert.Equal(
+            ["status update sequence 0: start date mismatch", "status update sequence 1: target date mismatch"],
+            messages);
+        Assert.All(
+            report.Differences.Where(difference => difference.Category == "StatusUpdate"),
+            difference => Assert.Equal(VerifySeverity.Error, difference.Severity));
+
+        // Sequence 2 has null start and target dates on both sides and produces nothing.
+        Assert.DoesNotContain(messages, message => message.Contains("sequence 2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Status_update_body_with_imported_attribution_note_matches_the_original()
+    {
+        // The target carries exactly what StatusUpdateImporter writes on import; this is
+        // the single place the Verify -> Import attribution contract is asserted.
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var target = BuildSnapshot() with { StatusUpdates = ImportedStatusUpdates(SourceStatusUpdates()) };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "StatusUpdate");
+        Assert.StartsWith(
+            "> _Originally created by @octocat on 2026-01-05T09:00:00Z._",
+            target.StatusUpdates![0].Body,
+            StringComparison.Ordinal);
+        Assert.EndsWith("Complete.", target.StatusUpdates[0].Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Status_update_body_without_the_attribution_note_is_an_error()
+    {
+        // A target body equal to the raw source body means the note was lost on import.
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var target = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var differences = report.Differences
+            .Where(difference => difference.Category == "StatusUpdate")
+            .ToList();
+        Assert.Equal(3, differences.Count);
+        Assert.All(differences, difference =>
+        {
+            Assert.Equal(VerifySeverity.Error, difference.Severity);
+            Assert.EndsWith(
+                ": body mismatch (including original creator/time attribution)",
+                difference.Message,
+                StringComparison.Ordinal);
+        });
+        Assert.Equal(
+            [
+                "status update sequence 0: body mismatch (including original creator/time attribution)",
+                "status update sequence 1: body mismatch (including original creator/time attribution)",
+                "status update sequence 2: body mismatch (including original creator/time attribution)",
+            ],
+            differences.Select(difference => difference.Message));
+    }
+
+    [Fact]
+    public void Status_update_creator_and_created_at_are_not_compared()
+    {
+        // GitHub attributes imported updates to the importing token at import time, so
+        // the target's own creator/createdAt/updatedAt are deliberately excluded.
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var target = BuildSnapshot() with
+        {
+            StatusUpdates = [.. ImportedStatusUpdates(SourceStatusUpdates()).Select(update => update with
+            {
+                Creator = "importer-bot",
+                CreatedAt = "2030-12-31T23:59:59Z",
+                UpdatedAt = "2030-12-31T23:59:59Z",
+            })],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "StatusUpdate");
+        Assert.Equal(
+            VerifyStatus.Match,
+            Assert.Single(report.Categories, category => category.Category == "StatusUpdate").Status);
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Status_updates_with_null_target_collection_are_treated_as_empty()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = [.. SourceStatusUpdates().Take(2)] };
+        var target = BuildSnapshot() with { StatusUpdates = null };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var difference = Assert.Single(
+            report.Differences,
+            difference => difference.Category == "StatusUpdate");
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal("status update count mismatch (source 2, target 0)", difference.Message);
+
+        // A null target is an empty history, not an unverifiable one.
+        var category = Assert.Single(report.Categories, category => category.Category == "StatusUpdate");
+        Assert.Equal(VerifyStatus.Mismatch, category.Status);
+        Assert.NotEqual(VerifyStatus.NotVerified, category.Status);
+    }
+
+    [Fact]
+    public void Status_update_category_rolls_up_to_mismatch_on_any_error()
+    {
+        var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
+        var imported = ImportedStatusUpdates(SourceStatusUpdates()).ToList();
+        imported[2] = imported[2] with { Status = "OFF_TRACK" };
+        var target = BuildSnapshot() with { StatusUpdates = imported };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var category = Assert.Single(report.Categories, category => category.Category == "StatusUpdate");
+        Assert.Equal(VerifyStatus.Mismatch, category.Status);
+        Assert.False(report.IsMatch);
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
+        Assert.Equal(1, report.ErrorCount);
+        Assert.True(report.ShouldFail(failOnWarning: false));
+
+        // Every other category stays clean, proving the rollup is category-scoped.
+        Assert.All(
+            report.Categories.Where(other => other.Category != "StatusUpdate"),
+            other => Assert.Equal(VerifyStatus.Match, other.Status));
     }
 }

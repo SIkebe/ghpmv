@@ -112,6 +112,29 @@ public class SnapshotTests
                 FieldValues = [],
             },
         ],
+        StatusUpdates =
+        [
+            new StatusUpdateSnapshot
+            {
+                Body = "Fixture migration is complete.",
+                Status = "COMPLETE",
+                StartDate = "2026-01-01",
+                TargetDate = "2026-04-15",
+                Creator = "octocat",
+                CreatedAt = "2026-01-05T09:00:00Z",
+                UpdatedAt = "2026-01-05T10:30:00Z",
+            },
+            new StatusUpdateSnapshot
+            {
+                Body = "Kickoff with **Markdown**.\n\n- one\n- two",
+                Status = "INACTIVE",
+                StartDate = null,
+                TargetDate = null,
+                Creator = null,
+                CreatedAt = "2026-01-01T09:00:00Z",
+                UpdatedAt = "2026-01-01T09:00:00Z",
+            },
+        ],
         Collaborators =
         [
             new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" },
@@ -194,6 +217,19 @@ public class SnapshotTests
         Assert.Equal(new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }, restored.Collaborators[0]);
         Assert.Equal(new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" }, restored.Collaborators[1]);
         Assert.Equal(["gpm-source/fixture-repo"], restored.LinkedRepositories);
+
+        Assert.NotNull(restored.StatusUpdates);
+        Assert.Equal(original.StatusUpdates!.Count, restored.StatusUpdates.Count);
+        foreach (var (expected, actual) in original.StatusUpdates.Zip(restored.StatusUpdates))
+        {
+            Assert.Equal(expected.Body, actual.Body);
+            Assert.Equal(expected.Status, actual.Status);
+            Assert.Equal(expected.StartDate, actual.StartDate);
+            Assert.Equal(expected.TargetDate, actual.TargetDate);
+            Assert.Equal(expected.Creator, actual.Creator);
+            Assert.Equal(expected.CreatedAt, actual.CreatedAt);
+            Assert.Equal(expected.UpdatedAt, actual.UpdatedAt);
+        }
     }
 
     [Fact]
@@ -258,6 +294,11 @@ public class SnapshotTests
             Assert.Equal(original.SchemaVersion, restored.SchemaVersion);
             Assert.Equal(original.Project, restored.Project);
             Assert.Equal(original.Items.Count, restored.Items.Count);
+            Assert.NotNull(restored.StatusUpdates);
+            Assert.Equal(original.StatusUpdates!.Count, restored.StatusUpdates.Count);
+            Assert.Equal("Fixture migration is complete.", restored.StatusUpdates[0].Body);
+            Assert.Equal("COMPLETE", restored.StatusUpdates[0].Status);
+            Assert.Equal("2026-01-05T09:00:00Z", restored.StatusUpdates[0].CreatedAt);
         }
         finally
         {
@@ -266,5 +307,96 @@ public class SnapshotTests
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public void Roundtrip_preserves_status_updates()
+    {
+        var original = CreateFullSnapshot();
+
+        var json = JsonSerializer.Serialize(original, SnapshotJsonContext.Default.ProjectSnapshot);
+        var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(restored.StatusUpdates);
+        Assert.Equal(2, restored.StatusUpdates.Count);
+
+        // Reverse chronological order (newest first) is part of the contract, so the
+        // sequence must survive serialization exactly as written.
+        Assert.Equal(
+            ["2026-01-05T09:00:00Z", "2026-01-01T09:00:00Z"],
+            restored.StatusUpdates.Select(update => update.CreatedAt));
+
+        var populated = restored.StatusUpdates[0];
+        Assert.Equal("Fixture migration is complete.", populated.Body);
+        Assert.Equal("COMPLETE", populated.Status);
+        Assert.Equal("2026-01-01", populated.StartDate);
+        Assert.Equal("2026-04-15", populated.TargetDate);
+        Assert.Equal("octocat", populated.Creator);
+        Assert.Equal("2026-01-05T09:00:00Z", populated.CreatedAt);
+        Assert.Equal("2026-01-05T10:30:00Z", populated.UpdatedAt);
+
+        var optionalNulls = restored.StatusUpdates[1];
+        Assert.Equal("Kickoff with **Markdown**.\n\n- one\n- two", optionalNulls.Body);
+        Assert.Equal("INACTIVE", optionalNulls.Status);
+        Assert.Null(optionalNulls.StartDate);
+        Assert.Null(optionalNulls.TargetDate);
+        Assert.Null(optionalNulls.Creator);
+        Assert.Equal("2026-01-01T09:00:00Z", optionalNulls.CreatedAt);
+        Assert.Equal(optionalNulls.CreatedAt, optionalNulls.UpdatedAt);
+    }
+
+    [Fact]
+    public void Deserialize_snapshot_without_status_updates_yields_null()
+    {
+        // Snapshots written before status update support stay loadable within schema
+        // version 1; the new collection deserializes as null ("not captured").
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [], "views": [], "workflows": [], "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.Null(restored.StatusUpdates);
+        Assert.Empty(restored.Items);
+    }
+
+    [Fact]
+    public void Serialized_json_keeps_schema_version_one_when_status_updates_are_present()
+    {
+        // Status updates are an additive schema-v1 field: capturing them must not bump
+        // the version, otherwise every previously written snapshot becomes unreadable.
+        Assert.Equal(1, ProjectSnapshot.CurrentSchemaVersion);
+
+        var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(2, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
+    }
+
+    [Fact]
+    public void Snapshot_with_empty_status_update_list_round_trips_as_empty_not_null()
+    {
+        // "Captured, none exist" ([]) and "not captured" (null) drive different importer
+        // and verifier behavior, so the distinction must survive a roundtrip.
+        var original = CreateFullSnapshot() with { StatusUpdates = [] };
+
+        var json = JsonSerializer.Serialize(original, SnapshotJsonContext.Default.ProjectSnapshot);
+        var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(restored.StatusUpdates);
+        Assert.Empty(restored.StatusUpdates);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Array, document.RootElement.GetProperty("statusUpdates").ValueKind);
+        Assert.Equal(0, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
     }
 }

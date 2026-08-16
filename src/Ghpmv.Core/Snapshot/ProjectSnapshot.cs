@@ -22,6 +22,12 @@ public sealed record ProjectSnapshot
     public required IReadOnlyList<ItemSnapshot> Items { get; init; }
 
     /// <summary>
+    /// Project status update history in reverse chronological order. Null when the
+    /// snapshot predates status update support (a backward-compatible schema-v1 addition).
+    /// </summary>
+    public IReadOnlyList<StatusUpdateSnapshot>? StatusUpdates { get; init; }
+
+    /// <summary>
     /// Project collaborators (users/teams with an explicit project role). Null when not
     /// captured: the GraphQL API has no read field for project collaborators
     /// (<c>ProjectV2ActorConnection</c> appears only on the
@@ -37,6 +43,30 @@ public sealed record ProjectSnapshot
     /// predates this field (schema additions are backward compatible within version 1).
     /// </summary>
     public IReadOnlyList<string>? LinkedRepositories { get; init; }
+}
+
+/// <summary>A historical Project status update.</summary>
+public sealed record StatusUpdateSnapshot
+{
+    public required string Body { get; init; }
+
+    /// <summary>GraphQL <c>ProjectV2StatusUpdateStatus</c>.</summary>
+    public required string? Status { get; init; }
+
+    /// <summary>ISO 8601 date (yyyy-MM-dd).</summary>
+    public string? StartDate { get; init; }
+
+    /// <summary>ISO 8601 date (yyyy-MM-dd).</summary>
+    public string? TargetDate { get; init; }
+
+    /// <summary>Login of the original author, when GitHub exposes it.</summary>
+    public string? Creator { get; init; }
+
+    /// <summary>ISO 8601 creation timestamp used for ordering and the attribution note.</summary>
+    public required string CreatedAt { get; init; }
+
+    /// <summary>ISO 8601 timestamp of the last source-side edit.</summary>
+    public required string UpdatedAt { get; init; }
 }
 
 /// <summary>A project collaborator: a user or a team with an explicit role.</summary>

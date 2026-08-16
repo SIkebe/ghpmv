@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
+using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Tests;
@@ -17,11 +18,16 @@ public class CliImportTests
         var reportPath = Path.Combine(directory, "report.json");
         await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
 
-        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyItemsResponse, VerifyFieldsResponse);
+        using var server = new GraphQlStubServer(
+            VerifyProjectResponse,
+            VerifyItemsResponse,
+            VerifyStatusUpdatesResponse,
+            VerifyFieldsResponse);
         try
         {
             var result = await RunVerifyCliAsync(directory, server, "--report-json", reportPath);
 
+            Assert.Equal(4, server.RequestBodies.Count);
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("Project: Match", result.Output, StringComparison.Ordinal);
             Assert.Contains("LinkedRepository: PartialMatch", result.Output, StringComparison.Ordinal);
@@ -155,10 +161,16 @@ public class CliImportTests
                 "items: created=0 resumed=0 already-complete=0 skipped=0 warnings=0",
                 result.Output,
                 StringComparison.Ordinal);
+            Assert.Contains(
+                "status-updates: created=0 resumed=0 already-complete=0",
+                result.Output,
+                StringComparison.Ordinal);
             Assert.Contains("views: imported=0 warnings=0", result.Output, StringComparison.Ordinal);
             Assert.Equal(3, server.RequestBodies.Count);
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(server.RequestBodies, request =>
+                request.Contains("ProjectV2AsTemplate", StringComparison.Ordinal));
         }
         finally
         {
@@ -222,6 +234,305 @@ public class CliImportTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task Import_prints_the_status_update_summary_line_after_items()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-status-line-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            EmptyFieldsResponse,
+            NonTemplateProjectResponse,
+            EmptyTargetStatusUpdateIdsResponse,
+            CreateStatusUpdateResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
+
+            Assert.Equal(0, result.ExitCode);
+            string[] expected =
+            [
+                "https://github.com/orgs/target/projects/42",
+                "result=updated project=42",
+                "items: created=0 resumed=0 already-complete=0 skipped=0 warnings=0",
+                "status-updates: created=1 resumed=0 already-complete=0",
+                "views: imported=0 warnings=0",
+            ];
+            Assert.Equal(expected, result.Output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+
+            // The stdout contract is additive: the new line reports real work, and the
+            // created update carries the attribution note plus the snapshot's dates.
+            Assert.Equal(6, server.RequestBodies.Count);
+            var createRequest = Assert.Single(
+                server.RequestBodies,
+                request => request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
+            Assert.Contains("Originally created by @octocat on 2024-01-05T09:00:00Z", createRequest, StringComparison.Ordinal);
+            Assert.Contains("Kickoff complete.", createRequest, StringComparison.Ordinal);
+            Assert.Contains("\"status\":\"ON_TRACK\"", createRequest, StringComparison.Ordinal);
+            Assert.Contains("\"startDate\":\"2024-01-01\"", createRequest, StringComparison.Ordinal);
+            Assert.Contains("\"targetDate\":\"2024-03-31\"", createRequest, StringComparison.Ordinal);
+
+            // A non-template target must never be touched by the template seam.
+            Assert.DoesNotContain(server.RequestBodies, request =>
+                request.Contains("ProjectV2AsTemplate", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_skip_path_does_not_print_the_status_update_line()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-status-skip-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(ExistingProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "skip");
+
+            Assert.Equal(0, result.ExitCode);
+            string[] expected =
+            [
+                "https://github.com/orgs/target/projects/42",
+                "result=skipped project=42",
+            ];
+            Assert.Equal(expected, result.Output.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+            Assert.DoesNotContain("status-updates:", result.Output, StringComparison.Ordinal);
+
+            // Skipping means no downstream stage ran at all: no template probe, no writes.
+            var request = Assert.Single(server.RequestBodies);
+            Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("statusUpdates", request, StringComparison.Ordinal);
+            Assert.Contains("skipped without making changes", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_marks_and_restores_the_template_only_when_the_snapshot_has_status_updates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var withoutDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-none-" + Guid.NewGuid().ToString("N"));
+        var withDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-some-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot() with { StatusUpdates = [] }, withoutDirectory, cancellationToken);
+        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), withDirectory, cancellationToken);
+
+        try
+        {
+            using (var withoutServer = new GraphQlStubServer(
+                ExistingProjectResponse,
+                UpdateProjectResponse,
+                EmptyFieldsResponse))
+            {
+                var withoutResult = await RunCliAsync(withoutDirectory, withoutServer, "--on-conflict", "update");
+
+                Assert.Equal(0, withoutResult.ExitCode);
+                Assert.Contains(
+                    "status-updates: created=0 resumed=0 already-complete=0",
+                    withoutResult.Output,
+                    StringComparison.Ordinal);
+
+                // An empty status-update list must not even probe the template state.
+                Assert.Equal(3, withoutServer.RequestBodies.Count);
+                Assert.DoesNotContain(withoutServer.RequestBodies, request =>
+                    request.Contains("ProjectV2AsTemplate", StringComparison.Ordinal));
+                Assert.DoesNotContain(withoutServer.RequestBodies, request =>
+                    request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
+            }
+
+            using var withServer = new GraphQlStubServer(
+                ExistingProjectResponse,
+                UpdateProjectResponse,
+                EmptyFieldsResponse,
+                TemplateProjectResponse,
+                UnmarkTemplateResponse,
+                EmptyTargetStatusUpdateIdsResponse,
+                CreateStatusUpdateResponse,
+                MarkTemplateResponse);
+            var withResult = await RunCliAsync(withDirectory, withServer, "--on-conflict", "update");
+
+            Assert.Equal(0, withResult.ExitCode);
+            Assert.Contains(
+                "status-updates: created=1 resumed=0 already-complete=0",
+                withResult.Output,
+                StringComparison.Ordinal);
+            Assert.Equal(8, withServer.RequestBodies.Count);
+            Assert.Single(withServer.RequestBodies, IsUnmarkTemplateMutation);
+            Assert.Single(withServer.RequestBodies, IsMarkTemplateMutation);
+            Assert.Single(withServer.RequestBodies, request =>
+                request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(withoutDirectory, recursive: true);
+            Directory.Delete(withDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_restores_the_template_after_downstream_importers()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-order-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            EmptyFieldsResponse,
+            TemplateProjectResponse,
+            UnmarkTemplateResponse,
+            EmptyTargetStatusUpdateIdsResponse,
+            CreateStatusUpdateResponse,
+            MarkTemplateResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Equal(8, server.RequestBodies.Count);
+
+            var unmarkIndex = server.RequestBodies.FindIndex(IsUnmarkTemplateMutation);
+            var createIndex = server.RequestBodies.FindIndex(request =>
+                request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
+            var markIndex = server.RequestBodies.FindIndex(IsMarkTemplateMutation);
+            var projectUpdateIndex = server.RequestBodies.FindIndex(request =>
+                request.Contains("updateProjectV2", StringComparison.Ordinal));
+
+            Assert.True(projectUpdateIndex >= 0 && projectUpdateIndex < unmarkIndex);
+            Assert.True(unmarkIndex >= 0 && unmarkIndex < createIndex);
+            Assert.True(createIndex < markIndex);
+
+            // Restoration is the final orchestration stage: nothing is sent afterwards.
+            Assert.Equal(server.RequestBodies.Count - 1, markIndex);
+            Assert.Contains(
+                "Temporarily unmarking the target project as a template before status update writes...",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Restoring the target project's template state as the final import stage...",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "status-updates: created=1 resumed=0 already-complete=0",
+                result.Output,
+                StringComparison.Ordinal);
+            var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(importLog);
+            Assert.Single(importLog.StatusUpdates);
+            Assert.Empty(importLog.PendingStatusUpdates);
+            Assert.False(importLog.TemplateRestorationRequired);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_reports_a_template_restore_failure_on_stderr_and_fails_the_run()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-restore-fail-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            EmptyFieldsResponse,
+            TemplateProjectResponse,
+            UnmarkTemplateResponse,
+            EmptyTargetStatusUpdateIdsResponse,
+            CreateStatusUpdateResponse,
+            TemplateMutationErrorResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
+
+            // The status update itself was written before the restore failed.
+            Assert.Single(server.RequestBodies, request =>
+                request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+
+            // The finally-path retry reports the dedicated restore diagnostic.
+            Assert.Contains(
+                "error: failed to restore the target project's template state:",
+                result.Error,
+                StringComparison.Ordinal);
+
+            // Both restore attempts are mark mutations; nothing else follows them.
+            Assert.Equal(2, server.RequestBodies.Count(IsMarkTemplateMutation));
+            Assert.True(IsMarkTemplateMutation(server.RequestBodies[^1]));
+            var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(importLog);
+            Assert.Single(importLog.StatusUpdates);
+            Assert.True(importLog.TemplateRestorationRequired);
+
+            // The stdout contract is never partially emitted: the failure happens before
+            // the summary block, so no result/items/status-updates/views line is printed.
+            Assert.Equal(string.Empty, result.Output);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_restores_a_pending_template_even_when_project_resume_fails_first()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-early-fail-" + Guid.NewGuid().ToString("N"));
+        var snapshot = SnapshotWithStatusUpdates();
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        await new ImportLog
+        {
+            ProjectId = "PVT_existing",
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            TemplateRestorationRequired = true,
+        }.SaveAsync(directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            NonTemplateProjectResponse,
+            TemplateMutationErrorResponse,
+            MarkTemplateResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Single(server.RequestBodies, IsMarkTemplateMutation);
+            Assert.DoesNotContain(server.RequestBodies, IsUnmarkTemplateMutation);
+            Assert.True(IsMarkTemplateMutation(server.RequestBodies[^1]));
+
+            var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(importLog);
+            Assert.False(importLog.TemplateRestorationRequired);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static bool IsMarkTemplateMutation(string requestBody)
+        => requestBody.Contains("markProjectV2AsTemplate", StringComparison.Ordinal)
+            && !requestBody.Contains("unmarkProjectV2AsTemplate", StringComparison.Ordinal);
+
+    private static bool IsUnmarkTemplateMutation(string requestBody)
+        => requestBody.Contains("unmarkProjectV2AsTemplate", StringComparison.Ordinal);
 
     private static async Task<(int ExitCode, string Output, string Error)> RunCliAsync(
         string directory,
@@ -373,6 +684,23 @@ public class CliImportTests
         LinkedRepositories = [],
     };
 
+    private static ProjectSnapshot SnapshotWithStatusUpdates() => MinimalSnapshot() with
+    {
+        StatusUpdates =
+        [
+            new StatusUpdateSnapshot
+            {
+                Body = "Kickoff complete.",
+                Status = "ON_TRACK",
+                StartDate = "2024-01-01",
+                TargetDate = "2024-03-31",
+                Creator = "octocat",
+                CreatedAt = "2024-01-05T09:00:00Z",
+                UpdatedAt = "2024-01-06T09:00:00Z",
+            },
+        ],
+    };
+
     private const string ExistingProjectResponse =
         """
         {"data":{"organization":{"projectsV2":{
@@ -400,6 +728,31 @@ public class CliImportTests
     private const string PositionResponse =
         """{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""";
 
+    private const string TemplateProjectResponse =
+        """{"data":{"node":{"id":"PVT_existing","template":true}}}""";
+
+    private const string NonTemplateProjectResponse =
+        """{"data":{"node":{"id":"PVT_existing","template":false}}}""";
+
+    private const string UnmarkTemplateResponse =
+        """{"data":{"unmarkProjectV2AsTemplate":{"projectV2":{"id":"PVT_existing","template":false}}}}""";
+
+    private const string MarkTemplateResponse =
+        """{"data":{"markProjectV2AsTemplate":{"projectV2":{"id":"PVT_existing","template":true}}}}""";
+
+    private const string TemplateMutationErrorResponse =
+        """{"errors":[{"type":"FORBIDDEN","message":"Template restore is not permitted."}]}""";
+
+    private const string EmptyTargetStatusUpdateIdsResponse =
+        """
+        {"data":{"node":{
+          "statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        }}}
+        """;
+
+    private const string CreateStatusUpdateResponse =
+        """{"data":{"createProjectV2StatusUpdate":{"statusUpdate":{"id":"PVTSU_imported"}}}}""";
+
     private const string VerifyProjectResponse =
         """
         {"data":{"organization":{"projectV2":{
@@ -417,7 +770,18 @@ public class CliImportTests
         """;
 
     private const string VerifyFieldsResponse =
-        """{"data":{"organization":{"projectV2":{"fields":{"nodes":[]}}}}}""";
+        """
+        {"data":{"organization":{"projectV2":{
+          "fields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        }}}}
+        """;
+
+    private const string VerifyStatusUpdatesResponse =
+        """
+        {"data":{"organization":{"projectV2":{
+          "statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
+        }}}}
+        """;
 
     private sealed class GraphQlStubServer : IDisposable
     {

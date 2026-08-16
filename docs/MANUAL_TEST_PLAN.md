@@ -22,7 +22,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 
 1. GEI で source repository を target organization へ移行できることを確認する。
 2. GEI 移行後の target repository に対して、`ghpmv` が source Project の Issue / PR item を repository mapping + 同一番号で再リンクできることを確認する。
-3. `ghpmv` が Project metadata / fields / items / values / order / archived state / linked repositories / explicit collaborators / Views / Workflows を移行できることを確認する。
+3. `ghpmv` が Project metadata / fields / items / values / order / archived state / Status Updates / linked repositories / explicit collaborators / Views / Workflows を移行できることを確認する。
 4. `ghpmv verify` で移行結果を検証し、既知の恒久制限以外に error が出ないことを確認する。
 5. セッション失効、mapping 不足、browser automation 無効時など、手動運用で起きやすい失敗が分かりやすく検出されることを確認する。
 
@@ -40,6 +40,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
   - custom fields と options / iterations
   - draft / issue / PR items と主要 field values
   - archived item の archived state
+  - Status Updates の履歴件数、順序、status、日付、本文、元情報注記
   - linked repository
   - explicit project collaborators
   - Table / Board / Roadmap views
@@ -59,6 +60,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Items | `ghpmv verify` + 目視 | Draft / Issue / PR / archived / assigned draft。 |
 | Field values | `ghpmv verify` + 目視 | Unicode、emoji、number、date、single-select option、multi-select options、iteration。 |
 | Item order | `ghpmv verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
+| Status Updates | `ghpmv verify` + 目視 | 履歴順、全 status、nullable な start/target date、Markdown 本文、元作成者/日時注記。target 側の作成者/作成日時そのものは比較しない。 |
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
 | Views | browser export/import + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum など。 |
@@ -109,6 +111,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - custom fields(Text / Number / Date / Single-select / Multi-select (`Fixture Areas`) / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
+- Status Updates 5 件（`INACTIVE` / `ON_TRACK` / `AT_RISK` / `OFF_TRACK` / `COMPLETE`、日付 null/値あり、Markdown 本文）
 
 Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定と Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer でそれらだけを補完します。手動で UI をぽちぽち濃くする必要はありません。
 
@@ -248,6 +251,16 @@ dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile targ
 `login` は既存 profile の cookie を読み込まない fresh browser context で開始します。
 `--expected-login` と異なるアカウントで認証された場合は、profile state を上書きせず失敗します。
 
+### 4.5 Status Updates の自動 E2E 期待値
+
+資格情報がないローカル/PRでは、既存方針どおり live integration test は skip します。`GHPMV_TEST_TOKEN` と source/target organization を設定した scheduled/manual run では、Status Updates round-trip test を skip せず実行します。
+
+```powershell
+dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --filter "FullyQualifiedName~StatusUpdate"
+```
+
+自動 E2E は一意な source/target Project を作成し、`export → import → verify → target再取得 → 同じimport-logで再実行` を通します。全5 status、日付の null/値あり、Markdown、履歴順、元作成者/日時注記、再実行時の非重複を assertion し、成功・失敗にかかわらず `finally` で両 Project を削除することが合格条件です。
+
 GHEC with data residency target の場合は、target profile に tenant host を指定します。
 
 ```powershell
@@ -278,7 +291,7 @@ Source project number: <source-project-number>
 
 ### 5.2 View / Workflow fixture を GraphQL API + C# / Playwright で作成する
 
-`ghpmv setup --fixture` は repository / fields / items までを作ります。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap など API 未対応設定と Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
+`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap など API 未対応設定と Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `
@@ -449,6 +462,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
 確認ポイント:
 
 - `$env:GHPMV_SNAPSHOT_DIR/snapshot.json` が作成される。
+- `snapshot.json` の `statusUpdates` が source UI と同じ reverse-chronological sequence で、5件の status/date/body/creator/createdAt/updatedAt を含む。
 - `repository-mappings.csv` が生成される。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 
@@ -505,6 +519,8 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 出力された target Project URL と project number を控えます。
 
+stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。同じ snapshot directory と `--project-number <target-project-number> --on-conflict update` で再実行し、`created=0`、`already-complete=5` となり、UI の履歴件数が増えないことも確認します。本文が同じ Status Update が複数あっても内容で統合されず、snapshot の各 sequence が1件ずつ残ることが合格条件です。
+
 ```text
 Target project URL: https://github.com/orgs/<target-org>/projects/<target-project-number>
 Target project number: <target-project-number>
@@ -536,6 +552,8 @@ source / target の repository 名または user login が異なる場合、`ver
 ```text
 OK: the target project matches the snapshot.
 ```
+
+human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
@@ -590,7 +608,15 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] View 名が一致。
 - [ ] View tab order は v1 対象外として warning または手動補正対象に記録。
 
-### 8.5 Workflows
+### 8.5 Status Updates
+
+- [ ] source/target の履歴件数が一致し、最新から古い順の sequence が一致。
+- [ ] `INACTIVE` / `ON_TRACK` / `AT_RISK` / `OFF_TRACK` / `COMPLETE` が維持されている。
+- [ ] start date / target date の null と値ありが維持されている。
+- [ ] Markdown 本文が維持され、各 target 本文先頭に元作成者と元作成日時の注記がある。
+- [ ] import 再実行後も履歴件数が増えず、同じ本文を持つ別 update は別履歴として残る。
+
+### 8.6 Workflows
 
 - [ ] Item added / Item closed / Pull request merged などの built-in workflow が設定されている。
 - [ ] Status value binding が target Status option に向いている。
@@ -599,7 +625,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] disabled workflow が disabled のまま、または仕様どおり一時有効化後に disabled へ戻っている。
 - [ ] target plan 上限を超える Auto-add が warning + skip になる。
 
-### 8.6 Access / linked repositories
+### 8.7 Access / linked repositories
 
 - [ ] linked repository が target repository に置き換わっている。
 - [ ] explicit project collaborator と role が一致。
@@ -619,6 +645,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-4 | browser profile を間違える | ログイン / 権限エラーで失敗し、再ログイン案内が出る。 |
 | N-5 | Auto-add 上限に近い Project へ import | 超過分が warning + skip される。 |
 | N-6 | `verify` 前に target field value を手動変更 | `ghpmv verify` が差分を error として検出する。 |
+| N-7 | `verify` 前に target Status Update の status/date/body を変更 | `StatusUpdate` category と JSON report が sequence 上の差分を error として検出する。 |
 
 ---
 

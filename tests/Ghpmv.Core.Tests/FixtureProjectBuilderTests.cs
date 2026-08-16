@@ -1,4 +1,6 @@
+using System.Globalization;
 using Ghpmv.Core.Fixtures;
+using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Tests;
@@ -75,7 +77,7 @@ public class FixtureProjectBuilderTests
     [InlineData(true, false, false, false)]
     public void Item_stage_runs_only_for_new_or_resumable_fixture(
         bool projectAlreadyExists,
-        bool hasItemLog,
+        bool hasItemWork,
         bool projectImportWasPending,
         bool expected)
     {
@@ -83,7 +85,122 @@ public class FixtureProjectBuilderTests
             expected,
             FixtureProjectBuilder.ShouldImportItems(
                 projectAlreadyExists,
-                hasItemLog,
+                hasItemWork,
                 projectImportWasPending));
+    }
+
+    [Fact]
+    public void Status_only_import_log_does_not_resume_the_fixture_item_stage()
+    {
+        var log = new ImportLog
+        {
+            ProjectId = "PVT_fixture",
+            SourceSnapshotFingerprint = "fingerprint",
+        };
+        log.StatusUpdates["0"] = "PVTSU_fixture";
+
+        Assert.False(FixtureProjectBuilder.HasItemWork(log));
+        Assert.False(FixtureProjectBuilder.ShouldImportItems(
+            projectAlreadyExists: true,
+            hasItemWork: FixtureProjectBuilder.HasItemWork(log),
+            projectImportWasPending: false));
+    }
+
+    private static IReadOnlyList<StatusUpdateSnapshot> FixtureStatusUpdates()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+
+        Assert.NotNull(snapshot.StatusUpdates);
+        return snapshot.StatusUpdates;
+    }
+
+    [Fact]
+    public void Demo_fixture_exercises_every_status_update_status()
+    {
+        var updates = FixtureStatusUpdates();
+
+        Assert.Equal(5, updates.Count);
+        var statuses = updates.Select(update => update.Status).ToList();
+        Assert.Equal(
+            ["COMPLETE", "OFF_TRACK", "AT_RISK", "ON_TRACK", "INACTIVE"],
+            statuses);
+        Assert.Equal(statuses.Count, statuses.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Demo_fixture_status_updates_are_in_strictly_descending_created_at_order()
+    {
+        var updates = FixtureStatusUpdates();
+
+        var timestamps = updates
+            .Select(update => DateTimeOffset.Parse(update.CreatedAt, CultureInfo.InvariantCulture))
+            .ToList();
+
+        // Export order is reverse chronological (newest first), which the importer relies
+        // on when it re-orders to oldest-first for creation.
+        for (var index = 1; index < timestamps.Count; index++)
+        {
+            Assert.True(
+                timestamps[index] < timestamps[index - 1],
+                $"status update {index} ({updates[index].CreatedAt}) is not older than {updates[index - 1].CreatedAt}");
+        }
+
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-01-05T09:00:00Z", CultureInfo.InvariantCulture),
+            timestamps[0]);
+        Assert.Equal(
+            DateTimeOffset.Parse("2026-01-01T09:00:00Z", CultureInfo.InvariantCulture),
+            timestamps[^1]);
+    }
+
+    [Fact]
+    public void Demo_fixture_status_updates_mix_null_and_populated_dates()
+    {
+        var updates = FixtureStatusUpdates();
+
+        Assert.Contains(updates, update => update.StartDate is null);
+        Assert.Contains(updates, update => update.TargetDate is null);
+
+        var inactive = Assert.Single(updates, update => update.Status == "INACTIVE");
+        Assert.Null(inactive.StartDate);
+        Assert.Null(inactive.TargetDate);
+
+        var complete = Assert.Single(updates, update => update.Status == "COMPLETE");
+        Assert.Equal("2026-01-01", complete.StartDate);
+        Assert.Equal("2026-04-15", complete.TargetDate);
+    }
+
+    [Fact]
+    public void Demo_fixture_status_update_bodies_include_multi_line_and_markdown_content()
+    {
+        var updates = FixtureStatusUpdates();
+
+        var multiLine = Assert.Single(updates, update => update.Status == "ON_TRACK");
+        Assert.Contains("\n", multiLine.Body, StringComparison.Ordinal);
+
+        var markdown = Assert.Single(updates, update => update.Status == "INACTIVE");
+        Assert.Contains("**", markdown.Body, StringComparison.Ordinal);
+
+        Assert.All(updates, update => Assert.False(string.IsNullOrWhiteSpace(update.Body)));
+    }
+
+    [Fact]
+    public void Demo_fixture_status_updates_populate_every_snapshot_property_somewhere()
+    {
+        var updates = FixtureStatusUpdates();
+
+        foreach (var property in typeof(StatusUpdateSnapshot).GetProperties())
+        {
+            Assert.Contains(updates, update => property.GetValue(update) is not null);
+        }
+
+        Assert.All(updates, update => Assert.Equal("octocat", update.Creator));
+        Assert.Contains(
+            updates,
+            update => !string.Equals(update.UpdatedAt, update.CreatedAt, StringComparison.Ordinal));
     }
 }

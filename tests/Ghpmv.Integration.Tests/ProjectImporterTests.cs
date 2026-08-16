@@ -2,6 +2,7 @@ using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
+using Ghpmv.Core.Verify;
 
 namespace Ghpmv.Integration.Tests;
 
@@ -376,5 +377,205 @@ public class ProjectImporterTests
             "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
             new { projectId },
             CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Status update history round trip. GitHub exposes no delete for an individual status
+    /// update, so this test writes into a throwaway project created for this run only —
+    /// never the shared fixture — and deletes it in <c>finally</c>.
+    /// </summary>
+    [Fact]
+    public async Task Status_updates_round_trip_into_a_temporary_project_with_every_status_and_date_shape()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+
+        var sourceTitle = "ghpmv-status-source-" + Guid.NewGuid().ToString("N");
+        var targetTitle = "ghpmv-status-target-" + Guid.NewGuid().ToString("N");
+        var (sourceProjectId, sourceProjectNumber) = await TemporaryProjectFixture.CreateAsync(
+            client, IntegrationTestSettings.SourceOrg, sourceTitle, cancellationToken);
+        string? targetProjectId = null;
+        var sourceLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        var targetLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        Directory.CreateDirectory(sourceLogDirectory);
+        Directory.CreateDirectory(targetLogDirectory);
+        try
+        {
+            var sourceSeed = StatusUpdateSnapshot(sourceTitle);
+            var sourceSeedResult = await new StatusUpdateImporter(client)
+            {
+                AddAttributionNote = false,
+            }.ImportAsync(
+                sourceSeed,
+                TemporaryTarget(sourceProjectId, sourceProjectNumber),
+                sourceLogDirectory,
+                cancellationToken);
+            Assert.Equal(5, sourceSeedResult.Created);
+
+            var source = await new ProjectExporter(client).ExportAsync(
+                IntegrationTestSettings.SourceOrg,
+                sourceProjectNumber,
+                cancellationToken);
+            var sourceUpdates = source.StatusUpdates;
+            Assert.NotNull(sourceUpdates);
+            Assert.Equal(5, sourceUpdates.Count);
+            Assert.Equal(2, sourceUpdates.Count(update => update.Body == "Repeated **Markdown** body."));
+
+            var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
+                client, TargetOrg, targetTitle, cancellationToken);
+            targetProjectId = projectId;
+            var target = TemporaryTarget(projectId, projectNumber);
+            var importer = new StatusUpdateImporter(client);
+
+            var first = await importer.ImportAsync(source, target, targetLogDirectory, cancellationToken);
+            Assert.Equal(5, first.Created);
+            Assert.Equal(0, first.Resumed);
+            Assert.Equal(0, first.AlreadyComplete);
+
+            var log = await ImportLog.LoadAsync(targetLogDirectory, cancellationToken);
+            Assert.NotNull(log);
+            Assert.Equal(5, log.StatusUpdates.Count);
+            Assert.Empty(log.PendingStatusUpdates);
+            // One distinct target node id per source sequence index.
+            Assert.Equal(5, log.StatusUpdates.Values.Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(projectId, log.ProjectId);
+
+            var reExported = await new ProjectExporter(client).ExportAsync(TargetOrg, projectNumber, cancellationToken);
+            var targetUpdates = reExported.StatusUpdates;
+            Assert.NotNull(targetUpdates);
+            Assert.Equal(sourceUpdates.Count, targetUpdates.Count);
+
+            // Creation is oldest-first, so the server's reverse-chronological history
+            // lines up with the source sequence index for index.
+            for (var index = 0; index < sourceUpdates.Count; index++)
+            {
+                var expected = sourceUpdates[index];
+                var actual = targetUpdates[index];
+                Assert.Equal(expected.Status, actual.Status);
+                Assert.Equal(expected.StartDate, actual.StartDate);
+                Assert.Equal(expected.TargetDate, actual.TargetDate);
+                Assert.Equal(
+                    NormalizeBody(StatusUpdateImporter.BuildImportedBody(expected)),
+                    NormalizeBody(actual.Body));
+                // The attribution note names the original creator and source timestamp,
+                // and the original Markdown body survives below it.
+                Assert.Contains($"@{expected.Creator}", actual.Body, StringComparison.Ordinal);
+                Assert.Contains(expected.CreatedAt, actual.Body, StringComparison.Ordinal);
+                Assert.Contains(NormalizeBody(expected.Body), NormalizeBody(actual.Body), StringComparison.Ordinal);
+            }
+
+            Assert.Equal(
+                ["COMPLETE", "OFF_TRACK", "AT_RISK", "ON_TRACK", "INACTIVE"],
+                targetUpdates.Select(update => update.Status));
+            Assert.Contains(targetUpdates, update => update.StartDate is null);
+            Assert.Contains(targetUpdates, update => update.TargetDate is null);
+            Assert.Contains(targetUpdates, update => update.StartDate is not null && update.TargetDate is not null);
+            Assert.Equal(2, targetUpdates.Count(update =>
+                NormalizeBody(update.Body).EndsWith("Repeated **Markdown** body.", StringComparison.Ordinal)));
+
+            var verifyReport = await new ProjectVerifier(client).VerifyAsync(
+                source,
+                TargetOrg,
+                projectNumber,
+                cancellationToken);
+            Assert.Equal(
+                VerifyStatus.Match,
+                verifyReport.Categories.Single(category => category.Category == "StatusUpdate").Status);
+
+            // Re-running against the same log resumes by persisted node id: nothing is
+            // created and nothing is deduplicated by content.
+            var second = await importer.ImportAsync(source, target, targetLogDirectory, cancellationToken);
+            Assert.Equal(0, second.Created);
+            Assert.Equal(0, second.Resumed);
+            Assert.Equal(5, second.AlreadyComplete);
+
+            var afterRerun = await new ProjectExporter(client).ExportAsync(TargetOrg, projectNumber, cancellationToken);
+            var rerunUpdates = afterRerun.StatusUpdates;
+            Assert.NotNull(rerunUpdates);
+            Assert.Equal(5, rerunUpdates.Count);
+            Assert.Equal(
+                targetUpdates.Select(update => NormalizeBody(update.Body)),
+                rerunUpdates.Select(update => NormalizeBody(update.Body)));
+
+            var rerunLog = await ImportLog.LoadAsync(targetLogDirectory, cancellationToken);
+            Assert.NotNull(rerunLog);
+            Assert.Equal(log.StatusUpdates, rerunLog.StatusUpdates);
+        }
+        finally
+        {
+            if (targetProjectId is not null)
+            {
+                await DeleteProjectAsync(client, targetProjectId);
+            }
+
+            await DeleteProjectAsync(client, sourceProjectId);
+            TryDeleteDirectory(sourceLogDirectory);
+            TryDeleteDirectory(targetLogDirectory);
+        }
+    }
+
+    private static ProjectSnapshot StatusUpdateSnapshot(string title) => new()
+    {
+        SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        Project = new ProjectInfoSnapshot
+        {
+            Title = title,
+            Public = false,
+            Closed = false,
+        },
+        Fields = [],
+        Views = [],
+        Workflows = [],
+        Items = [],
+        StatusUpdates =
+        [
+            StatusUpdate("Complete.", "COMPLETE", "2026-01-01", "2026-04-15", "2026-01-05T09:00:00Z"),
+            StatusUpdate("Repeated **Markdown** body.", "OFF_TRACK", null, "2026-04-15", "2026-01-04T09:00:00Z"),
+            StatusUpdate("Repeated **Markdown** body.", "AT_RISK", "2026-01-01", null, "2026-01-03T09:00:00Z"),
+            StatusUpdate("On track.\n\n- API\n- Import", "ON_TRACK", "2026-01-01", "2026-03-31", "2026-01-02T09:00:00Z"),
+            StatusUpdate("Inactive.", "INACTIVE", null, null, "2026-01-01T09:00:00Z"),
+        ],
+    };
+
+    private static StatusUpdateSnapshot StatusUpdate(
+        string body,
+        string status,
+        string? startDate,
+        string? targetDate,
+        string createdAt) => new()
+    {
+        Body = body,
+        Status = status,
+        StartDate = startDate,
+        TargetDate = targetDate,
+        Creator = null,
+        CreatedAt = createdAt,
+        UpdatedAt = createdAt,
+    };
+
+    private static ImportResult TemporaryTarget(string projectId, int projectNumber) => new()
+    {
+        ProjectId = projectId,
+        ProjectNumber = projectNumber,
+        Url = "https://github.com/orgs/" + TargetOrg + "/projects/"
+            + projectNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        Outcome = ProjectImportOutcome.Created,
+        FieldIds = new Dictionary<string, string>(StringComparer.Ordinal),
+        OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal),
+        IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal),
+    };
+
+    private static string NormalizeBody(string body) => body.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best-effort cleanup of the temp log directory.
+        }
     }
 }

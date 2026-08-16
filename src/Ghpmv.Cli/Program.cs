@@ -326,6 +326,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
     client.OnRetry = Console.Error.WriteLine;
     BrowserSession? session = null;
+    ProjectTemplateWriteSession? templateWriteSession = null;
 
     try
     {
@@ -405,6 +406,29 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
         var projectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
+        ImportLog? templateLog = itemLog;
+        async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
+        {
+            var latestLog = await ImportLog.LoadAsync(inDirectory, ct)
+                ?? templateLog
+                ?? throw new InvalidOperationException(
+                    $"{ImportLog.FileName} was unavailable while persisting template restoration state.");
+            latestLog.TemplateRestorationRequired = required;
+            await latestLog.SaveAsync(inDirectory, ct);
+            templateLog = latestLog;
+        }
+
+        if (itemLog is { TemplateRestorationRequired: true })
+        {
+            templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                client,
+                itemLog.ProjectId,
+                restorationWasPending: true,
+                PersistTemplateRestorationAsync,
+                Console.Error.WriteLine,
+                cancellationToken);
+        }
+
         if (itemLog is not null
             && !string.Equals(
                 itemLog.SourceSnapshotFingerprint,
@@ -418,6 +442,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
             || itemLog is { PendingContents.Count: > 0 }
             || itemLog is { HasIncompleteItems: true };
+        var hasIncompleteStatusUpdateWork = itemLog is not null
+            && snapshot.StatusUpdates is { } capturedStatusUpdates
+            && (itemLog.PendingStatusUpdates.Count > 0
+                || itemLog.StatusUpdates.Count < capturedStatusUpdates.Count
+                || itemLog.TemplateRestorationRequired);
         var hasIncompleteProjectWork = projectLog.PendingProject is not null
             || projectLog.PendingFields.Count > 0
             || projectLog.PendingIssueFields.Count > 0
@@ -426,7 +455,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var pendingItemProjectId = itemLog?.ProjectId;
         var importer = new ProjectImporter(client)
         {
-            OnConflict = hasIncompleteItemWork || hasIncompleteProjectWork ? ConflictAction.Update : onConflict,
+            OnConflict = hasIncompleteItemWork || hasIncompleteStatusUpdateWork || hasIncompleteProjectWork
+                ? ConflictAction.Update
+                : onConflict,
             OwnerType = ownerType,
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
@@ -459,6 +490,41 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
         };
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+        var statusUpdateResult = new StatusUpdateImportResult
+        {
+            Created = 0,
+            Resumed = 0,
+            AlreadyComplete = 0,
+        };
+        if (snapshot.StatusUpdates is { Count: > 0 })
+        {
+            templateLog = await ImportLog.LoadAsync(inDirectory, cancellationToken)
+                ?? new ImportLog
+                {
+                    ProjectId = result.ProjectId,
+                    SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+                };
+            if (templateWriteSession is null)
+            {
+                templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                    client,
+                    result.ProjectId,
+                    templateLog.TemplateRestorationRequired,
+                    PersistTemplateRestorationAsync,
+                    Console.Error.WriteLine,
+                    cancellationToken);
+            }
+
+            var statusUpdateImporter = new StatusUpdateImporter(client)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            statusUpdateResult = await statusUpdateImporter.ImportAsync(
+                snapshot,
+                result,
+                inDirectory,
+                cancellationToken);
+        }
 
         var viewWarnings = result.ViewWarningCount;
         var workflowWarnings = 0;
@@ -501,11 +567,18 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             workflowsImported = workflowImporter.ImportedCount;
         }
 
+        if (templateWriteSession is not null)
+        {
+            await templateWriteSession.RestoreAsync(cancellationToken);
+        }
+
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"status-updates: created={statusUpdateResult.Created} resumed={statusUpdateResult.Resumed} already-complete={statusUpdateResult.AlreadyComplete}"));
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
         if (enableBrowserAutomation)
@@ -524,6 +597,18 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     }
     finally
     {
+        if (templateWriteSession is { RestorationRequired: true })
+        {
+            try
+            {
+                await templateWriteSession.RestoreAsync(CancellationToken.None);
+            }
+            catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or IOException)
+            {
+                Console.Error.WriteLine($"error: failed to restore the target project's template state: {exception.Message}");
+            }
+        }
+
         if (session is not null)
         {
             await session.DisposeAsync();

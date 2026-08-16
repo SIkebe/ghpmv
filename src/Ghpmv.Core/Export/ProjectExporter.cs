@@ -17,6 +17,7 @@ public sealed class ProjectExporter
 {
     private const int FieldsPageSize = 50;
     private const int ItemsPageSize = 50;
+    private const int StatusUpdatesPageSize = 50;
 
     private readonly GitHubGraphQLClient _client;
 
@@ -57,9 +58,13 @@ public sealed class ProjectExporter
         var views = ParseViews(project.GetProperty("views"));
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
-        OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows. Fetching items...");
+        OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows. Fetching items and status updates...");
 
         var items = await FetchItemsAsync(
+            ownerLogin,
+            projectNumber,
+            cancellationToken).ConfigureAwait(false);
+        var statusUpdates = await FetchStatusUpdatesAsync(
             ownerLogin,
             projectNumber,
             cancellationToken).ConfigureAwait(false);
@@ -70,7 +75,7 @@ public sealed class ProjectExporter
 
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
-            $"Fetched {fields.Count} fields and {items.Count} items."));
+            $"Fetched {fields.Count} fields, {items.Count} items, and {statusUpdates.Count} status updates."));
 
         var snapshot = new ProjectSnapshot
         {
@@ -80,6 +85,7 @@ public sealed class ProjectExporter
             Views = views,
             Workflows = workflows,
             Items = items,
+            StatusUpdates = statusUpdates,
             // Collaborators stay null in the API-only path: the GraphQL API has no
             // read field for project collaborators. The browser post-export hook can
             // populate explicit collaborators from Settings → Manage access.
@@ -175,6 +181,36 @@ public sealed class ProjectExporter
         }
 
         return items;
+    }
+
+    private async Task<List<StatusUpdateSnapshot>> FetchStatusUpdatesAsync(
+        string ownerLogin,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var statusUpdates = new List<StatusUpdateSnapshot>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            StatusUpdatesQuery,
+            new { login = ownerLogin, number = projectNumber, first = StatusUpdatesPageSize },
+            OwnerField + ".projectV2.statusUpdates",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            statusUpdates.Add(new StatusUpdateSnapshot
+            {
+                Body = node.GetProperty("body").GetString() ?? string.Empty,
+                Status = GetOptionalString(node, "status"),
+                StartDate = GetOptionalString(node, "startDate"),
+                TargetDate = GetOptionalString(node, "targetDate"),
+                Creator = node.TryGetProperty("creator", out var creator)
+                    && creator.ValueKind == JsonValueKind.Object
+                    ? GetOptionalString(creator, "login")
+                    : null,
+                CreatedAt = node.GetProperty("createdAt").GetString() ?? string.Empty,
+                UpdatedAt = node.GetProperty("updatedAt").GetString() ?? string.Empty,
+            });
+        }
+
+        return statusUpdates;
     }
 
     private async Task<List<JsonElement>> FetchFieldNodesAsync(
@@ -636,6 +672,8 @@ public sealed class ProjectExporter
 
     private string FieldsQuery => FieldsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
+    private string StatusUpdatesQuery => StatusUpdatesQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
     private string ListProjectsQuery => ListProjectsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
     private const string ListProjectsQueryTemplate =
@@ -737,6 +775,28 @@ public sealed class ProjectExporter
           dataType
           description
           visibility
+        }
+        """;
+
+    private const string StatusUpdatesQueryTemplate =
+        """
+        query($login: String!, $number: Int!, $first: Int!, $after: String) {
+          __OWNER__(login: $login) {
+            projectV2(number: $number) {
+              statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+                nodes {
+                  body
+                  status
+                  startDate
+                  targetDate
+                  creator { login }
+                  createdAt
+                  updatedAt
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
         }
         """;
 

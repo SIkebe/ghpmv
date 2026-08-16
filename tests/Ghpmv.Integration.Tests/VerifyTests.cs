@@ -248,4 +248,94 @@ public class VerifyTests
             // Best-effort cleanup of the temp log directory.
         }
     }
+
+    /// <summary>
+    /// The StatusUpdate category matches right after a status update import and turns into a
+    /// mismatch once the target drifts. Drift is additive (one EXTRA update) because GitHub
+    /// exposes no delete for an individual status update — hence the throwaway project.
+    /// </summary>
+    [Fact]
+    public async Task Status_update_category_matches_after_import_and_mismatches_after_drift()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = new GitHubGraphQLClient(Token);
+        var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
+
+        // Guard against silent null==null passes: the fixture must actually carry history.
+        Assert.Equal(5, source.StatusUpdates!.Count);
+
+        var title = "ghpmv-status-update-test-" + Guid.NewGuid().ToString("N");
+        var (projectId, projectNumber) = await TemporaryProjectFixture.CreateAsync(
+            client, TargetOrg, title, cancellationToken);
+        var logDirectory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
+        try
+        {
+            var target = new ImportResult
+            {
+                ProjectId = projectId,
+                ProjectNumber = projectNumber,
+                Url = "https://github.com/orgs/" + TargetOrg + "/projects/"
+                    + projectNumber.ToString(CultureInfo.InvariantCulture),
+                Outcome = ProjectImportOutcome.Created,
+                FieldIds = new Dictionary<string, string>(StringComparer.Ordinal),
+                OptionIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal),
+                IterationIds = new Dictionary<string, IReadOnlyDictionary<string, string>>(StringComparer.Ordinal),
+            };
+            var importResult = await new StatusUpdateImporter(client)
+                .ImportAsync(source, target, logDirectory, cancellationToken);
+            Assert.Equal(5, importResult.Created);
+
+            // Only the StatusUpdate category is under test here: the throwaway project has
+            // none of the snapshot's fields, items, views or workflows.
+            var verificationSnapshot = source with { Project = source.Project with { Title = title } };
+            var verifier = new ProjectVerifier(client);
+
+            var matchReport = await VerifyUntilAsync(
+                verifier,
+                verificationSnapshot,
+                projectNumber,
+                report => StatusUpdateStatus(report) == VerifyStatus.Match,
+                cancellationToken);
+            Assert.Equal(VerifyStatus.Match, StatusUpdateStatus(matchReport));
+            Assert.DoesNotContain(matchReport.Differences, d => d.Category == "StatusUpdate");
+
+            // Drift the target with one EXTRA status update created directly.
+            await client.MutationAsync(
+                "createProjectV2StatusUpdate",
+                """
+                mutation($projectId: ID!, $body: String!, $status: ProjectV2StatusUpdateStatus!, $clientMutationId: String!) {
+                  createProjectV2StatusUpdate(input: { projectId: $projectId, body: $body, status: $status, clientMutationId: $clientMutationId }) {
+                    statusUpdate { id }
+                  }
+                }
+                """,
+                new { projectId, body = "Drifted target-only status update.", status = "ON_TRACK" },
+                target: projectId,
+                requiredResultPath: "statusUpdate.id",
+                cancellationToken: cancellationToken);
+
+            var driftReport = await VerifyUntilAsync(
+                verifier,
+                verificationSnapshot,
+                projectNumber,
+                report => StatusUpdateStatus(report) == VerifyStatus.Mismatch,
+                cancellationToken);
+            Assert.Equal(VerifyStatus.Mismatch, StatusUpdateStatus(driftReport));
+            Assert.Contains(driftReport.Differences, d =>
+                d.Severity == VerifySeverity.Error
+                && d.Category == "StatusUpdate"
+                && d.Message.Contains("status update count mismatch (source 5, target 6)", StringComparison.Ordinal));
+            Assert.False(driftReport.IsMatch, Describe(driftReport));
+        }
+        finally
+        {
+            await DeleteProjectAsync(client, projectId);
+            TryDeleteDirectory(logDirectory);
+        }
+    }
+
+    private static VerifyStatus StatusUpdateStatus(VerifyReport report)
+        => report.Categories
+            .Single(category => string.Equals(category.Category, "StatusUpdate", StringComparison.Ordinal))
+            .Status;
 }
