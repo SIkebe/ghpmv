@@ -284,6 +284,8 @@ public sealed class FixtureProjectBuilder
         }
 
         var fixtureEntries = new List<(int ExpectedIndex, string TargetId)>();
+        var unrelatedHistoryBeforeFixture = false;
+        var fixtureBlockEnded = false;
         foreach (var candidate in actual)
         {
             var expectedIndex = expected
@@ -294,7 +296,22 @@ public sealed class FixtureProjectBuilder
                 .SingleOrDefault();
             if (expectedIndex is null)
             {
+                if (fixtureEntries.Count == 0)
+                {
+                    unrelatedHistoryBeforeFixture = true;
+                }
+                else
+                {
+                    fixtureBlockEnded = true;
+                }
+
                 continue;
+            }
+
+            if (fixtureBlockEnded)
+            {
+                throw UnsafeFixtureHistory(
+                    "expected fixture entries are separated by unrelated history");
             }
 
             if (fixtureEntries.Any(entry => entry.ExpectedIndex == expectedIndex.Value))
@@ -304,6 +321,14 @@ public sealed class FixtureProjectBuilder
             }
 
             fixtureEntries.Add((expectedIndex.Value, candidate.Id));
+        }
+
+        if (fixtureEntries.Count > 0
+            && fixtureEntries.Count < expected.Count
+            && unrelatedHistoryBeforeFixture)
+        {
+            throw UnsafeFixtureHistory(
+                "newer unrelated history would separate the existing prefix from appended entries");
         }
 
         // Both lists are newest-first. An append-safe creation prefix therefore appears

@@ -168,9 +168,7 @@ public class FixtureProjectBuilderTests
         var expected = FixtureStatusUpdates();
         var actual = new[]
         {
-            Unrelated(expected, "PVTSU_unrelated_newer"),
             new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_3", expected[3]),
-            Unrelated(expected, "PVTSU_unrelated_interleaved"),
             new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_4", expected[4]),
             Unrelated(expected, "PVTSU_unrelated_older"),
         };
@@ -191,6 +189,34 @@ public class FixtureProjectBuilderTests
         {
             Existing(expected, 4, "oldest"),
             Existing(expected, 0, "newest"),
+        };
+
+        AssertUnsafeFixtureHistory(expected, actual);
+    }
+
+    [Fact]
+    public void Fixture_status_history_matching_fails_closed_for_interleaved_unrelated_history()
+    {
+        var expected = FixtureStatusUpdates();
+        var actual = new[]
+        {
+            Existing(expected, 3, "next"),
+            Unrelated(expected, "PVTSU_interleaved"),
+            Existing(expected, 4, "oldest"),
+        };
+
+        AssertUnsafeFixtureHistory(expected, actual);
+    }
+
+    [Fact]
+    public void Fixture_status_history_matching_fails_closed_when_newer_unrelated_history_precedes_a_partial_prefix()
+    {
+        var expected = FixtureStatusUpdates();
+        var actual = new[]
+        {
+            Unrelated(expected, "PVTSU_newer"),
+            Existing(expected, 3, "next"),
+            Existing(expected, 4, "oldest"),
         };
 
         AssertUnsafeFixtureHistory(expected, actual);
