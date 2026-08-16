@@ -207,6 +207,24 @@ public sealed class StatusUpdateImporter
                 throw new InvalidDataException(
                     $"Status update at snapshot sequence {index} has invalid createdAt '{update.CreatedAt}'.");
             }
+
+            ValidateDate(update.StartDate, "startDate", index);
+            ValidateDate(update.TargetDate, "targetDate", index);
+        }
+    }
+
+    private static void ValidateDate(string? value, string propertyName, int index)
+    {
+        if (value is not null
+            && !DateOnly.TryParseExact(
+                value,
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out _))
+        {
+            throw new InvalidDataException(
+                $"Status update at snapshot sequence {index} has invalid {propertyName} '{value}'.");
         }
     }
 

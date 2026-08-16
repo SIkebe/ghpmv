@@ -539,22 +539,13 @@ target creator/createdAt from verification (`Status_update_creator_and_created_a
 
 ## Step 8 — Coverage gap iteration
 
-No unaddressed checklist item was found; no additional tests were added in this pass. The two production-owned
-`ImportLog` failures remain the only open item, and are out of scope for a test-only change.
+The production agent fixed the schema-2 log compatibility defect, and the final
+review added regressions for nullable/missing status, ambiguous candidate
+provenance, legacy fixture-log rebinding, browser preflight ordering, date
+validation, and idempotent fixture status seeding.
 
-## Cleanup performed
+## Final status: SUCCESS
 
-- Removed a throwaway diagnostic worktree at `../head-check` created during Phase 2/3 investigation
-  (`git worktree remove ../head-check`) — no tracked files were affected.
-- A local scratch project at `scratch-repro/` (untracked, used by the orchestrator to empirically confirm the
-  `ImportLog` JSON-deserialization defect) remains on disk; it is **not** part of the deliverable and should be
-  deleted by the user (`Remove-Item -Recurse -Force scratch-repro`) since this environment's guardrails blocked
-  automated recursive deletion.
-
-## Final status: SUCCESS with one reported, out-of-scope production defect
-
-All 4 implementation phases are complete, the pre-completion gate passed with empirically verified mutation
-kills, and every acceptance-criteria bullet has concrete test evidence. The only remaining red tests are a
-genuine, pre-existing production bug in `ImportLog.LoadAsync` (schema-2 backward compatibility for logs that
-predate status updates) that is explicitly out of scope for this test-only change and is left failing on purpose
-so the signal reaches the production agent.
+All implementation phases and review follow-ups are complete. The final Core
+suite and Release build pass cleanly, with every acceptance-criteria bullet
+mapped to concrete test evidence.

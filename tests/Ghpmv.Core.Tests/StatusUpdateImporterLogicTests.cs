@@ -375,6 +375,45 @@ public class StatusUpdateImporterLogicTests
         }
     }
 
+    [Theory]
+    [InlineData("2026-1-01", null, "startDate")]
+    [InlineData(null, "01/31/2026", "targetDate")]
+    public async Task Import_rejects_invalid_dates_before_creating_any_updates(
+        string? startDate,
+        string? targetDate,
+        string propertyName)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
+        try
+        {
+            using var handler = new StatusUpdateHandler();
+            using var client = CreateClient(handler);
+            var snapshot = CreateSnapshot(
+                SnapshotUpdate("Valid oldest", createdAt: "2026-01-01T09:00:00Z"),
+                SnapshotUpdate(
+                    "Invalid later entry",
+                    createdAt: "2026-01-02T09:00:00Z",
+                    startDate: startDate,
+                    targetDate: targetDate));
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => new StatusUpdateImporter(client).ImportAsync(
+                    snapshot,
+                    Target,
+                    directory,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains($"invalid {propertyName}", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(handler.RequestBodies);
+            Assert.Equal(0, handler.CreateMutationCount);
+            Assert.False(File.Exists(Path.Combine(directory, ImportLog.FileName)));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Import_rejects_a_log_from_a_different_snapshot_or_target()
     {

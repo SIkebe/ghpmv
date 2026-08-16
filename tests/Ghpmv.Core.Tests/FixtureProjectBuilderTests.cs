@@ -137,6 +137,26 @@ public class FixtureProjectBuilderTests
         Assert.Empty(upgraded.PendingStatusUpdates);
     }
 
+    [Fact]
+    public void Fixture_status_history_match_is_exact_but_ignores_server_generated_metadata()
+    {
+        var expected = FixtureStatusUpdates();
+        var actual = expected.Select(update => update with
+        {
+            Creator = "server-user",
+            CreatedAt = "2026-08-16T00:00:00Z",
+            UpdatedAt = "2026-08-16T00:01:00Z",
+        }).ToList();
+
+        Assert.True(FixtureProjectBuilder.FixtureStatusUpdatesMatch(expected, actual));
+        Assert.False(FixtureProjectBuilder.FixtureStatusUpdatesMatch(
+            expected,
+            [.. actual, actual[0] with { Body = "extra" }]));
+        Assert.False(FixtureProjectBuilder.FixtureStatusUpdatesMatch(
+            expected,
+            [actual[0] with { TargetDate = null }, .. actual.Skip(1)]));
+    }
+
     private static IReadOnlyList<StatusUpdateSnapshot> FixtureStatusUpdates()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(

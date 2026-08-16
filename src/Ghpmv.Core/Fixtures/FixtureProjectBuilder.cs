@@ -94,6 +94,7 @@ public sealed class FixtureProjectBuilder
                         $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
 
             var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
+            var importStatusUpdates = true;
             if (itemLog is not null)
             {
                 var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
@@ -108,6 +109,22 @@ public sealed class FixtureProjectBuilder
 
                     await itemLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
                     templateLog = itemLog;
+                }
+            }
+            else if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
+            {
+                var existingStatusUpdates = await FetchStatusUpdatesAsync(
+                    existing.Id,
+                    cancellationToken).ConfigureAwait(false);
+                if (FixtureStatusUpdatesMatch(expectedStatusUpdates, existingStatusUpdates))
+                {
+                    importStatusUpdates = false;
+                    OnProgress?.Invoke("Fixture project already has the expected status update history; skipping status update seeding.");
+                }
+                else if (existingStatusUpdates.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        "The existing fixture project has status updates that do not match the standard fixture. Use a new fixture title or delete and recreate the fixture to avoid duplicating history.");
                 }
             }
 
@@ -156,7 +173,7 @@ public sealed class FixtureProjectBuilder
                     $"Fixture project already existed; synchronized fields without duplicating items: {project.Url}"));
             }
 
-            if (snapshot.StatusUpdates is { Count: > 0 })
+            if (importStatusUpdates && snapshot.StatusUpdates is { Count: > 0 })
             {
                 templateLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false)
                     ?? new ImportLog
@@ -230,6 +247,58 @@ public sealed class FixtureProjectBuilder
             SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
         };
     }
+
+    internal static bool FixtureStatusUpdatesMatch(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        IReadOnlyList<StatusUpdateSnapshot> actual)
+        => expected.Count == actual.Count
+            && expected.Zip(actual).All(pair =>
+                string.Equals(pair.First.Body, pair.Second.Body, StringComparison.Ordinal)
+                && string.Equals(pair.First.Status, pair.Second.Status, StringComparison.Ordinal)
+                && string.Equals(pair.First.StartDate, pair.Second.StartDate, StringComparison.Ordinal)
+                && string.Equals(pair.First.TargetDate, pair.Second.TargetDate, StringComparison.Ordinal));
+
+    private async Task<List<StatusUpdateSnapshot>> FetchStatusUpdatesAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var updates = new List<StatusUpdateSnapshot>();
+        await foreach (var node in _graphQl.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $first: Int!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+                    nodes { body status startDate targetDate createdAt updatedAt }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId, first = 100 },
+            "node.statusUpdates",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            updates.Add(new StatusUpdateSnapshot
+            {
+                Body = node.GetProperty("body").GetString() ?? string.Empty,
+                Status = GetOptionalString(node, "status"),
+                StartDate = GetOptionalString(node, "startDate"),
+                TargetDate = GetOptionalString(node, "targetDate"),
+                CreatedAt = node.GetProperty("createdAt").GetString() ?? string.Empty,
+                UpdatedAt = node.GetProperty("updatedAt").GetString() ?? string.Empty,
+            });
+        }
+
+        return updates;
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
     {
