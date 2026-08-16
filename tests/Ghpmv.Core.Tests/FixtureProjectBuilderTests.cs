@@ -493,6 +493,19 @@ public class FixtureProjectBuilderTests
         Assert.Equal(["Backend", "Frontend"], value.MultiSelectOptionNames);
     }
 
+    [Fact]
+    public void Demo_fixture_can_include_a_dedicated_team_link()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2,
+            teamSlug: "ghpmv-fixture-team");
+
+        Assert.Equal("example/ghpmv-fixture-team", Assert.Single(snapshot.LinkedTeams!).Identity);
+    }
+
     [Theory]
     [InlineData(false, false, false, true)]
     [InlineData(true, true, false, true)]

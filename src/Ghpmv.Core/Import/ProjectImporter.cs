@@ -54,6 +54,9 @@ public sealed class ProjectImporter
     /// <summary>Source organization login → target organization login mapping for View filters.</summary>
     public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>Source → target Team mapping, with both sides in "organization/slug" form.</summary>
+    public IReadOnlyDictionary<string, string> TeamMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>Whether Playwright will apply View settings that the GraphQL API cannot write.</summary>
     public bool BrowserViewEnrichmentPlanned { get; init; }
 
@@ -412,6 +415,11 @@ public sealed class ProjectImporter
             ValidateProjectUpdatePermission(existing.ViewerCanUpdate, existing.Number);
             ValidatePendingFieldOperations(snapshot, existing.Id);
             ValidatePendingViewOperations(snapshot, existing.Id);
+            var linkedTeams = await PreflightLinkedTeamsAsync(
+                snapshot.LinkedTeams,
+                ownerLogin,
+                existing,
+                cancellationToken).ConfigureAwait(false);
             if (!beforeWriteInvoked)
             {
                 await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -422,6 +430,7 @@ public sealed class ProjectImporter
                 ownerLogin,
                 existing,
                 ProjectImportOutcome.Created,
+                linkedTeams,
                 cancellationToken).ConfigureAwait(false);
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
@@ -456,21 +465,43 @@ public sealed class ProjectImporter
                         await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
                     }
 
+                    var linkedTeams = await PreflightLinkedTeamsAsync(
+                        snapshot.LinkedTeams,
+                        ownerLogin,
+                        existing,
+                        cancellationToken).ConfigureAwait(false);
                     await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
-                    return await ApplySnapshotAsync(snapshot, ownerLogin, existing, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
+                    return await ApplySnapshotAsync(
+                        snapshot,
+                        ownerLogin,
+                        existing,
+                        ProjectImportOutcome.Updated,
+                        linkedTeams,
+                        cancellationToken).ConfigureAwait(false);
             }
         }
 
         ValidatePendingItemProject(projectId: null);
         ValidatePendingFieldOperations(snapshot, projectId: null);
         ValidatePendingViewOperations(snapshot, projectId: null);
+        var targetTeams = await PreflightLinkedTeamsAsync(
+            snapshot.LinkedTeams,
+            ownerLogin,
+            project: null,
+            cancellationToken).ConfigureAwait(false);
         var project = await CreateAndRecordProjectAsync(
             ownerLogin,
             title,
             matches,
             cancellationToken,
             invokeBeforeWrite: !beforeWriteInvoked).ConfigureAwait(false);
-        var result = await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Created, cancellationToken).ConfigureAwait(false);
+        var result = await ApplySnapshotAsync(
+            snapshot,
+            ownerLogin,
+            project,
+            ProjectImportOutcome.Created,
+            targetTeams,
+            cancellationToken).ConfigureAwait(false);
         if (_operationLog is not null)
         {
             _operationLog.PendingProject = null;
@@ -526,8 +557,19 @@ public sealed class ProjectImporter
             await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        var linkedTeams = await PreflightLinkedTeamsAsync(
+            snapshot.LinkedTeams,
+            ownerLogin,
+            project,
+            cancellationToken).ConfigureAwait(false);
         await MarkOwnedImportIncompleteAsync(project.Id, cancellationToken).ConfigureAwait(false);
-        return await ApplySnapshotAsync(snapshot, ownerLogin, project, ProjectImportOutcome.Updated, cancellationToken).ConfigureAwait(false);
+        return await ApplySnapshotAsync(
+            snapshot,
+            ownerLogin,
+            project,
+            ProjectImportOutcome.Updated,
+            linkedTeams,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -785,6 +827,7 @@ public sealed class ProjectImporter
         string ownerLogin,
         ProjectRef project,
         ProjectImportOutcome outcome,
+        IReadOnlyList<ResolvedTeamLink> linkedTeams,
         CancellationToken cancellationToken)
     {
         _warnings.Clear();
@@ -991,6 +1034,7 @@ public sealed class ProjectImporter
             viewWarningCount = viewImporter.Warnings.Count;
         }
 
+        await ApplyLinkedTeamsAsync(project.Id, linkedTeams, cancellationToken).ConfigureAwait(false);
         await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
         await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
 
@@ -1383,6 +1427,166 @@ public sealed class ProjectImporter
             target: projectId,
             requiredResultPath: "collaborators.nodes",
             cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<ResolvedTeamLink>> PreflightLinkedTeamsAsync(
+        IReadOnlyList<LinkedTeamSnapshot>? teams,
+        string targetOwnerLogin,
+        ProjectRef? project,
+        CancellationToken cancellationToken)
+    {
+        if (OwnerType == ProjectOwnerType.User || teams is not { Count: > 0 })
+        {
+            return [];
+        }
+
+        var mappingResolutions = TeamLinkMapping.Resolve(teams, TeamMapping, targetOwnerLogin);
+        var unresolved = mappingResolutions
+            .Where(resolution => resolution.Status == TeamLinkMappingStatus.Unresolved)
+            .Select(resolution => resolution.Message!)
+            .ToList();
+        var ambiguous = mappingResolutions
+            .Where(resolution => resolution.Status == TeamLinkMappingStatus.Ambiguous)
+            .Select(resolution => resolution.Message!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var permissionFailures = new List<string>();
+        var resolved = new List<ResolvedTeamLink>();
+
+        if (project is { ViewerCanUpdate: false })
+        {
+            permissionFailures.Add(
+                $"the target token cannot update project #{project.Number}, so it cannot link Teams");
+        }
+
+        foreach (var resolution in mappingResolutions.Where(item => item.Status == TeamLinkMappingStatus.Mapped))
+        {
+            try
+            {
+                var data = await _client.QueryAsync(
+                    """
+                    query($organization: String!, $slug: String!) {
+                      organization(login: $organization) {
+                        team(slug: $slug) {
+                          id
+                          name
+                          slug
+                          organization { login }
+                        }
+                      }
+                    }
+                    """,
+                    new { organization = resolution.TargetOrganization, slug = resolution.TargetSlug },
+                    cancellationToken).ConfigureAwait(false);
+                var organization = data.GetProperty("organization");
+                var team = organization.ValueKind == JsonValueKind.Object
+                    ? organization.GetProperty("team")
+                    : default;
+                if (team.ValueKind != JsonValueKind.Object)
+                {
+                    unresolved.Add($"target Team '{resolution.TargetIdentity}' was not found");
+                    continue;
+                }
+
+                resolved.Add(new ResolvedTeamLink(
+                    team.GetProperty("id").GetString()
+                        ?? throw new GitHubGraphQLException($"Target Team '{resolution.TargetIdentity}' returned no id."),
+                    resolution.TargetIdentity!));
+            }
+            catch (GitHubGraphQLException exception) when (IsPermissionFailure(exception))
+            {
+                permissionFailures.Add(
+                    $"target Team '{resolution.TargetIdentity}' could not be read: {exception.Message}");
+            }
+            catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
+            {
+                unresolved.Add($"target Team '{resolution.TargetIdentity}' was not found");
+            }
+        }
+
+        if (unresolved.Count > 0 || ambiguous.Count > 0 || permissionFailures.Count > 0)
+        {
+            var parts = new List<string>();
+            if (unresolved.Count > 0)
+            {
+                parts.Add("unresolved: " + string.Join("; ", unresolved));
+            }
+
+            if (ambiguous.Count > 0)
+            {
+                parts.Add("ambiguous: " + string.Join("; ", ambiguous));
+            }
+
+            if (permissionFailures.Count > 0)
+            {
+                parts.Add("permission: " + string.Join("; ", permissionFailures));
+            }
+
+            throw new InvalidOperationException(
+                "Team mapping preflight failed before any project write (" + string.Join(" | ", parts) + ").");
+        }
+
+        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+            $"Team preflight resolved {resolved.Count} target Team(s)."));
+        return resolved;
+    }
+
+    private async Task ApplyLinkedTeamsAsync(
+        string projectId,
+        IReadOnlyList<ResolvedTeamLink> teams,
+        CancellationToken cancellationToken)
+    {
+        if (OwnerType == ProjectOwnerType.User || teams.Count == 0)
+        {
+            return;
+        }
+
+        var existingTeamIds = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $first: Int!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  teams(first: $first, after: $after) {
+                    nodes { id }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId, first = 100 },
+            "node.teams",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            existingTeamIds.Add(node.GetProperty("id").GetString() ?? string.Empty);
+        }
+
+        foreach (var team in teams)
+        {
+            if (existingTeamIds.Contains(team.Id))
+            {
+                OnProgress?.Invoke($"Team '{team.Identity}' is already linked; skipping.");
+                continue;
+            }
+
+            await _client.MutationAsync(
+                "linkProjectV2ToTeam",
+                """
+                mutation($projectId: ID!, $teamId: ID!, $clientMutationId: String!) {
+                  linkProjectV2ToTeam(input: { projectId: $projectId, teamId: $teamId, clientMutationId: $clientMutationId }) {
+                    team { id }
+                  }
+                }
+                """,
+                new { projectId, teamId = team.Id },
+                MutationRetryPolicy.Idempotent,
+                target: projectId,
+                requiredResultPath: "team.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            existingTeamIds.Add(team.Id);
+            OnProgress?.Invoke($"Linked Team '{team.Identity}'.");
+        }
     }
 
     /// <summary>
@@ -1828,6 +2032,13 @@ public sealed class ProjectImporter
         => exception.ErrorsJson?.Contains("\"type\":\"NOT_FOUND\"", StringComparison.Ordinal) == true
             && exception.ErrorsJson.Contains("ProjectV2FieldConfiguration", StringComparison.Ordinal);
 
+    private static bool IsPermissionFailure(GitHubGraphQLException exception)
+        => exception.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
+            || string.Equals(exception.ErrorType, "FORBIDDEN", StringComparison.OrdinalIgnoreCase)
+            || exception.ErrorsJson?.Contains("permission", StringComparison.OrdinalIgnoreCase) == true
+            || exception.ErrorsJson?.Contains("Resource not accessible", StringComparison.OrdinalIgnoreCase) == true
+            || exception.ErrorsJson?.Contains("SAML", StringComparison.OrdinalIgnoreCase) == true;
+
     private static void AddFieldDataTypes(Dictionary<string, string> result, JsonElement data)
     {
         foreach (var node in data.GetProperty("nodes").EnumerateArray().Where(node => node.ValueKind == JsonValueKind.Object))
@@ -2173,6 +2384,8 @@ public sealed class ProjectImporter
         string Url,
         bool Public,
         bool ViewerCanUpdate);
+
+    private sealed record ResolvedTeamLink(string Id, string Identity);
 
     private sealed record TargetField(string Id, string Name, string DataType, string TypeName);
 

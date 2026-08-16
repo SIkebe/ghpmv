@@ -141,6 +141,10 @@ public class SnapshotTests
             new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" },
         ],
         LinkedRepositories = ["gpm-source/fixture-repo"],
+        LinkedTeams =
+        [
+            new LinkedTeamSnapshot { Organization = "gpm-source", Slug = "platform", Name = "Platform" },
+        ],
     };
 
     [Fact]
@@ -217,6 +221,8 @@ public class SnapshotTests
         Assert.Equal(new CollaboratorSnapshot { Type = "USER", Login = "octocat", Role = "WRITER" }, restored.Collaborators[0]);
         Assert.Equal(new CollaboratorSnapshot { Type = "TEAM", Login = "fixture-team", Role = "READER" }, restored.Collaborators[1]);
         Assert.Equal(["gpm-source/fixture-repo"], restored.LinkedRepositories);
+        Assert.Equal("gpm-source/platform", Assert.Single(restored.LinkedTeams!).Identity);
+        Assert.DoesNotContain("\"identity\"", json, StringComparison.Ordinal);
 
         Assert.NotNull(restored.StatusUpdates);
         Assert.Equal(original.StatusUpdates!.Count, restored.StatusUpdates.Count);
@@ -251,6 +257,7 @@ public class SnapshotTests
         Assert.NotNull(restored);
         Assert.Null(restored.Collaborators);
         Assert.Null(restored.LinkedRepositories);
+        Assert.Null(restored.LinkedTeams);
     }
 
     [Fact]

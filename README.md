@@ -57,16 +57,18 @@ ghpmv export --org source-org --project 7 --out ./snapshot --token $SOURCE_TOKEN
 
 # 2. Import the snapshot into the target organization
 ghpmv import --org target-org --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv
+  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv \
+  --team-mapping teams.csv
 
 # 3. Verify the migrated project against the snapshot
 ghpmv verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv
+  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv \
+  --team-mapping teams.csv
 ```
 
 Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` environment variables.
 
-`verify` reports an overall result and a result for Project, Field, Item, View, Workflow, Collaborator, and LinkedRepository:
+`verify` reports an overall result and a result for Project, Field, Item, View, Workflow, Collaborator, LinkedRepository, and TeamLink:
 
 | Result | Meaning |
 |---|---|
@@ -74,6 +76,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 | `Mismatch` | At least one migration-owned value differs. |
 | `PartialMatch` | No errors, but a non-fatal warning exists (for example, target-only data). |
 | `NotVerified` | Required source or target data was not captured, so full equality cannot be established. |
+| `NotApplicable` | The category does not apply, such as Team links on a user-owned Project. |
 
 `Mismatch` and `NotVerified` always produce exit code 1. `--fail-on-warning` also fails when warnings exist. Use `--report-json <path>` for the same overall/category results and counts in machine-readable form. Without browser automation, GraphQL-readable View settings are still compared, but UI-only View/Workflow settings and explicit collaborators are reported as `NotVerified`; use `--enable-browser-automation` when verification must prove those areas too. Explicit collaborator capture also requires the browser/token user to access the Project's **Settings → Manage access** page; GitHub requires a project admin or organization owner to [manage access to an organization Project](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-your-project/managing-access-to-your-projects).
 
@@ -86,6 +89,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 | Workflow | Name/enabled state. Browser mode adds content types, status, filter, and repository. |
 | Collaborator | Browser-captured explicit user/team collaborators and roles. Inherited and base-role access is excluded. |
 | LinkedRepository | Linked repository identities after repository mapping. |
+| TeamLink | Linked Team identities after Team mapping. Missing links are errors; target-only links are warnings and are not removed. This is separate from explicit Team collaborators and roles. |
 
 Insights charts, item/field-value history, and inherited/base-role access are not verified.
 
@@ -101,9 +105,9 @@ GitHub documents `read:project` for Project queries and `project` for queries an
 
 | Command | Classic PAT scopes |
 |---|---|
-| `ghpmv export` | `read:project`. For an organization Project containing Issue Fields, also add `read:org` to read linked Issue Field definitions. Add `repo` when the source Project contains items or linked repositories from private repositories. |
-| `ghpmv import` | `project`. For an organization-owned target, also add `read:org` because `ghpmv` resolves the organization node ID; use `admin:org` instead when the snapshot contains Issue Fields because import creates or updates organization Issue Field definitions. Add `repo` when resolving private target repositories or writing Issue Field values (`public_repo` is sufficient when every affected repository is public). |
-| `ghpmv verify` | `read:project`. For an organization Project containing Issue Fields, also add `read:org`. Add `repo` when the target Project contains items or linked repositories from private repositories. |
+| `ghpmv export` | `read:project` and `read:org` to read linked Teams and organization Issue Field definitions. Add `repo` when the source Project contains items or linked repositories from private repositories. |
+| `ghpmv import` | `project` and `read:org` for Team/organization resolution. Use `admin:org` instead when the snapshot contains Issue Fields because import creates or updates organization Issue Field definitions. Add `repo` when resolving private target repositories or writing Issue Field values (`public_repo` is sufficient when every affected repository is public). |
+| `ghpmv verify` | `read:project` and `read:org` to read linked Teams and organization Issue Fields. Add `repo` when the target Project contains items or linked repositories from private repositories. |
 
 Authorize the token for organizations or enterprises that require SSO, including SAML- or OIDC-backed environments.
 
@@ -115,8 +119,8 @@ Create each fine-grained token for the organization that owns the source or targ
 
 | Command | Fine-grained PAT permissions |
 |---|---|
-| `ghpmv export` | **Organization permissions → Projects: Read-only**. Add **Organization permissions → Issue Fields: Read-only** when the Project contains organization Issue Fields. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
-| `ghpmv import` | **Organization permissions → Projects: Read and write**. When the snapshot contains organization Issue Fields, add **Organization permissions → Issue Fields: Read and write** for their definitions and **Repository permissions → Issues: Read and write** for their values. **Repository permissions → Metadata: Read-only**; add **Contents: Read and write** for linked repositories, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. If you import project collaborators that include teams, also grant **Organization permissions → Members: Read-only** when required to resolve those teams. |
+| `ghpmv export` | **Organization permissions → Projects: Read-only** and **Members: Read-only** when linked Teams are present. Add **Organization permissions → Issue Fields: Read-only** when the Project contains organization Issue Fields. **Repository permissions → Metadata: Read-only**, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories that contain project items. |
+| `ghpmv import` | **Organization permissions → Projects: Read and write** and **Members: Read-only** to resolve and link Teams. When the snapshot contains organization Issue Fields, add **Organization permissions → Issue Fields: Read and write** for their definitions and **Repository permissions → Issues: Read and write** for their values. **Repository permissions → Metadata: Read-only**; add **Contents: Read and write** for linked repositories, plus **Issues: Read-only** and **Pull requests: Read-only** for private repositories referenced by `--repo-mapping` or auto-add workflows. |
 | `ghpmv verify` | Same as `ghpmv export` for the target project. |
 
 GitHub supports [pre-filled fine-grained PAT creation URLs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens#pre-filling-fine-grained-personal-access-token-details-using-url-parameters). Replace `SOURCE_ORG` or `TARGET_ORG` before opening these templates:
@@ -129,7 +133,7 @@ https://github.com/settings/personal-access-tokens/new?name=ghpmv-source-export&
 https://github.com/settings/personal-access-tokens/new?name=ghpmv-target-import&description=Import+and+verify+an+organization+Project+with+ghpmv&target_name=TARGET_ORG&expires_in=30&organization_projects=write&metadata=read
 ```
 
-Append only the permissions needed for the selected migration path: `&issues=read&pull_requests=read` for private repository items, `&issue_fields=read` for exporting or verifying organization Issue Fields, `&issue_fields=write&issues=write` when importing their definitions and values, `&contents=write` when importing linked repositories, and `&members=read` when resolving team collaborators. GitHub's [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#organization-permissions-for-issue-fields) identifies **Issue Fields** as a separate organization permission. The URL cannot select **Repository access**; after opening it, select every repository used by Project items, linked repositories, or Workflows. Review the pre-filled values and adjust the expiration if required by organization policy before generating the token.
+Append only the permissions needed for the selected migration path: `&issues=read&pull_requests=read` for private repository items, `&issue_fields=read` for exporting or verifying organization Issue Fields, `&issue_fields=write&issues=write` when importing their definitions and values, `&contents=write` when importing linked repositories, and `&members=read` when reading or resolving linked Teams or Team collaborators. GitHub's [fine-grained PAT permission matrix](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens#organization-permissions-for-issue-fields) identifies **Issue Fields** as a separate organization permission. The URL cannot select **Repository access**; after opening it, select every repository used by Project items, linked repositories, or Workflows. Review the pre-filled values and adjust the expiration if required by organization policy before generating the token.
 
 GitHub does not publish fine-grained PAT requirements for each Projects GraphQL mutation. The **Contents: Read and write** requirement for `linkProjectV2ToRepository` is based on ghpmv's live GitHub testing: read-only Contents access was insufficient. GitHub separately documents a Contents permission for GitHub App installation tokens when `createProjectV2` links a repository, but that guidance is not PAT-specific and does not document `linkProjectV2ToRepository`.
 
@@ -139,7 +143,7 @@ When a snapshot contains organization Issue Fields, the authenticated target use
 
 > `ghpmv setup --fixture` is a maintainer/test command, not a migration prerequisite. It creates a demo repository, Issues, a pull request, and a Project, so it intentionally needs broader permissions. See [Fixture credentials](#fixture-credentials-maintainers-only).
 
-`--repo-mapping` / `--user-mapping` / `--org-mapping` map repositories, user logins, and organizations across deployments. They are especially important for EMU targets, where user logins normally gain a `_shortcode` suffix. Repository and organization mappings use the `source,target` header. User mappings use the GitHub Enterprise Importer mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `ghpmv export` generates ready-to-fill `repository-mappings.csv`, `organization-mappings.csv`, and, when users are present, `user-mappings.csv`. Candidates include linked and Auto-add repositories plus identifiers found in View and Workflow filters. Existing files are never overwritten, and newly discovered candidates are reported. During browser-assisted import, `assignee:`, `author:`, `repo:`, and `org:` filter values are mapped structurally; other syntax is preserved. Organization mappings are also inferred from repository owners when unambiguous. Browser-assisted import stops before any project write when a supported filter value or Auto-add repository remains unmapped or ambiguous. API-only imports do not replay or validate UI-only Workflow settings. Pass the same mappings to `ghpmv verify`.
+`--repo-mapping` / `--user-mapping` / `--org-mapping` / `--team-mapping` map repositories, user logins, organizations, and linked Teams across deployments. Repository, organization, and Team mappings use the `source,target` header; Team rows use `organization/slug` on both sides. A blank Team target keeps the slug in the import destination organization; fill the target for a renamed Team. User mappings use GitHub Enterprise Importer's mannequin reclaim header (`mannequin-user,mannequin-id,target-user`); the mannequin ID is ignored. `ghpmv export` generates `repository-mappings.csv`, `organization-mappings.csv`, `team-mappings.csv` when links exist, and `user-mappings.csv` when users are present. Existing files are never overwritten. Team preflight runs before any Project write and rejects malformed or missing targets, many-to-one mappings, unreadable Teams, and existing Projects the token cannot update. During browser-assisted import, filter values are mapped structurally as before. Pass the same mappings to `ghpmv verify`.
 
 Run `ghpmv requirements --in <snapshot-directory>` after export to calculate target capabilities without a token. It reports administrator/project-admin gates and per-repository read/write/linked/Auto-add requirements from `snapshot.json`. `ghpmv import` repeats the analysis and performs read-only preflight before any Project, item, status, or browser write: organization Issue Field capability must return the expected validation-only response, every required repository must be mapped and visible, write operations require a writable repository role, and linked/Auto-add repositories must belong to the target owner.
 
@@ -189,6 +193,8 @@ ghpmv export --org monalisa   --owner-type user --project 4 --out ./snapshot
 ghpmv import --org octocat    --owner-type user --in ./snapshot
 ghpmv verify --org octocat    --owner-type user --project 2 --in ./snapshot
 ```
+
+Project-to-Team links apply only to organization-owned Projects. For user-owned Projects, export writes an empty Team-link list, import performs no Team-link operation, and verify reports TeamLink as `NotApplicable`.
 
 ### Full-fidelity Views & Workflows (opt-in browser automation)
 

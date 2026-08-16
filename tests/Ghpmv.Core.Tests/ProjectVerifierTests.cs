@@ -92,6 +92,7 @@ public class ProjectVerifierTests
         ],
         Collaborators = [],
         LinkedRepositories = [],
+        LinkedTeams = [],
     };
 
     private static SingleSelectOptionSnapshot Option(string id, string name, string color, string? description = null)
@@ -212,6 +213,9 @@ public class ProjectVerifierTests
             """,
             """
             {"data":{"organization":{"projectV2":{"fields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
             """);
         using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
         var source = BuildSnapshot();
@@ -240,6 +244,49 @@ public class ProjectVerifierTests
         Assert.Equal(VerifySeverity.Error, difference.Severity);
         Assert.Equal("Project", difference.Category);
         Assert.Contains("short description mismatch", difference.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task User_owned_verify_marks_team_links_not_applicable()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"user":{"projectV2":{"title":"Fixture","shortDescription":"desc","readme":"# Readme","public":false,"closed":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            """,
+            """
+            {"data":{"user":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"user":{"projectV2":{"statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """,
+            """
+            {"data":{"user":{"projectV2":{"fields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """);
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
+        var source = BuildSnapshot() with
+        {
+            Fields = [],
+            Items = [],
+            Views = [],
+            Workflows = [],
+            LinkedRepositories = [],
+            Collaborators = null,
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" },
+            ],
+        };
+        var verifier = new ProjectVerifier(client) { OwnerType = ProjectOwnerType.User };
+
+        var report = await verifier.VerifyAsync(
+            source,
+            "target-user",
+            42,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(report.Categories, category =>
+            category.Category == "TeamLink" && category.Status == VerifyStatus.NotApplicable);
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "TeamLink");
     }
 
     [Fact]
@@ -1022,6 +1069,62 @@ public class ProjectVerifierTests
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Warning && d.Message.Contains("'org/repo-c' exists only in the target", StringComparison.Ordinal));
         Assert.DoesNotContain(report.Differences, d => d.Message.Contains("repo-a", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Team_links_are_mapped_and_reported_separately_from_collaborators()
+    {
+        var source = BuildSnapshot() with
+        {
+            Collaborators = [new CollaboratorSnapshot { Type = "TEAM", Login = "project-admins", Role = "ADMIN" }],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source-org", Slug = "platform", Name = "Platform" },
+                new LinkedTeamSnapshot { Organization = "source-org", Slug = "sdk", Name = "SDK" },
+            ],
+        };
+        var target = BuildSnapshot() with
+        {
+            Collaborators = [new CollaboratorSnapshot { Type = "TEAM", Login = "project-admins", Role = "READER" }],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "target-org", Slug = "engineering", Name = "Engineering" },
+                new LinkedTeamSnapshot { Organization = "target-org", Slug = "extra", Name = "Extra" },
+            ],
+        };
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org/platform"] = "target-org/engineering",
+                ["source-org/sdk"] = "target-org/sdk",
+            });
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "Collaborator" && difference.Message.Contains("role mismatch", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "TeamLink"
+            && difference.Severity == VerifySeverity.Error
+            && difference.Message.Contains("target-org/sdk", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, difference =>
+            difference.Category == "TeamLink"
+            && difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("target-org/extra", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Team_links_are_not_verified_for_legacy_null_capture()
+    {
+        var report = ProjectVerifier.Compare(
+            BuildSnapshot() with { LinkedTeams = null },
+            BuildSnapshot());
+
+        Assert.Contains(report.Categories, category =>
+            category.Category == "TeamLink" && category.Status == VerifyStatus.NotVerified);
     }
 
     [Fact]

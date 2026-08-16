@@ -55,7 +55,10 @@ public sealed partial class CollaboratorUiExporter
             await Task.Delay(500, cancellationToken).ConfigureAwait(false);
 
             var snapshotText = await page.Locator("body").AriaSnapshotAsync().ConfigureAwait(false);
-            var collaborators = ParseAccessSnapshot(snapshotText, ownerLogin);
+            var collaborators = ExcludeLinkDerivedTeamAccess(
+                ParseAccessSnapshot(snapshotText, ownerLogin),
+                snapshot.LinkedTeams,
+                ownerLogin);
             return snapshot with { Collaborators = collaborators };
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
@@ -126,6 +129,30 @@ public sealed partial class CollaboratorUiExporter
         }
 
         return collaborators;
+    }
+
+    public static IReadOnlyList<CollaboratorSnapshot> ExcludeLinkDerivedTeamAccess(
+        IReadOnlyList<CollaboratorSnapshot> collaborators,
+        IReadOnlyList<LinkedTeamSnapshot>? linkedTeams,
+        string ownerLogin)
+    {
+        ArgumentNullException.ThrowIfNull(collaborators);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        if (linkedTeams is not { Count: > 0 })
+        {
+            return collaborators;
+        }
+
+        var linkedSlugs = linkedTeams
+            .Where(team => string.Equals(team.Organization, ownerLogin, StringComparison.OrdinalIgnoreCase))
+            .Select(team => team.Slug)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return collaborators
+            .Where(collaborator =>
+                !string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(collaborator.Role, "READER", StringComparison.OrdinalIgnoreCase)
+                || !linkedSlugs.Contains(collaborator.Login))
+            .ToList();
     }
 
     private static string ToGraphQlRole(string role) => role.ToUpperInvariant() switch
