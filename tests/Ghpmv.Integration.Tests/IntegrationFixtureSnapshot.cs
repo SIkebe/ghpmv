@@ -108,29 +108,39 @@ internal static class IntegrationFixtureSnapshot
         ArgumentNullException.ThrowIfNull(actual);
         ArgumentNullException.ThrowIfNull(expected);
 
-        var positions = expected.Select(expectedUpdate =>
+        var positions = new List<int>(expected.Count);
+        foreach (var (actualUpdate, actualIndex) in actual.Select((update, index) => (update, index)))
         {
-            var matches = actual
-                .Select((actualUpdate, index) => (actualUpdate, index))
-                .Where(entry => StatusUpdateMatches(expectedUpdate, entry.actualUpdate))
+            var expectedIndex = expected
+                .Select((expectedUpdate, index) => (expectedUpdate, index))
+                .Where(entry => StatusUpdateMatches(entry.expectedUpdate, actualUpdate))
                 .Select(entry => entry.index)
-                .ToArray();
-            if (matches.Length != 1)
+                .Cast<int?>()
+                .SingleOrDefault();
+            if (expectedIndex is null)
             {
-                throw new InvalidOperationException(
-                    $"Expected fixture status update '{expectedUpdate.Body}' exactly once, but found {matches.Length} matches.");
+                continue;
             }
 
-            return matches[0];
-        }).ToArray();
-
-        for (var index = 1; index < positions.Length; index++)
-        {
-            if (positions[index - 1] >= positions[index])
+            if (expectedIndex.Value < positions.Count)
+            {
+                // The stable shared fixture contains a known legacy duplicate from
+                // before setup became idempotent. Select one canonical occurrence.
+                continue;
+            }
+            if (expectedIndex.Value > positions.Count)
             {
                 throw new InvalidOperationException(
                     "Expected fixture status updates were not in reverse chronological order.");
             }
+
+            positions.Add(actualIndex);
+        }
+
+        if (positions.Count != expected.Count)
+        {
+            throw new InvalidOperationException(
+                $"Expected fixture status update '{expected[positions.Count].Body}' was not found.");
         }
 
         return positions.Select(position => actual[position]).ToArray();

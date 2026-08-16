@@ -113,17 +113,26 @@ public sealed class FixtureProjectBuilder
                     templateLog = itemLog;
                 }
             }
-            else if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
+
+            if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
             {
                 var existingStatusUpdates = await FetchStatusUpdatesAsync(
                     existing.Id,
                     cancellationToken).ConfigureAwait(false);
-                matchedFixtureStatusUpdates = MatchFixtureStatusUpdates(
+                var reconciliation = ReconcileFixtureStatusUpdates(
                     expectedStatusUpdates,
-                    existingStatusUpdates);
-                if (matchedFixtureStatusUpdates.Count == expectedStatusUpdates.Count)
+                    existingStatusUpdates,
+                    itemLog);
+                matchedFixtureStatusUpdates = reconciliation.CanonicalMatches;
+                importStatusUpdates = reconciliation.ImportRequired;
+                if (reconciliation.LogChanged)
                 {
-                    importStatusUpdates = false;
+                    await itemLog!.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                    templateLog = itemLog;
+                }
+
+                if (!importStatusUpdates)
+                {
                     OnProgress?.Invoke(
                         "Fixture project already contains the expected status update history; leaving it and any unrelated history unchanged.");
                 }
@@ -188,11 +197,7 @@ public sealed class FixtureProjectBuilder
                         ProjectId = project.ProjectId,
                         SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
                     };
-                foreach (var (sourceIndex, targetId) in matchedFixtureStatusUpdates)
-                {
-                    templateLog.StatusUpdates[sourceIndex.ToString(CultureInfo.InvariantCulture)] = targetId;
-                }
-                if (matchedFixtureStatusUpdates.Count > 0)
+                if (ReconcileFixtureStatusLog(templateLog, matchedFixtureStatusUpdates))
                 {
                     await templateLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
                 }
@@ -284,8 +289,7 @@ public sealed class FixtureProjectBuilder
         }
 
         var fixtureEntries = new List<(int ExpectedIndex, string TargetId)>();
-        var unrelatedHistoryBeforeFixture = false;
-        var fixtureBlockEnded = false;
+        int? nextExpectedIndex = null;
         foreach (var candidate in actual)
         {
             var expectedIndex = expected
@@ -296,57 +300,81 @@ public sealed class FixtureProjectBuilder
                 .SingleOrDefault();
             if (expectedIndex is null)
             {
-                if (fixtureEntries.Count == 0)
-                {
-                    unrelatedHistoryBeforeFixture = true;
-                }
-                else
-                {
-                    fixtureBlockEnded = true;
-                }
-
                 continue;
-            }
-
-            if (fixtureBlockEnded)
-            {
-                throw UnsafeFixtureHistory(
-                    "expected fixture entries are separated by unrelated history");
             }
 
             if (fixtureEntries.Any(entry => entry.ExpectedIndex == expectedIndex.Value))
             {
+                // A shared fixture may contain a legacy duplicate. Keep one canonical
+                // occurrence without claiming or deleting the duplicate node.
+                continue;
+            }
+
+            nextExpectedIndex ??= expectedIndex.Value;
+            if (expectedIndex.Value != nextExpectedIndex.Value)
+            {
                 throw UnsafeFixtureHistory(
-                    $"snapshot sequence {expectedIndex} appears more than once");
+                    $"found snapshot sequence {expectedIndex} where sequence {nextExpectedIndex} was required");
             }
 
             fixtureEntries.Add((expectedIndex.Value, candidate.Id));
+            nextExpectedIndex++;
         }
 
-        if (fixtureEntries.Count > 0
-            && fixtureEntries.Count < expected.Count
-            && unrelatedHistoryBeforeFixture)
+        if (fixtureEntries.Count > 0 && nextExpectedIndex != expected.Count)
         {
             throw UnsafeFixtureHistory(
-                "newer unrelated history would separate the existing prefix from appended entries");
-        }
-
-        // Both lists are newest-first. An append-safe creation prefix therefore appears
-        // as a contiguous suffix of expected, in ascending snapshot-index order.
-        var expectedStartIndex = expected.Count - fixtureEntries.Count;
-        for (var offset = 0; offset < fixtureEntries.Count; offset++)
-        {
-            var requiredIndex = expectedStartIndex + offset;
-            if (fixtureEntries[offset].ExpectedIndex != requiredIndex)
-            {
-                throw UnsafeFixtureHistory(
-                    $"found snapshot sequence {fixtureEntries[offset].ExpectedIndex} where sequence {requiredIndex} was required");
-            }
+                $"snapshot sequence {nextExpectedIndex} is missing from the created prefix");
         }
 
         return fixtureEntries.ToDictionary(
             entry => entry.ExpectedIndex,
             entry => entry.TargetId);
+    }
+
+    internal static FixtureStatusReconciliation ReconcileFixtureStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        IReadOnlyList<FixtureStatusUpdate> actual,
+        ImportLog? log)
+    {
+        var canonicalMatches = MatchFixtureStatusUpdates(expected, actual);
+        var logChanged = log is not null && ReconcileFixtureStatusLog(log, canonicalMatches);
+        return new FixtureStatusReconciliation(
+            canonicalMatches,
+            ImportRequired: canonicalMatches.Count != expected.Count
+                || log is { PendingStatusUpdates.Count: > 0 },
+            logChanged);
+    }
+
+    internal static bool ReconcileFixtureStatusLog(
+        ImportLog log,
+        IReadOnlyDictionary<int, string> canonicalMatches)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(canonicalMatches);
+
+        var reconciled = canonicalMatches
+            .Where(match => !log.PendingStatusUpdates.ContainsKey(
+                match.Key.ToString(CultureInfo.InvariantCulture)))
+            .ToDictionary(
+                match => match.Key.ToString(CultureInfo.InvariantCulture),
+                match => match.Value,
+                StringComparer.Ordinal);
+        if (log.StatusUpdates.Count == reconciled.Count
+            && log.StatusUpdates.All(match =>
+                reconciled.TryGetValue(match.Key, out var targetId)
+                && string.Equals(match.Value, targetId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        log.StatusUpdates.Clear();
+        foreach (var match in reconciled)
+        {
+            log.StatusUpdates[match.Key] = match.Value;
+        }
+
+        return true;
     }
 
     private static InvalidOperationException UnsafeFixtureHistory(string detail)
@@ -358,10 +386,13 @@ public sealed class FixtureProjectBuilder
     private static bool FixtureStatusUpdateMatches(
         StatusUpdateSnapshot expected,
         StatusUpdateSnapshot actual)
-        => string.Equals(expected.Body, actual.Body, StringComparison.Ordinal)
+        => string.Equals(NormalizeBody(expected.Body), NormalizeBody(actual.Body), StringComparison.Ordinal)
             && string.Equals(expected.Status, actual.Status, StringComparison.Ordinal)
             && string.Equals(expected.StartDate, actual.StartDate, StringComparison.Ordinal)
             && string.Equals(expected.TargetDate, actual.TargetDate, StringComparison.Ordinal);
+
+    private static string NormalizeBody(string body)
+        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     private async Task<List<FixtureStatusUpdate>> FetchStatusUpdatesAsync(
         string projectId,
@@ -1023,6 +1054,11 @@ public sealed class FixtureProjectBuilder
     private sealed record ProjectRef(string Id, int Number, string Url);
 
     internal sealed record FixtureStatusUpdate(string Id, StatusUpdateSnapshot Update);
+
+    internal sealed record FixtureStatusReconciliation(
+        IReadOnlyDictionary<int, string> CanonicalMatches,
+        bool ImportRequired,
+        bool LogChanged);
 }
 
 public sealed record FixtureProjectSetupResult(int ProjectNumber, string Url, bool Created);

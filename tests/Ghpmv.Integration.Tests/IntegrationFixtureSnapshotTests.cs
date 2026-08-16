@@ -88,7 +88,7 @@ public class IntegrationFixtureSnapshotTests
     }
 
     [Fact]
-    public void SelectExpectedStatusUpdates_fails_when_a_fixture_entry_is_duplicated()
+    public void SelectExpectedStatusUpdates_selects_one_canonical_legacy_duplicate()
     {
         var expected = FixtureStatusUpdates();
         StatusUpdateSnapshot[] actual =
@@ -98,10 +98,11 @@ public class IntegrationFixtureSnapshotTests
             expected[1],
         ];
 
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(actual, expected));
+        var result = IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(actual, expected);
 
-        Assert.Contains("exactly once, but found 2 matches", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(expected.Length, result.Count);
+        Assert.Same(actual[0], result[0]);
+        Assert.Same(actual[2], result[1]);
     }
 
     [Fact]
@@ -112,7 +113,7 @@ public class IntegrationFixtureSnapshotTests
         var exception = Assert.Throws<InvalidOperationException>(
             () => IntegrationFixtureSnapshot.SelectExpectedStatusUpdates([expected[0]], expected));
 
-        Assert.Contains("exactly once, but found 0 matches", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("was not found", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

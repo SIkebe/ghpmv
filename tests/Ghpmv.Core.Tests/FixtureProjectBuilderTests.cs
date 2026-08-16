@@ -138,7 +138,7 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public void Fixture_status_history_matching_ignores_server_metadata_and_unrelated_entries()
+    public void Fixture_status_history_matching_finds_complete_ordered_subsequence_among_unrelated_entries()
     {
         var expected = FixtureStatusUpdates();
         var actual = expected.Select((update, index) => new FixtureProjectBuilder.FixtureStatusUpdate(
@@ -152,8 +152,13 @@ public class FixtureProjectBuilderTests
         actual.Insert(0, Unrelated(expected, "PVTSU_unrelated_newer"));
         actual.Add(Unrelated(expected, "PVTSU_unrelated_older"));
 
-        var matches = FixtureProjectBuilder.MatchFixtureStatusUpdates(expected, actual);
+        var reconciliation = FixtureProjectBuilder.ReconcileFixtureStatusUpdates(
+            expected,
+            actual,
+            log: null);
+        var matches = reconciliation.CanonicalMatches;
 
+        Assert.False(reconciliation.ImportRequired);
         Assert.Equal(expected.Count, matches.Count);
         Assert.Equal(
             Enumerable.Range(0, expected.Count),
@@ -163,12 +168,14 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public void Fixture_status_history_matching_accepts_only_an_append_safe_created_prefix()
+    public void Fixture_status_history_matching_accepts_a_created_prefix_with_unrelated_entries_anywhere()
     {
         var expected = FixtureStatusUpdates();
         var actual = new[]
         {
+            Unrelated(expected, "PVTSU_unrelated_newer"),
             new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_3", expected[3]),
+            Unrelated(expected, "PVTSU_unrelated_interleaved"),
             new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_4", expected[4]),
             Unrelated(expected, "PVTSU_unrelated_older"),
         };
@@ -195,31 +202,41 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public void Fixture_status_history_matching_fails_closed_for_interleaved_unrelated_history()
+    public void Fixture_status_reconciliation_uses_actual_incomplete_prefix_instead_of_completed_log()
     {
         var expected = FixtureStatusUpdates();
+        var log = FixtureLog(expected);
         var actual = new[]
         {
+            Unrelated(expected, "PVTSU_newer"),
             Existing(expected, 3, "next"),
             Unrelated(expected, "PVTSU_interleaved"),
             Existing(expected, 4, "oldest"),
         };
 
-        AssertUnsafeFixtureHistory(expected, actual);
+        var reconciliation = FixtureProjectBuilder.ReconcileFixtureStatusUpdates(expected, actual, log);
+
+        Assert.True(reconciliation.ImportRequired);
+        Assert.True(reconciliation.LogChanged);
+        Assert.Equal(["3", "4"], log.StatusUpdates.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("PVTSU_next", log.StatusUpdates["3"]);
+        Assert.Equal("PVTSU_oldest", log.StatusUpdates["4"]);
     }
 
     [Fact]
-    public void Fixture_status_history_matching_fails_closed_when_newer_unrelated_history_precedes_a_partial_prefix()
+    public void Fixture_status_reconciliation_validates_interrupted_history_even_when_log_claims_completion()
     {
         var expected = FixtureStatusUpdates();
+        var log = FixtureLog(expected);
         var actual = new[]
         {
-            Unrelated(expected, "PVTSU_newer"),
-            Existing(expected, 3, "next"),
+            Existing(expected, 2, "middle"),
             Existing(expected, 4, "oldest"),
         };
 
-        AssertUnsafeFixtureHistory(expected, actual);
+        Assert.Throws<InvalidOperationException>(
+            () => FixtureProjectBuilder.ReconcileFixtureStatusUpdates(expected, actual, log));
+        Assert.Equal(expected.Count, log.StatusUpdates.Count);
     }
 
     [Fact]
@@ -244,16 +261,47 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public void Fixture_status_history_matching_fails_closed_for_duplicate_fixture_entries()
+    public void Complete_fixture_history_with_legacy_duplicate_uses_one_canonical_id_and_requires_no_import()
     {
         var expected = FixtureStatusUpdates();
-        var actual = new[]
-        {
-            Existing(expected, 4, "first"),
-            Existing(expected, 4, "duplicate"),
-        };
+        var actual = expected
+            .Select((update, index) => Existing(expected, index, $"canonical_{index}"))
+            .ToList();
+        actual.Insert(1, Existing(expected, 0, "legacy_duplicate"));
 
-        AssertUnsafeFixtureHistory(expected, actual);
+        var reconciliation = FixtureProjectBuilder.ReconcileFixtureStatusUpdates(
+            expected,
+            actual,
+            log: null);
+
+        Assert.False(reconciliation.ImportRequired);
+        Assert.Equal(expected.Count, reconciliation.CanonicalMatches.Count);
+        Assert.Equal("PVTSU_canonical_0", reconciliation.CanonicalMatches[0]);
+        Assert.DoesNotContain("PVTSU_legacy_duplicate", reconciliation.CanonicalMatches.Values);
+    }
+
+    [Fact]
+    public void Fixture_status_reconciliation_does_not_claim_an_exact_match_for_a_pending_create()
+    {
+        var expected = FixtureStatusUpdates();
+        var log = FixtureLog(expected);
+        log.StatusUpdates.Remove("0");
+        log.PendingStatusUpdates["0"] = new PendingStatusUpdateOperation
+        {
+            OperationId = "ambiguous-operation",
+            ProjectId = log.ProjectId,
+        };
+        var actual = expected
+            .Select((update, index) => Existing(expected, index, $"canonical_{index}"))
+            .ToArray();
+
+        var reconciliation = FixtureProjectBuilder.ReconcileFixtureStatusUpdates(expected, actual, log);
+
+        Assert.True(reconciliation.ImportRequired);
+        Assert.True(reconciliation.LogChanged);
+        Assert.False(log.StatusUpdates.ContainsKey("0"));
+        Assert.Equal("ambiguous-operation", log.PendingStatusUpdates["0"].OperationId);
+        Assert.Equal(expected.Count - 1, log.StatusUpdates.Count);
     }
 
     private static FixtureProjectBuilder.FixtureStatusUpdate Existing(
@@ -266,6 +314,27 @@ public class FixtureProjectBuilderTests
         IReadOnlyList<StatusUpdateSnapshot> expected,
         string id)
         => new(id, expected[0] with { Body = $"Unrelated history: {id}" });
+
+    private static ImportLog FixtureLog(IReadOnlyList<StatusUpdateSnapshot> expected)
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+        var log = new ImportLog
+        {
+            ProjectId = "PVT_fixture",
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+        };
+        for (var index = 0; index < expected.Count; index++)
+        {
+            log.StatusUpdates[index.ToString(CultureInfo.InvariantCulture)] =
+                $"PVTSU_logged_{index.ToString(CultureInfo.InvariantCulture)}";
+        }
+
+        return log;
+    }
 
     private static void AssertUnsafeFixtureHistory(
         IReadOnlyList<StatusUpdateSnapshot> expected,

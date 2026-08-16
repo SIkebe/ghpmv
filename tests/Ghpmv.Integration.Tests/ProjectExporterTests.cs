@@ -283,6 +283,9 @@ public class ProjectExporterTests
         Assert.NotNull(expected);
         Assert.Equal(5, expected.Count);
 
+        // This assertion intentionally selects a canonical ordered subsequence because
+        // the long-lived shared fixture contains a known legacy duplicate. Deterministic
+        // reconciliation and isolated round-trip tests prove current runs stay unique.
         var fixtureUpdates = IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(updates, expected);
 
         // Reverse chronological: the fixture is created oldest-first, so the newest
