@@ -145,12 +145,12 @@ public class TeamLinkImportTests
     }
 
     [Fact]
-    public async Task Missing_project_update_permission_fails_preflight()
+    public async Task Writer_without_project_admin_permission_fails_preflight()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
         try
         {
-            using var handler = new TeamImportHandler(viewerCanUpdate: false);
+            using var handler = new TeamImportHandler(viewerCanUpdate: true, viewerCanManageAccess: false);
             using var client = CreateClient(handler);
             var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
 
@@ -162,6 +162,7 @@ public class TeamLinkImportTests
                     TestContext.Current.CancellationToken));
 
             Assert.Contains("permission:", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("does not have Project admin access", exception.Message, StringComparison.Ordinal);
             Assert.Equal(0, handler.MutationCount);
         }
         finally
@@ -221,6 +222,7 @@ public class TeamLinkImportTests
         bool teamExists = true,
         bool projectExists = true,
         bool viewerCanUpdate = true,
+        bool viewerCanManageAccess = true,
         string ownerField = "organization") : HttpMessageHandler
     {
         private bool _linked;
@@ -250,7 +252,7 @@ public class TeamLinkImportTests
             if (query.Contains("projectV2(number:", StringComparison.Ordinal))
             {
                 response = projectExists
-                    ? "{\"data\":{\"" + ownerField + "\":{\"projectV2\":{\"id\":\"PVT_target\",\"number\":7,\"title\":\"Roadmap\",\"url\":\"https://example.test/projects/7\",\"public\":false,\"viewerCanUpdate\":" + viewerCanUpdate.ToString().ToLowerInvariant() + "}}}}"
+                    ? "{\"data\":{\"" + ownerField + "\":{\"projectV2\":{\"id\":\"PVT_target\",\"number\":7,\"title\":\"Roadmap\",\"url\":\"https://example.test/projects/7\",\"public\":false,\"viewerCanUpdate\":" + viewerCanUpdate.ToString().ToLowerInvariant() + ",\"viewerCanClose\":" + viewerCanManageAccess.ToString().ToLowerInvariant() + ",\"viewerCanReopen\":false}}}}"
                     : "{\"data\":{\"" + ownerField + "\":{\"projectV2\":null}}}";
             }
             else if (query.Contains("projectsV2(first:", StringComparison.Ordinal))

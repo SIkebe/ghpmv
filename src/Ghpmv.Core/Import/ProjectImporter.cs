@@ -1453,10 +1453,10 @@ public sealed class ProjectImporter
         var permissionFailures = new List<string>();
         var resolved = new List<ResolvedTeamLink>();
 
-        if (project is { ViewerCanUpdate: false })
+        if (project is { ViewerCanManageAccess: false })
         {
             permissionFailures.Add(
-                $"the target token cannot update project #{project.Number}, so it cannot link Teams");
+                $"the target token does not have Project admin access required to link Teams on project #{project.Number}");
         }
 
         foreach (var resolution in mappingResolutions.Where(item => item.Status == TeamLinkMappingStatus.Mapped))
@@ -2376,14 +2376,17 @@ public sealed class ProjectImporter
         node.GetProperty("number").GetInt32(),
         node.GetProperty("url").GetString() ?? string.Empty,
         node.TryGetProperty("public", out var visibility) && visibility.GetBoolean(),
-        !node.TryGetProperty("viewerCanUpdate", out var viewerCanUpdate) || viewerCanUpdate.GetBoolean());
+        !node.TryGetProperty("viewerCanUpdate", out var viewerCanUpdate) || viewerCanUpdate.GetBoolean(),
+        node.TryGetProperty("viewerCanClose", out var canClose) && canClose.GetBoolean()
+            || node.TryGetProperty("viewerCanReopen", out var canReopen) && canReopen.GetBoolean());
 
     private sealed record ProjectRef(
         string Id,
         int Number,
         string Url,
         bool Public,
-        bool ViewerCanUpdate);
+        bool ViewerCanUpdate,
+        bool ViewerCanManageAccess);
 
     private sealed record ResolvedTeamLink(string Id, string Identity);
 
@@ -2501,7 +2504,7 @@ public sealed class ProjectImporter
         query($login: String!, $first: Int!, $after: String) {
           __OWNER__(login: $login) {
             projectsV2(first: $first, after: $after) {
-              nodes { id number title url public viewerCanUpdate }
+              nodes { id number title url public viewerCanUpdate viewerCanClose viewerCanReopen }
               pageInfo { hasNextPage endCursor }
             }
           }
@@ -2512,7 +2515,7 @@ public sealed class ProjectImporter
         """
         query($login: String!, $number: Int!) {
           __OWNER__(login: $login) {
-            projectV2(number: $number) { id number title url public viewerCanUpdate }
+            projectV2(number: $number) { id number title url public viewerCanUpdate viewerCanClose viewerCanReopen }
           }
         }
         """;
