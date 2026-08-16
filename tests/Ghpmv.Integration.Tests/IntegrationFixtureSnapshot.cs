@@ -101,6 +101,52 @@ internal static class IntegrationFixtureSnapshot
         };
     }
 
+    internal static IReadOnlyList<StatusUpdateSnapshot> SelectExpectedStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot> actual,
+        IReadOnlyList<StatusUpdateSnapshot> expected)
+    {
+        ArgumentNullException.ThrowIfNull(actual);
+        ArgumentNullException.ThrowIfNull(expected);
+
+        var positions = expected.Select(expectedUpdate =>
+        {
+            var matches = actual
+                .Select((actualUpdate, index) => (actualUpdate, index))
+                .Where(entry => StatusUpdateMatches(expectedUpdate, entry.actualUpdate))
+                .Select(entry => entry.index)
+                .ToArray();
+            if (matches.Length != 1)
+            {
+                throw new InvalidOperationException(
+                    $"Expected fixture status update '{expectedUpdate.Body}' exactly once, but found {matches.Length} matches.");
+            }
+
+            return matches[0];
+        }).ToArray();
+
+        for (var index = 1; index < positions.Length; index++)
+        {
+            if (positions[index - 1] >= positions[index])
+            {
+                throw new InvalidOperationException(
+                    "Expected fixture status updates were not in reverse chronological order.");
+            }
+        }
+
+        return positions.Select(position => actual[position]).ToArray();
+    }
+
+    private static bool StatusUpdateMatches(
+        StatusUpdateSnapshot expected,
+        StatusUpdateSnapshot actual)
+        => string.Equals(NormalizeBody(expected.Body), NormalizeBody(actual.Body), StringComparison.Ordinal)
+            && string.Equals(expected.Status, actual.Status, StringComparison.Ordinal)
+            && string.Equals(expected.StartDate, actual.StartDate, StringComparison.Ordinal)
+            && string.Equals(expected.TargetDate, actual.TargetDate, StringComparison.Ordinal);
+
+    private static string NormalizeBody(string body)
+        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
+
     private static ItemSnapshot Draft(ProjectSnapshot snapshot, string title)
         => snapshot.Items.Single(item =>
             item.Type == "DRAFT_ISSUE"

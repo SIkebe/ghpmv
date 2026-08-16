@@ -271,46 +271,64 @@ public sealed class FixtureProjectBuilder
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(actual);
 
-        var lengths = new int[expected.Count + 1, actual.Count + 1];
-        for (var expectedIndex = expected.Count - 1; expectedIndex >= 0; expectedIndex--)
+        for (var left = 0; left < expected.Count; left++)
         {
-            for (var actualIndex = actual.Count - 1; actualIndex >= 0; actualIndex--)
+            for (var right = left + 1; right < expected.Count; right++)
             {
-                lengths[expectedIndex, actualIndex] = FixtureStatusUpdateMatches(
-                    expected[expectedIndex],
-                    actual[actualIndex].Update)
-                    ? 1 + lengths[expectedIndex + 1, actualIndex + 1]
-                    : Math.Max(
-                        lengths[expectedIndex + 1, actualIndex],
-                        lengths[expectedIndex, actualIndex + 1]);
+                if (FixtureStatusUpdateMatches(expected[left], expected[right]))
+                {
+                    throw new InvalidOperationException(
+                        "The standard fixture defines duplicate status updates and cannot be seeded safely.");
+                }
             }
         }
 
-        var matches = new Dictionary<int, string>();
-        for (int expectedIndex = 0, actualIndex = 0;
-             expectedIndex < expected.Count && actualIndex < actual.Count;)
+        var fixtureEntries = new List<(int ExpectedIndex, string TargetId)>();
+        foreach (var candidate in actual)
         {
-            if (FixtureStatusUpdateMatches(expected[expectedIndex], actual[actualIndex].Update)
-                && lengths[expectedIndex, actualIndex]
-                    == 1 + lengths[expectedIndex + 1, actualIndex + 1])
+            var expectedIndex = expected
+                .Select((update, index) => (update, index))
+                .Where(entry => FixtureStatusUpdateMatches(entry.update, candidate.Update))
+                .Select(entry => entry.index)
+                .Cast<int?>()
+                .SingleOrDefault();
+            if (expectedIndex is null)
             {
-                matches[expectedIndex] = actual[actualIndex].Id;
-                expectedIndex++;
-                actualIndex++;
+                continue;
             }
-            else if (lengths[expectedIndex, actualIndex + 1]
-                     >= lengths[expectedIndex + 1, actualIndex])
+
+            if (fixtureEntries.Any(entry => entry.ExpectedIndex == expectedIndex.Value))
             {
-                actualIndex++;
+                throw UnsafeFixtureHistory(
+                    $"snapshot sequence {expectedIndex} appears more than once");
             }
-            else
+
+            fixtureEntries.Add((expectedIndex.Value, candidate.Id));
+        }
+
+        // Both lists are newest-first. An append-safe creation prefix therefore appears
+        // as a contiguous suffix of expected, in ascending snapshot-index order.
+        var expectedStartIndex = expected.Count - fixtureEntries.Count;
+        for (var offset = 0; offset < fixtureEntries.Count; offset++)
+        {
+            var requiredIndex = expectedStartIndex + offset;
+            if (fixtureEntries[offset].ExpectedIndex != requiredIndex)
             {
-                expectedIndex++;
+                throw UnsafeFixtureHistory(
+                    $"found snapshot sequence {fixtureEntries[offset].ExpectedIndex} where sequence {requiredIndex} was required");
             }
         }
 
-        return matches;
+        return fixtureEntries.ToDictionary(
+            entry => entry.ExpectedIndex,
+            entry => entry.TargetId);
     }
+
+    private static InvalidOperationException UnsafeFixtureHistory(string detail)
+        => new(
+            "The existing fixture project's standard status updates are not an append-safe "
+            + $"contiguous history ({detail}). No status updates were changed. Use a new fixture "
+            + "title or reconcile the fixture history manually.");
 
     private static bool FixtureStatusUpdateMatches(
         StatusUpdateSnapshot expected,

@@ -149,9 +149,8 @@ public class FixtureProjectBuilderTests
                 CreatedAt = "2026-08-16T00:00:00Z",
                 UpdatedAt = "2026-08-16T00:01:00Z",
             })).ToList();
-        actual.Insert(2, new FixtureProjectBuilder.FixtureStatusUpdate(
-            "PVTSU_unrelated",
-            expected[0] with { Body = "Unrelated project history." }));
+        actual.Insert(0, Unrelated(expected, "PVTSU_unrelated_newer"));
+        actual.Add(Unrelated(expected, "PVTSU_unrelated_older"));
 
         var matches = FixtureProjectBuilder.MatchFixtureStatusUpdates(expected, actual);
 
@@ -159,45 +158,97 @@ public class FixtureProjectBuilderTests
         Assert.Equal(
             Enumerable.Range(0, expected.Count),
             matches.Keys.Order());
-        Assert.DoesNotContain("PVTSU_unrelated", matches.Values);
+        Assert.DoesNotContain("PVTSU_unrelated_newer", matches.Values);
+        Assert.DoesNotContain("PVTSU_unrelated_older", matches.Values);
     }
 
     [Fact]
-    public void Fixture_status_history_matching_returns_only_the_existing_ordered_subset()
+    public void Fixture_status_history_matching_accepts_only_an_append_safe_created_prefix()
     {
         var expected = FixtureStatusUpdates();
         var actual = new[]
         {
-            new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_2", expected[2]),
-            new FixtureProjectBuilder.FixtureStatusUpdate(
-                "PVTSU_unrelated",
-                expected[1] with { TargetDate = null }),
+            Unrelated(expected, "PVTSU_unrelated_newer"),
+            new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_3", expected[3]),
+            Unrelated(expected, "PVTSU_unrelated_interleaved"),
             new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_existing_4", expected[4]),
+            Unrelated(expected, "PVTSU_unrelated_older"),
         };
 
         var matches = FixtureProjectBuilder.MatchFixtureStatusUpdates(expected, actual);
 
-        Assert.Equal([2, 4], matches.Keys.Order());
-        Assert.Equal("PVTSU_existing_2", matches[2]);
+        Assert.Equal([3, 4], matches.Keys.Order());
+        Assert.Equal("PVTSU_existing_3", matches[3]);
         Assert.Equal("PVTSU_existing_4", matches[4]);
-        Assert.DoesNotContain("PVTSU_unrelated", matches.Values);
+        Assert.DoesNotContain(matches.Values, id => id.StartsWith("PVTSU_unrelated", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Fixture_status_history_matching_does_not_claim_out_of_order_history()
+    public void Fixture_status_history_matching_fails_closed_for_reversed_oldest_and_newest_entries()
     {
         var expected = FixtureStatusUpdates();
         var actual = new[]
         {
-            new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_oldest", expected[4]),
-            new FixtureProjectBuilder.FixtureStatusUpdate("PVTSU_newest", expected[0]),
+            Existing(expected, 4, "oldest"),
+            Existing(expected, 0, "newest"),
         };
 
-        var matches = FixtureProjectBuilder.MatchFixtureStatusUpdates(expected, actual);
+        AssertUnsafeFixtureHistory(expected, actual);
+    }
 
-        Assert.Single(matches);
-        Assert.Equal("PVTSU_newest", matches[0]);
-        Assert.DoesNotContain("PVTSU_oldest", matches.Values);
+    [Fact]
+    public void Fixture_status_history_matching_fails_closed_for_a_hole_in_the_created_prefix()
+    {
+        var expected = FixtureStatusUpdates();
+        var actual = new[]
+        {
+            Existing(expected, 2, "middle"),
+            Existing(expected, 4, "oldest"),
+        };
+
+        AssertUnsafeFixtureHistory(expected, actual);
+    }
+
+    [Fact]
+    public void Fixture_status_history_matching_fails_closed_when_a_later_entry_exists_without_the_earlier_prefix()
+    {
+        var expected = FixtureStatusUpdates();
+
+        AssertUnsafeFixtureHistory(expected, [Existing(expected, 3, "later")]);
+    }
+
+    [Fact]
+    public void Fixture_status_history_matching_fails_closed_for_duplicate_fixture_entries()
+    {
+        var expected = FixtureStatusUpdates();
+        var actual = new[]
+        {
+            Existing(expected, 4, "first"),
+            Existing(expected, 4, "duplicate"),
+        };
+
+        AssertUnsafeFixtureHistory(expected, actual);
+    }
+
+    private static FixtureProjectBuilder.FixtureStatusUpdate Existing(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        int index,
+        string suffix)
+        => new($"PVTSU_{suffix}", expected[index]);
+
+    private static FixtureProjectBuilder.FixtureStatusUpdate Unrelated(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        string id)
+        => new(id, expected[0] with { Body = $"Unrelated history: {id}" });
+
+    private static void AssertUnsafeFixtureHistory(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        IReadOnlyList<FixtureProjectBuilder.FixtureStatusUpdate> actual)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FixtureProjectBuilder.MatchFixtureStatusUpdates(expected, actual));
+        Assert.Contains("not an append-safe contiguous history", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("No status updates were changed", exception.Message, StringComparison.Ordinal);
     }
 
     private static IReadOnlyList<StatusUpdateSnapshot> FixtureStatusUpdates()

@@ -69,6 +69,83 @@ public class IntegrationFixtureSnapshotTests
         Assert.Contains(result.Fields, field => field.Name == "Sub-issues progress" && field.DataType == "SUB_ISSUES_PROGRESS");
     }
 
+    [Fact]
+    public void SelectExpectedStatusUpdates_allows_unrelated_history_around_and_between_fixture_entries()
+    {
+        var expected = FixtureStatusUpdates();
+        StatusUpdateSnapshot[] actual =
+        [
+            Unrelated("newer"),
+            expected[0] with { Creator = "server-user", CreatedAt = "2026-08-16T00:05:00Z" },
+            Unrelated("between"),
+            expected[1] with { Creator = "server-user", CreatedAt = "2026-08-16T00:04:00Z" },
+            Unrelated("older"),
+        ];
+
+        var result = IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(actual, expected);
+
+        Assert.Equal(expected.Select(update => update.Body), result.Select(update => update.Body));
+    }
+
+    [Fact]
+    public void SelectExpectedStatusUpdates_fails_when_a_fixture_entry_is_duplicated()
+    {
+        var expected = FixtureStatusUpdates();
+        StatusUpdateSnapshot[] actual =
+        [
+            expected[0],
+            expected[0] with { CreatedAt = "2026-08-16T00:06:00Z" },
+            expected[1],
+        ];
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(actual, expected));
+
+        Assert.Contains("exactly once, but found 2 matches", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SelectExpectedStatusUpdates_fails_when_a_fixture_entry_is_missing()
+    {
+        var expected = FixtureStatusUpdates();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => IntegrationFixtureSnapshot.SelectExpectedStatusUpdates([expected[0]], expected));
+
+        Assert.Contains("exactly once, but found 0 matches", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SelectExpectedStatusUpdates_fails_when_fixture_entries_are_out_of_order()
+    {
+        var expected = FixtureStatusUpdates();
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(
+                [expected[1], Unrelated("between"), expected[0]],
+                expected));
+
+        Assert.Contains("not in reverse chronological order", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static StatusUpdateSnapshot[] FixtureStatusUpdates()
+    {
+        var updates = FixtureProjectBuilder.CreateSnapshot(
+            "fixture",
+            IntegrationTestSettings.FixtureRepositoryFullName,
+            "viewer",
+            IntegrationTestSettings.FixturePullRequestNumber).StatusUpdates;
+        Assert.NotNull(updates);
+        return updates.Take(2).ToArray();
+    }
+
+    private static StatusUpdateSnapshot Unrelated(string suffix) => new()
+    {
+        Body = $"Unrelated {suffix}",
+        CreatedAt = "2026-08-16T00:00:00Z",
+        UpdatedAt = "2026-08-16T00:00:00Z",
+    };
+
     private static ItemSnapshot Draft(string title, int position) => new()
     {
         Type = "DRAFT_ISSUE",

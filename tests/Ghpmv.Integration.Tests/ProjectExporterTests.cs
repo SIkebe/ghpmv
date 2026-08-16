@@ -1,4 +1,5 @@
 using Ghpmv.Core.Export;
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 
@@ -274,15 +275,21 @@ public class ProjectExporterTests
 
         var updates = snapshot.StatusUpdates;
         Assert.NotNull(updates);
-        // Guard against a silent empty pass: the fixture must actually carry the five
-        // updates written by FixtureProjectBuilder.CreateSnapshot.
-        Assert.Equal(5, updates.Count);
+        var expected = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            IntegrationTestSettings.FixtureRepositoryFullName,
+            "fixture-user",
+            pullRequestNumber: 1).StatusUpdates;
+        Assert.NotNull(expected);
+        Assert.Equal(5, expected.Count);
+
+        var fixtureUpdates = IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(updates, expected);
 
         // Reverse chronological: the fixture is created oldest-first, so the newest
         // (COMPLETE) is exported first and the oldest (INACTIVE) last.
         Assert.Equal(
             ["COMPLETE", "OFF_TRACK", "AT_RISK", "ON_TRACK", "INACTIVE"],
-            updates.Select(update => update.Status));
+            fixtureUpdates.Select(update => update.Status));
 
         // Documented fixture dates, newest-first. Both optional dates are null on at
         // least one update, and both are populated on at least one other.
@@ -294,7 +301,7 @@ public class ProjectExporterTests
             ("2026-01-01", "2026-03-31"),
             (null, null),
         ];
-        Assert.Equal(expectedDates, updates.Select(update => (update.StartDate, update.TargetDate)));
+        Assert.Equal(expectedDates, fixtureUpdates.Select(update => (update.StartDate, update.TargetDate)));
 
         // The fixture writes its own history (AddAttributionNote = false), so bodies —
         // including Markdown and multi-line content — survive verbatim.
@@ -306,7 +313,7 @@ public class ProjectExporterTests
             "Implementation is on track.\n\n- API\n- Browser",
             "Fixture kickoff with **Markdown**.",
         ];
-        Assert.Equal(expectedBodies, updates.Select(update => NormalizeBody(update.Body)));
+        Assert.Equal(expectedBodies, fixtureUpdates.Select(update => NormalizeBody(update.Body)));
 
         // createdAt is assigned by GitHub, so only its ordering is contractual.
         var createdAt = updates
