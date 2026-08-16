@@ -504,7 +504,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                     ProjectId = result.ProjectId,
                     SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
                 };
-            if (templateWriteSession is null)
+            if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
             {
                 templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
                     client,

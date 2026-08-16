@@ -30,6 +30,9 @@ public sealed class ProjectTemplateWriteSession
 
     public Action<string>? OnProgress { get; init; }
 
+    public static bool RequiresPreparation(ProjectTemplateWriteSession? session)
+        => session is null || !session.RestorationRequired;
+
     public static Task<ProjectTemplateWriteSession> PrepareAsync(
         GitHubGraphQLClient client,
         string projectId,

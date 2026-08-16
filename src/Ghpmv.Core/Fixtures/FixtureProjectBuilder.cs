@@ -181,7 +181,7 @@ public sealed class FixtureProjectBuilder
                         ProjectId = project.ProjectId,
                         SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
                     };
-                if (templateWriteSession is null)
+                if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
                 {
                     templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
                         _graphQl,

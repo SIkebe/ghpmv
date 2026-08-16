@@ -144,6 +144,7 @@ public class ProjectTemplateWriteSessionTests
         Assert.Equal(0, handler.UnmarkCount);
         Assert.Equal(0, handler.MarkCount);
         Assert.Single(handler.RequestBodies);
+        Assert.True(ProjectTemplateWriteSession.RequiresPreparation(session));
     }
 
     [Fact]

@@ -360,12 +360,15 @@ public sealed class StatusUpdateImporter
 
     private bool StatusUpdateMatches(TargetStatusUpdate candidate, StatusUpdateSnapshot expected)
         => string.Equals(
-                candidate.Body,
-                AddAttributionNote ? BuildImportedBody(expected) : expected.Body,
+                NormalizeBody(candidate.Body),
+                NormalizeBody(AddAttributionNote ? BuildImportedBody(expected) : expected.Body),
                 StringComparison.Ordinal)
             && string.Equals(candidate.Status, expected.Status, StringComparison.Ordinal)
             && string.Equals(candidate.StartDate, expected.StartDate, StringComparison.Ordinal)
             && string.Equals(candidate.TargetDate, expected.TargetDate, StringComparison.Ordinal);
+
+    private static string NormalizeBody(string body)
+        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     private static string? GetOptionalString(JsonElement element, string propertyName)
         => element.TryGetProperty(propertyName, out var value)

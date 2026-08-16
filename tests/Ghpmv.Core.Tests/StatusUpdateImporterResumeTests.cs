@@ -64,9 +64,13 @@ public class StatusUpdateImporterResumeTests
         try
         {
             var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory) { Ambiguous = true };
+            using var handler = new ResumeHandler(directory)
+            {
+                Ambiguous = true,
+                AmbiguousCandidateUsesCrLf = true,
+            };
             using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(Update("Only"));
+            var snapshot = CreateSnapshot(Update("Line one\nLine two"));
             var importer = new StatusUpdateImporter(client);
             var progress = new List<string>();
 
@@ -605,6 +609,8 @@ public class StatusUpdateImporterResumeTests
 
         public bool AmbiguousCandidateMatchesExpected { get; init; } = true;
 
+        public bool AmbiguousCandidateUsesCrLf { get; init; }
+
         /// <summary>Fails the create with a definitive, pre-side-effect GraphQL error.</summary>
         public bool FailDefinitively { get; init; }
 
@@ -728,7 +734,12 @@ public class StatusUpdateImporterResumeTests
         {
             var update = id.StartsWith("PVTSU_ambiguous_", StringComparison.Ordinal)
                 ? AmbiguousCandidateMatchesExpected
-                    ? _lastCreate
+                    ? AmbiguousCandidateUsesCrLf && _lastCreate is not null
+                        ? _lastCreate with
+                        {
+                            Body = _lastCreate.Body.Replace("\n", "\r\n", StringComparison.Ordinal),
+                        }
+                        : _lastCreate
                     : new CandidateStatusUpdate("Unrelated body", "OFF_TRACK", null, null)
                 : _createdUpdates.GetValueOrDefault(id);
             update ??= new CandidateStatusUpdate("Existing body", "ON_TRACK", null, null);
