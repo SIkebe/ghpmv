@@ -65,6 +65,8 @@ public class VerifyTests
         Assert.Contains(source.Items, i => i.Type == "ISSUE");
         Assert.Contains(source.Items, i => i.IsArchived);
         Assert.Contains(source.Items, i => i.Draft?.Assignees is { Count: > 0 });
+        Assert.NotNull(source.StatusUpdates);
+        Assert.Equal(5, source.StatusUpdates.Count);
         Assert.Equal(
             ["Platform", "SDK"],
             source.Items.Single(i => i.Type == "ISSUE").FieldValues
@@ -82,15 +84,16 @@ public class VerifyTests
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToDictionary(login => login, login => login, StringComparer.OrdinalIgnoreCase);
 
-        var result = await new ProjectImporter(client)
-        {
-            RepositoryMapping = repoMapping,
-            OperationLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory(),
-        }
-            .ImportAsync(snapshot, TargetOrg, cancellationToken);
         var logDirectory = Directory.CreateTempSubdirectory("ghpmv-m5-").FullName;
+        ImportResult? result = null;
         try
         {
+            result = await new ProjectImporter(client)
+            {
+                RepositoryMapping = repoMapping,
+                OperationLogDirectory = logDirectory,
+            }
+                .ImportAsync(snapshot, TargetOrg, cancellationToken);
             var itemResult = await new ItemImporter(client)
             {
                 RepositoryMapping = repoMapping,
@@ -99,9 +102,13 @@ public class VerifyTests
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(snapshot.Items.Count, itemResult.Created);
             Assert.Empty(itemResult.Warnings);
+            var statusUpdateResult = await new StatusUpdateImporter(client)
+                .ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            Assert.Equal(source.StatusUpdates.Count, statusUpdateResult.Created);
             var importLog = await ImportLog.LoadAsync(logDirectory, cancellationToken);
             Assert.NotNull(importLog);
             Assert.Equal(snapshot.Items.Count, importLog.Items.Count);
+            Assert.Equal(source.StatusUpdates.Count, importLog.StatusUpdates.Count);
             var verificationSnapshot = snapshot with
             {
                 LinkedRepositories = snapshot.LinkedRepositories?.Select(repository =>
@@ -184,7 +191,11 @@ public class VerifyTests
         }
         finally
         {
-            await DeleteProjectAsync(client, result.ProjectId);
+            if (result is not null)
+            {
+                await DeleteProjectAsync(client, result.ProjectId);
+            }
+
             TryDeleteDirectory(logDirectory);
         }
     }
