@@ -41,7 +41,7 @@ public sealed record ImportLog
     /// <summary>Source status-update sequence index → target status-update node id.</summary>
     public Dictionary<string, string> StatusUpdates { get; init; } = new(StringComparer.Ordinal);
 
-    /// <summary>Status-update creates persisted before sending so ambiguous results can be reconciled by node id.</summary>
+    /// <summary>Status-update creates persisted before sending so ambiguous results fail closed until manually reconciled.</summary>
     public Dictionary<string, PendingStatusUpdateOperation> PendingStatusUpdates { get; init; } = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -125,9 +125,7 @@ public sealed record ImportLog
                     || index < 0
                     || pair.Value is null
                     || string.IsNullOrWhiteSpace(pair.Value.OperationId)
-                    || string.IsNullOrWhiteSpace(pair.Value.ProjectId)
-                    || pair.Value.ExistingStatusUpdateIds is null
-                    || pair.Value.ExistingStatusUpdateIds.Any(string.IsNullOrWhiteSpace)))
+                    || string.IsNullOrWhiteSpace(pair.Value.ProjectId)))
             {
                 throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
             }
@@ -259,8 +257,6 @@ public sealed record PendingStatusUpdateOperation
     public required string OperationId { get; init; }
 
     public required string ProjectId { get; init; }
-
-    public required string[] ExistingStatusUpdateIds { get; init; }
 }
 
 /// <summary>System.Text.Json source-generation context for <see cref="ImportLog"/>.</summary>

@@ -95,6 +95,8 @@ public sealed class FixtureProjectBuilder
 
             var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
             var importStatusUpdates = true;
+            IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
+                new Dictionary<int, string>();
             if (itemLog is not null)
             {
                 var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
@@ -116,15 +118,20 @@ public sealed class FixtureProjectBuilder
                 var existingStatusUpdates = await FetchStatusUpdatesAsync(
                     existing.Id,
                     cancellationToken).ConfigureAwait(false);
-                if (FixtureStatusUpdatesMatch(expectedStatusUpdates, existingStatusUpdates))
+                matchedFixtureStatusUpdates = MatchFixtureStatusUpdates(
+                    expectedStatusUpdates,
+                    existingStatusUpdates);
+                if (matchedFixtureStatusUpdates.Count == expectedStatusUpdates.Count)
                 {
                     importStatusUpdates = false;
-                    OnProgress?.Invoke("Fixture project already has the expected status update history; skipping status update seeding.");
+                    OnProgress?.Invoke(
+                        "Fixture project already contains the expected status update history; leaving it and any unrelated history unchanged.");
                 }
-                else if (existingStatusUpdates.Count > 0)
+                else
                 {
-                    throw new InvalidOperationException(
-                        "The existing fixture project has status updates that do not match the standard fixture. Use a new fixture title or delete and recreate the fixture to avoid duplicating history.");
+                    OnProgress?.Invoke(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Fixture project contains {matchedFixtureStatusUpdates.Count}/{expectedStatusUpdates.Count} expected status updates; seeding only the missing fixture history and leaving unrelated history unchanged."));
                 }
             }
 
@@ -181,6 +188,15 @@ public sealed class FixtureProjectBuilder
                         ProjectId = project.ProjectId,
                         SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
                     };
+                foreach (var (sourceIndex, targetId) in matchedFixtureStatusUpdates)
+                {
+                    templateLog.StatusUpdates[sourceIndex.ToString(CultureInfo.InvariantCulture)] = targetId;
+                }
+                if (matchedFixtureStatusUpdates.Count > 0)
+                {
+                    await templateLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                }
+
                 if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
                 {
                     templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
@@ -248,28 +264,74 @@ public sealed class FixtureProjectBuilder
         };
     }
 
-    internal static bool FixtureStatusUpdatesMatch(
+    internal static IReadOnlyDictionary<int, string> MatchFixtureStatusUpdates(
         IReadOnlyList<StatusUpdateSnapshot> expected,
-        IReadOnlyList<StatusUpdateSnapshot> actual)
-        => expected.Count == actual.Count
-            && expected.Zip(actual).All(pair =>
-                string.Equals(pair.First.Body, pair.Second.Body, StringComparison.Ordinal)
-                && string.Equals(pair.First.Status, pair.Second.Status, StringComparison.Ordinal)
-                && string.Equals(pair.First.StartDate, pair.Second.StartDate, StringComparison.Ordinal)
-                && string.Equals(pair.First.TargetDate, pair.Second.TargetDate, StringComparison.Ordinal));
+        IReadOnlyList<FixtureStatusUpdate> actual)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(actual);
 
-    private async Task<List<StatusUpdateSnapshot>> FetchStatusUpdatesAsync(
+        var lengths = new int[expected.Count + 1, actual.Count + 1];
+        for (var expectedIndex = expected.Count - 1; expectedIndex >= 0; expectedIndex--)
+        {
+            for (var actualIndex = actual.Count - 1; actualIndex >= 0; actualIndex--)
+            {
+                lengths[expectedIndex, actualIndex] = FixtureStatusUpdateMatches(
+                    expected[expectedIndex],
+                    actual[actualIndex].Update)
+                    ? 1 + lengths[expectedIndex + 1, actualIndex + 1]
+                    : Math.Max(
+                        lengths[expectedIndex + 1, actualIndex],
+                        lengths[expectedIndex, actualIndex + 1]);
+            }
+        }
+
+        var matches = new Dictionary<int, string>();
+        for (int expectedIndex = 0, actualIndex = 0;
+             expectedIndex < expected.Count && actualIndex < actual.Count;)
+        {
+            if (FixtureStatusUpdateMatches(expected[expectedIndex], actual[actualIndex].Update)
+                && lengths[expectedIndex, actualIndex]
+                    == 1 + lengths[expectedIndex + 1, actualIndex + 1])
+            {
+                matches[expectedIndex] = actual[actualIndex].Id;
+                expectedIndex++;
+                actualIndex++;
+            }
+            else if (lengths[expectedIndex, actualIndex + 1]
+                     >= lengths[expectedIndex + 1, actualIndex])
+            {
+                actualIndex++;
+            }
+            else
+            {
+                expectedIndex++;
+            }
+        }
+
+        return matches;
+    }
+
+    private static bool FixtureStatusUpdateMatches(
+        StatusUpdateSnapshot expected,
+        StatusUpdateSnapshot actual)
+        => string.Equals(expected.Body, actual.Body, StringComparison.Ordinal)
+            && string.Equals(expected.Status, actual.Status, StringComparison.Ordinal)
+            && string.Equals(expected.StartDate, actual.StartDate, StringComparison.Ordinal)
+            && string.Equals(expected.TargetDate, actual.TargetDate, StringComparison.Ordinal);
+
+    private async Task<List<FixtureStatusUpdate>> FetchStatusUpdatesAsync(
         string projectId,
         CancellationToken cancellationToken)
     {
-        var updates = new List<StatusUpdateSnapshot>();
+        var updates = new List<FixtureStatusUpdate>();
         await foreach (var node in _graphQl.QueryPaginatedAsync(
             """
             query($projectId: ID!, $first: Int!, $after: String) {
               node(id: $projectId) {
                 ... on ProjectV2 {
                   statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
-                    nodes { body status startDate targetDate createdAt updatedAt }
+                    nodes { id body status startDate targetDate createdAt updatedAt }
                     pageInfo { hasNextPage endCursor }
                   }
                 }
@@ -280,15 +342,18 @@ public sealed class FixtureProjectBuilder
             "node.statusUpdates",
             cancellationToken: cancellationToken).ConfigureAwait(false))
         {
-            updates.Add(new StatusUpdateSnapshot
-            {
-                Body = node.GetProperty("body").GetString() ?? string.Empty,
-                Status = GetOptionalString(node, "status"),
-                StartDate = GetOptionalString(node, "startDate"),
-                TargetDate = GetOptionalString(node, "targetDate"),
-                CreatedAt = node.GetProperty("createdAt").GetString() ?? string.Empty,
-                UpdatedAt = node.GetProperty("updatedAt").GetString() ?? string.Empty,
-            });
+            updates.Add(new FixtureStatusUpdate(
+                node.GetProperty("id").GetString()
+                    ?? throw new JsonException("Project status update contained an empty id."),
+                new StatusUpdateSnapshot
+                {
+                    Body = node.GetProperty("body").GetString() ?? string.Empty,
+                    Status = GetOptionalString(node, "status"),
+                    StartDate = GetOptionalString(node, "startDate"),
+                    TargetDate = GetOptionalString(node, "targetDate"),
+                    CreatedAt = node.GetProperty("createdAt").GetString() ?? string.Empty,
+                    UpdatedAt = node.GetProperty("updatedAt").GetString() ?? string.Empty,
+                }));
         }
 
         return updates;
@@ -913,6 +978,8 @@ public sealed class FixtureProjectBuilder
     }
 
     private sealed record ProjectRef(string Id, int Number, string Url);
+
+    internal sealed record FixtureStatusUpdate(string Id, StatusUpdateSnapshot Update);
 }
 
 public sealed record FixtureProjectSetupResult(int ProjectNumber, string Url, bool Created);

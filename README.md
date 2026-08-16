@@ -172,6 +172,8 @@ Read-only GraphQL queries and explicitly idempotent updates are retried after tr
 
 Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending. Project-to-Issue-Field linking is idempotent: a pending link is resent with its recorded client mutation ID and cleared after a definitive success. Resume stops for manual reconciliation if the recorded project or Issue Field no longer matches the current target.
 
+Status Update creation is stricter because GitHub exposes neither an idempotency key nor a deterministic lookup key. Only a target Status Update node ID returned by the create mutation and persisted in `import-log.json` is accepted as completion. If the result is ambiguous before that ID is persisted, the pending entry remains durable and reruns fail with actionable manual-reconciliation instructions; body, status, and dates are never used to claim an existing or concurrent update.
+
 If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
 
 ### User-owned projects

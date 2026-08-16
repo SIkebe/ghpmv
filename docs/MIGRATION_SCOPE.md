@@ -85,7 +85,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 | Area | Supported? | Notes |
 |---|---:|---|
 | `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
-| Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. |
+| Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. An ambiguous Status Update create that did not persist its target ID keeps durable pending state and requires manual reconciliation instead of claiming a body/status/date match. |
 | Mapping CSV templates | ✅ | `export` writes repository, organization, and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
 | Update check opt-out | ✅ | Use `--no-update-check` or `GHPMV_NO_UPDATE_CHECK`. No telemetry is sent. |

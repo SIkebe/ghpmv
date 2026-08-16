@@ -641,7 +641,6 @@ public class ItemImporterLogicTests
             {
                 OperationId = "operation-status-1",
                 ProjectId = "PVT_status",
-                ExistingStatusUpdateIds = ["SU_existing_a", "SU_existing_b"],
             };
             await log.SaveAsync(directory, cancellationToken);
 
@@ -658,7 +657,6 @@ public class ItemImporterLogicTests
             Assert.Equal("1", pending.Key);
             Assert.Equal("operation-status-1", pending.Value.OperationId);
             Assert.Equal("PVT_status", pending.Value.ProjectId);
-            Assert.Equal(["SU_existing_a", "SU_existing_b"], pending.Value.ExistingStatusUpdateIds);
 
             // The item sections stay independent of the status-update sections.
             Assert.Empty(loaded.Items);
@@ -866,7 +864,7 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
-    public async Task ImportLog_rejects_pending_status_update_with_missing_operation_id_or_existing_ids()
+    public async Task ImportLog_rejects_pending_status_update_with_missing_operation_or_project_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-pending-").FullName;
@@ -874,14 +872,11 @@ public class ItemImporterLogicTests
         {
             var path = Path.Combine(directory, ImportLog.FileName);
 
-            // Each field of the pending record is required for safe reconciliation:
-            // without them an ambiguous create cannot be matched to a target update.
+            // Both fields identify the operation that must be reconciled manually.
             var invalidPayloads = new[]
             {
-                """{"operationId":"  ","projectId":"PVT_target","existingStatusUpdateIds":[]}""",
-                """{"operationId":"op-0","projectId":"","existingStatusUpdateIds":[]}""",
-                """{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":null}""",
-                """{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":["SU_ok"," "]}""",
+                """{"operationId":"  ","projectId":"PVT_target"}""",
+                """{"operationId":"op-0","projectId":""}""",
             };
 
             foreach (var payload in invalidPayloads)
@@ -901,13 +896,12 @@ public class ItemImporterLogicTests
                 path,
                 StatusUpdateLogJson(
                     "{}",
-                    """{"0":{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":["SU_ok"]}}"""),
+                    """{"0":{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":["legacy-baseline-is-ignored"]}}"""),
                 cancellationToken);
             var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
             var pending = Assert.Single(loaded!.PendingStatusUpdates).Value;
             Assert.Equal("op-0", pending.OperationId);
             Assert.Equal("PVT_target", pending.ProjectId);
-            Assert.Equal(["SU_ok"], pending.ExistingStatusUpdateIds);
         }
         finally
         {

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 
@@ -79,19 +78,11 @@ public sealed class StatusUpdateImporter
             string? targetId = null;
             if (log.PendingStatusUpdates.TryGetValue(key, out var pending))
             {
-                if (!string.Equals(pending.ProjectId, target.ProjectId, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Pending status update operation '{pending.OperationId}' does not match target project '{target.ProjectId}'.");
-                }
-
-                targetId = await ReconcilePendingAsync(
-                    pending,
-                    entry.Update,
-                    log.StatusUpdates.Values,
-                    cancellationToken).ConfigureAwait(false);
-                resumed++;
-                OnProgress?.Invoke($"{prefix} Reconciled status update at snapshot sequence {entry.SourceIndex} to target '{targetId}'.");
+                throw new StatusUpdateReconciliationRequiredException(
+                    pending.OperationId,
+                    pending.ProjectId,
+                    entry.SourceIndex,
+                    Path.Combine(logDirectory, ImportLog.FileName));
             }
             else
             {
@@ -100,7 +91,6 @@ public sealed class StatusUpdateImporter
                 {
                     OperationId = operationId,
                     ProjectId = target.ProjectId,
-                    ExistingStatusUpdateIds = [.. await FetchStatusUpdateIdsAsync(target.ProjectId, cancellationToken).ConfigureAwait(false)],
                 };
                 log.PendingStatusUpdates[key] = pending;
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
@@ -262,120 +252,6 @@ public sealed class StatusUpdateImporter
             ?? throw new GitHubGraphQLException("createProjectV2StatusUpdate returned an empty status update id.");
     }
 
-    private async Task<string> ReconcilePendingAsync(
-        PendingStatusUpdateOperation pending,
-        StatusUpdateSnapshot expected,
-        IEnumerable<string> mappedIds,
-        CancellationToken cancellationToken)
-    {
-        var baseline = pending.ExistingStatusUpdateIds.ToHashSet(StringComparer.Ordinal);
-        baseline.UnionWith(mappedIds);
-        for (var attempt = 0; attempt < 3; attempt++)
-        {
-            var candidates = (await FetchStatusUpdatesAsync(pending.ProjectId, cancellationToken).ConfigureAwait(false))
-                .Where(candidate => !baseline.Contains(candidate.Id)
-                    && StatusUpdateMatches(candidate, expected))
-                .ToArray();
-            if (candidates.Length == 1)
-            {
-                return candidates[0].Id;
-            }
-
-            if (candidates.Length > 1)
-            {
-                throw new InvalidOperationException(
-                    $"Pending status update operation '{pending.OperationId}' matches multiple new target updates. Reconcile the target manually.");
-            }
-
-            if (attempt < 2)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(attempt + 1), cancellationToken).ConfigureAwait(false);
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"Pending status update operation '{pending.OperationId}' could not be reconciled by target id. Refusing to create a possible duplicate.");
-    }
-
-    private async Task<List<string>> FetchStatusUpdateIdsAsync(string projectId, CancellationToken cancellationToken)
-    {
-        var ids = new List<string>();
-        await foreach (var node in _client.QueryPaginatedAsync(
-            """
-            query($projectId: ID!, $first: Int!, $after: String) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
-                    nodes { id }
-                    pageInfo { hasNextPage endCursor }
-                  }
-                }
-              }
-            }
-            """,
-            new { projectId, first = 100 },
-            "node.statusUpdates",
-            cancellationToken: cancellationToken).ConfigureAwait(false))
-        {
-            ids.Add(node.GetProperty("id").GetString()
-                ?? throw new JsonException("Project status update contained an empty id."));
-        }
-
-        return ids;
-    }
-
-    private async Task<List<TargetStatusUpdate>> FetchStatusUpdatesAsync(
-        string projectId,
-        CancellationToken cancellationToken)
-    {
-        var updates = new List<TargetStatusUpdate>();
-        await foreach (var node in _client.QueryPaginatedAsync(
-            """
-            query($projectId: ID!, $first: Int!, $after: String) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
-                    nodes { id body status startDate targetDate }
-                    pageInfo { hasNextPage endCursor }
-                  }
-                }
-              }
-            }
-            """,
-            new { projectId, first = 100 },
-            "node.statusUpdates",
-            cancellationToken: cancellationToken).ConfigureAwait(false))
-        {
-            updates.Add(new TargetStatusUpdate(
-                node.GetProperty("id").GetString()
-                    ?? throw new JsonException("Project status update contained an empty id."),
-                node.GetProperty("body").GetString() ?? string.Empty,
-                GetOptionalString(node, "status"),
-                GetOptionalString(node, "startDate"),
-                GetOptionalString(node, "targetDate")));
-        }
-
-        return updates;
-    }
-
-    private bool StatusUpdateMatches(TargetStatusUpdate candidate, StatusUpdateSnapshot expected)
-        => string.Equals(
-                NormalizeBody(candidate.Body),
-                NormalizeBody(AddAttributionNote ? BuildImportedBody(expected) : expected.Body),
-                StringComparison.Ordinal)
-            && string.Equals(candidate.Status, expected.Status, StringComparison.Ordinal)
-            && string.Equals(candidate.StartDate, expected.StartDate, StringComparison.Ordinal)
-            && string.Equals(candidate.TargetDate, expected.TargetDate, StringComparison.Ordinal);
-
-    private static string NormalizeBody(string body)
-        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
-
-    private static string? GetOptionalString(JsonElement element, string propertyName)
-        => element.TryGetProperty(propertyName, out var value)
-            && value.ValueKind == JsonValueKind.String
-                ? value.GetString()
-                : null;
-
     private static StatusUpdateImportResult EmptyResult() => new()
     {
         Created = 0,
@@ -387,11 +263,4 @@ public sealed class StatusUpdateImporter
         StatusUpdateSnapshot Update,
         int SourceIndex,
         DateTimeOffset CreatedAt);
-
-    private sealed record TargetStatusUpdate(
-        string Id,
-        string Body,
-        string? Status,
-        string? StartDate,
-        string? TargetDate);
 }

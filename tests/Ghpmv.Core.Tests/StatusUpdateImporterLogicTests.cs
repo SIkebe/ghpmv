@@ -500,7 +500,7 @@ public class StatusUpdateImporterLogicTests
 
             // An empty id is indistinguishable from "the result never arrived": the
             // client refuses to treat it as success, so the create stays ambiguous and
-            // the pending record survives for id-based reconciliation.
+            // the pending record survives for explicit manual reconciliation.
             var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
                 () => new StatusUpdateImporter(client).ImportAsync(
                     CreateSnapshot(SnapshotUpdate("Body")),

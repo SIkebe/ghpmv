@@ -259,7 +259,6 @@ public class CliImportTests
             UpdateProjectResponse,
             EmptyFieldsResponse,
             NonTemplateProjectResponse,
-            EmptyTargetStatusUpdateIdsResponse,
             CreateStatusUpdateResponse);
         try
         {
@@ -278,7 +277,7 @@ public class CliImportTests
 
             // The stdout contract is additive: the new line reports real work, and the
             // created update carries the attribution note plus the snapshot's dates.
-            Assert.Equal(6, server.RequestBodies.Count);
+            Assert.Equal(5, server.RequestBodies.Count);
             var createRequest = Assert.Single(
                 server.RequestBodies,
                 request => request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
@@ -369,7 +368,6 @@ public class CliImportTests
                 EmptyFieldsResponse,
                 TemplateProjectResponse,
                 UnmarkTemplateResponse,
-                EmptyTargetStatusUpdateIdsResponse,
                 CreateStatusUpdateResponse,
                 MarkTemplateResponse);
             var withResult = await RunCliAsync(withDirectory, withServer, "--on-conflict", "update");
@@ -379,7 +377,7 @@ public class CliImportTests
                 "status-updates: created=1 resumed=0 already-complete=0",
                 withResult.Output,
                 StringComparison.Ordinal);
-            Assert.Equal(8, withServer.RequestBodies.Count);
+            Assert.Equal(7, withServer.RequestBodies.Count);
             Assert.Single(withServer.RequestBodies, IsUnmarkTemplateMutation);
             Assert.Single(withServer.RequestBodies, IsMarkTemplateMutation);
             Assert.Single(withServer.RequestBodies, request =>
@@ -405,7 +403,6 @@ public class CliImportTests
             EmptyFieldsResponse,
             TemplateProjectResponse,
             UnmarkTemplateResponse,
-            EmptyTargetStatusUpdateIdsResponse,
             CreateStatusUpdateResponse,
             MarkTemplateResponse);
         try
@@ -413,7 +410,7 @@ public class CliImportTests
             var result = await RunCliAsync(directory, server, "--on-conflict", "update");
 
             Assert.Equal(0, result.ExitCode);
-            Assert.Equal(8, server.RequestBodies.Count);
+            Assert.Equal(7, server.RequestBodies.Count);
 
             var unmarkIndex = server.RequestBodies.FindIndex(IsUnmarkTemplateMutation);
             var createIndex = server.RequestBodies.FindIndex(request =>
@@ -465,7 +462,6 @@ public class CliImportTests
             EmptyFieldsResponse,
             TemplateProjectResponse,
             UnmarkTemplateResponse,
-            EmptyTargetStatusUpdateIdsResponse,
             CreateStatusUpdateResponse,
             TemplateMutationErrorResponse);
         try
@@ -754,13 +750,6 @@ public class CliImportTests
 
     private const string TemplateMutationErrorResponse =
         """{"errors":[{"type":"FORBIDDEN","message":"Template restore is not permitted."}]}""";
-
-    private const string EmptyTargetStatusUpdateIdsResponse =
-        """
-        {"data":{"node":{
-          "statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
-        }}}
-        """;
 
     private const string CreateStatusUpdateResponse =
         """{"data":{"createProjectV2StatusUpdate":{"statusUpdate":{"id":"PVTSU_imported"}}}}""";

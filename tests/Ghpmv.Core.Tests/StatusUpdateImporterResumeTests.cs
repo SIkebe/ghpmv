@@ -12,9 +12,9 @@ namespace Ghpmv.Core.Tests;
 /// Crash-resume and reconciliation tests for <see cref="StatusUpdateImporter"/> (issue #46).
 /// GitHub exposes no idempotency key for <c>createProjectV2StatusUpdate</c> and no way to
 /// rely on a create idempotency key, so resume is driven by the target node ids persisted
-/// in <c>import-log.json</c>: a pending record is written *before* the mutation leaves the
-/// process, and an ambiguous result is reconciled by diffing the target history against
-/// the recorded baseline and validating the candidate against the pending snapshot entry.
+/// in <c>import-log.json</c>. A pending record is written before the mutation leaves the
+/// process, and an ambiguous result without a persisted target ID fails closed for manual
+/// reconciliation rather than claiming a target update by mutable content.
 /// </summary>
 public class StatusUpdateImporterResumeTests
 {
@@ -26,7 +26,6 @@ public class StatusUpdateImporterResumeTests
         {
             var cancellationToken = TestContext.Current.CancellationToken;
             using var handler = new ResumeHandler(directory) { Ambiguous = true };
-            handler.TargetStatusUpdateIds.Add("PVTSU_existing");
             using var client = CreateClient(handler);
 
             await Assert.ThrowsAsync<AmbiguousMutationResultException>(
@@ -37,10 +36,8 @@ public class StatusUpdateImporterResumeTests
                     cancellationToken));
 
             // The log was already on disk when the create was observed, so a process
-            // crash between send and response is still resumable.
+            // crash between send and response leaves actionable durable state.
             Assert.True(handler.PendingWasPresentAtMutation);
-            Assert.NotNull(handler.PendingBaselineAtMutation);
-            Assert.Equal(["PVTSU_existing"], handler.PendingBaselineAtMutation);
 
             var log = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(log);
@@ -48,8 +45,8 @@ public class StatusUpdateImporterResumeTests
             Assert.Equal("0", pending.Key);
             Assert.Equal(handler.ClientMutationId, pending.Value.OperationId);
             Assert.Equal(Target.ProjectId, pending.Value.ProjectId);
-            Assert.Equal(["PVTSU_existing"], pending.Value.ExistingStatusUpdateIds);
             Assert.Empty(log.StatusUpdates);
+            Assert.Equal(0, handler.FetchCount);
         }
         finally
         {
@@ -58,21 +55,16 @@ public class StatusUpdateImporterResumeTests
     }
 
     [Fact]
-    public async Task Ambiguous_create_survives_in_the_log_and_is_reconciled_by_target_id_without_resending()
+    public async Task Pending_create_with_an_exact_unique_content_match_fails_closed_without_querying_or_resending()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
         try
         {
             var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory)
-            {
-                Ambiguous = true,
-                AmbiguousCandidateUsesCrLf = true,
-            };
+            using var handler = new ResumeHandler(directory) { Ambiguous = true };
             using var client = CreateClient(handler);
             var snapshot = CreateSnapshot(Update("Line one\nLine two"));
             var importer = new StatusUpdateImporter(client);
-            var progress = new List<string>();
 
             await Assert.ThrowsAsync<AmbiguousMutationResultException>(
                 () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
@@ -82,23 +74,29 @@ public class StatusUpdateImporterResumeTests
             var operationId = Assert.Single(pendingLog.PendingStatusUpdates).Value.OperationId;
             Assert.Equal(handler.ClientMutationId, operationId);
 
-            // The create did reach GitHub; the response did not reach us.
-            handler.Resume = true;
-            var resumingImporter = new StatusUpdateImporter(client) { OnProgress = progress.Add };
-            var result = await resumingImporter.ImportAsync(snapshot, Target, directory, cancellationToken);
+            var exception = await Assert.ThrowsAsync<StatusUpdateReconciliationRequiredException>(
+                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
 
             Assert.Equal(1, handler.CreateMutationCount);
-            Assert.Equal(0, result.Created);
-            Assert.Equal(1, result.Resumed);
-            Assert.Equal(0, result.AlreadyComplete);
+            Assert.Equal(0, handler.FetchCount);
+            Assert.Single(handler.AmbiguousTargetBodies);
+            Assert.EndsWith(
+                "Line one\nLine two",
+                handler.AmbiguousTargetBodies[0],
+                StringComparison.Ordinal);
+            Assert.Equal(operationId, exception.OperationId);
+            Assert.Equal(Target.ProjectId, exception.ProjectId);
+            Assert.Equal(0, exception.SourceIndex);
+            Assert.Equal(Path.Combine(directory, ImportLog.FileName), exception.ImportLogPath);
+            Assert.Contains(
+                "Automatic content-based reconciliation is disabled",
+                exception.Message,
+                StringComparison.Ordinal);
 
             var log = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(log);
-            Assert.Equal("PVTSU_ambiguous_1", log.StatusUpdates["0"]);
-            Assert.Empty(log.PendingStatusUpdates);
-            Assert.Contains(
-                "[1/1] Reconciled status update at snapshot sequence 0 to target 'PVTSU_ambiguous_1'.",
-                progress);
+            Assert.Empty(log.StatusUpdates);
+            Assert.Equal(operationId, Assert.Single(log.PendingStatusUpdates).Value.OperationId);
         }
         finally
         {
@@ -107,7 +105,7 @@ public class StatusUpdateImporterResumeTests
     }
 
     [Fact]
-    public async Task Reconciliation_rejects_multiple_new_candidates()
+    public async Task Pending_create_never_claims_one_of_concurrent_identical_updates()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
         try
@@ -119,156 +117,29 @@ public class StatusUpdateImporterResumeTests
                 AmbiguousCandidates = 2,
             };
             using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(Update("Only"));
+            var snapshot = CreateSnapshot(Update("Identical concurrent body"));
             var importer = new StatusUpdateImporter(client);
 
             await Assert.ThrowsAsync<AmbiguousMutationResultException>(
                 () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
             var operationId = handler.ClientMutationId;
-            handler.Resume = true;
-
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            var exception = await Assert.ThrowsAsync<StatusUpdateReconciliationRequiredException>(
                 () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
 
-            Assert.Equal(
-                $"Pending status update operation '{operationId}' matches multiple new target updates. Reconcile the target manually.",
-                exception.Message);
-
-            // Refusing beats guessing: nothing was created and nothing was mapped.
             Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(0, handler.FetchCount);
+            Assert.Equal(2, handler.AmbiguousTargetBodies.Count);
+            Assert.All(
+                handler.AmbiguousTargetBodies,
+                body => Assert.EndsWith(
+                    "Identical concurrent body",
+                    body,
+                    StringComparison.Ordinal));
+            Assert.Equal(operationId, exception.OperationId);
             var log = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(log);
             Assert.Empty(log.StatusUpdates);
-            Assert.Single(log.PendingStatusUpdates);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Reconciliation_that_finds_nothing_refuses_to_create_a_possible_duplicate()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
-        try
-        {
-            var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory)
-            {
-                Ambiguous = true,
-                AmbiguousCandidates = 0,
-            };
-            using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(Update("Only"));
-            var importer = new StatusUpdateImporter(client);
-
-            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
-                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
-            var operationId = handler.ClientMutationId;
-            var fetchesAfterFirstRun = handler.FetchCount;
-            handler.Resume = true;
-
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
-
-            Assert.Equal(
-                $"Pending status update operation '{operationId}' could not be reconciled by target id. Refusing to create a possible duplicate.",
-                exception.Message);
-
-            // Three fetch attempts, and crucially no second create: an unreconciled
-            // pending record must never turn into a duplicate status update.
-            Assert.Equal(3, handler.FetchCount - fetchesAfterFirstRun);
-            Assert.Equal(1, handler.CreateMutationCount);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Reconciliation_rejects_a_sole_unrelated_new_status_update()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
-        try
-        {
-            var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory)
-            {
-                Ambiguous = true,
-                AmbiguousCandidateMatchesExpected = false,
-            };
-            using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(Update("Expected body"));
-            var importer = new StatusUpdateImporter(client);
-
-            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
-                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
-            handler.Resume = true;
-
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
-
-            Assert.Contains(
-                "could not be reconciled by target id",
-                exception.Message,
-                StringComparison.Ordinal);
-            Assert.Equal(1, handler.CreateMutationCount);
-            var log = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.NotNull(log);
-            Assert.Empty(log.StatusUpdates);
-            Assert.Single(log.PendingStatusUpdates);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Reconciliation_baseline_excludes_ids_already_mapped_in_the_log()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
-        try
-        {
-            var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory)
-            {
-                HideCreatedIdsUntilResume = true,
-                AmbiguousAtCreate = 2,
-            };
-            using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(
-                Update("Newest", createdAt: "2026-01-03T09:00:00Z"),
-                Update("Oldest", createdAt: "2026-01-01T09:00:00Z"));
-            var importer = new StatusUpdateImporter(client);
-
-            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
-                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
-
-            var pendingLog = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.NotNull(pendingLog);
-            Assert.Equal("PVTSU_created_1", pendingLog.StatusUpdates["1"]);
-
-            // The first created id is missing from the pending baseline (the target
-            // history had not caught up yet), so only the union with the already-mapped
-            // ids keeps it out of the candidate set.
-            Assert.DoesNotContain(
-                "PVTSU_created_1",
-                Assert.Single(pendingLog.PendingStatusUpdates).Value.ExistingStatusUpdateIds);
-
-            handler.Resume = true;
-            var result = await importer.ImportAsync(snapshot, Target, directory, cancellationToken);
-
-            Assert.Equal(0, result.Created);
-            Assert.Equal(1, result.Resumed);
-            Assert.Equal(1, result.AlreadyComplete);
-            var log = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.NotNull(log);
-            Assert.Equal("PVTSU_created_1", log.StatusUpdates["1"]);
-            Assert.Equal("PVTSU_ambiguous_1", log.StatusUpdates["0"]);
-            Assert.Empty(log.PendingStatusUpdates);
+            Assert.Equal(operationId, Assert.Single(log.PendingStatusUpdates).Value.OperationId);
         }
         finally
         {
@@ -302,40 +173,6 @@ public class StatusUpdateImporterResumeTests
             Assert.NotNull(log);
             Assert.Empty(log.PendingStatusUpdates);
             Assert.Empty(log.StatusUpdates);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Failure_before_the_mutation_clears_the_pending_operation()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
-        try
-        {
-            var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory) { FailFetchAt = 2 };
-            using var client = CreateClient(handler);
-            var snapshot = CreateSnapshot(
-                Update("Newest", createdAt: "2026-01-03T09:00:00Z"),
-                Update("Oldest", createdAt: "2026-01-01T09:00:00Z"));
-
-            await Assert.ThrowsAsync<GitHubGraphQLException>(
-                () => new StatusUpdateImporter(client).ImportAsync(
-                    snapshot,
-                    Target,
-                    directory,
-                    cancellationToken));
-
-            // The baseline read for the second update failed before anything was sent:
-            // the first update stays mapped and no pending record is left behind.
-            Assert.Equal(1, handler.CreateMutationCount);
-            var log = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.NotNull(log);
-            Assert.Equal("PVTSU_created_1", Assert.Single(log.StatusUpdates).Value);
-            Assert.Empty(log.PendingStatusUpdates);
         }
         finally
         {
@@ -447,7 +284,6 @@ public class StatusUpdateImporterResumeTests
             {
                 OperationId = "operation-from-another-run",
                 ProjectId = "PVT_other_project",
-                ExistingStatusUpdateIds = [],
             };
             await log.SaveAsync(directory, cancellationToken);
 
@@ -513,41 +349,6 @@ public class StatusUpdateImporterResumeTests
         }
     }
 
-    [Fact]
-    public async Task Status_update_id_fetch_paginates_the_target_history()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
-        try
-        {
-            var cancellationToken = TestContext.Current.CancellationToken;
-            using var handler = new ResumeHandler(directory) { PageSize = 1, Ambiguous = true };
-            handler.TargetStatusUpdateIds.AddRange(["PVTSU_page_one", "PVTSU_page_two"]);
-            using var client = CreateClient(handler);
-
-            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
-                () => new StatusUpdateImporter(client).ImportAsync(
-                    CreateSnapshot(Update("Only")),
-                    Target,
-                    directory,
-                    cancellationToken));
-
-            // A truncated baseline would make an already-known update look "new" and
-            // let reconciliation adopt the wrong node.
-            Assert.Equal(2, handler.FetchCount);
-            Assert.NotNull(handler.PendingBaselineAtMutation);
-            Assert.Equal(
-                ["PVTSU_page_one", "PVTSU_page_two"],
-                handler.PendingBaselineAtMutation);
-            Assert.Contains(
-                handler.RequestBodies,
-                body => body.Contains("\"after\":\"cursor-1\"", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
     private static StatusUpdateSnapshot Update(
         string body,
         string status = "ON_TRACK",
@@ -588,42 +389,23 @@ public class StatusUpdateImporterResumeTests
     };
 
     /// <summary>
-    /// Models the target project's status-update history: the id fetch reports
-    /// <see cref="TargetStatusUpdateIds"/> (optionally paged), and the create mutation
-    /// appends to it. <see cref="Ambiguous"/> simulates "the side effect happened but the
-    /// response was lost" — the new id only becomes visible once <see cref="Resume"/> is set.
+    /// Models the target project's status-update history and create mutation.
+    /// <see cref="Ambiguous"/> simulates the side effect succeeding while the response is lost.
     /// </summary>
     private sealed class ResumeHandler(string logDirectory) : HttpMessageHandler
     {
         /// <summary>Makes the create mutation fail ambiguously (transport failure after send).</summary>
         public bool Ambiguous { get; set; }
 
-        /// <summary>1-based create-mutation ordinal that fails ambiguously; 0 uses <see cref="Ambiguous"/>.</summary>
-        public int AmbiguousAtCreate { get; init; }
-
-        /// <summary>Reveals the ambiguous create's side effect, as a later run would see it.</summary>
-        public bool Resume { get; set; }
-
         /// <summary>How many new ids the ambiguous create left behind on the target.</summary>
         public int AmbiguousCandidates { get; init; } = 1;
-
-        public bool AmbiguousCandidateMatchesExpected { get; init; } = true;
-
-        public bool AmbiguousCandidateUsesCrLf { get; init; }
 
         /// <summary>Fails the create with a definitive, pre-side-effect GraphQL error.</summary>
         public bool FailDefinitively { get; init; }
 
-        /// <summary>1-based id-fetch ordinal that fails; 0 never fails.</summary>
-        public int FailFetchAt { get; init; }
-
-        /// <summary>Withholds ids created in this process from the fetch until <see cref="Resume"/>.</summary>
-        public bool HideCreatedIdsUntilResume { get; init; }
-
-        /// <summary>Ids per page of the target-history fetch.</summary>
-        public int PageSize { get; init; } = 100;
-
         public List<string> TargetStatusUpdateIds { get; } = [];
+
+        public List<string> AmbiguousTargetBodies { get; } = [];
 
         public List<string> RequestBodies { get; } = [];
 
@@ -639,12 +421,6 @@ public class StatusUpdateImporterResumeTests
 
         public bool PendingWasPresentAtMutation { get; private set; }
 
-        public string[]? PendingBaselineAtMutation { get; private set; }
-
-        private readonly HashSet<string> _createdIds = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, CandidateStatusUpdate> _createdUpdates = new(StringComparer.Ordinal);
-        private CandidateStatusUpdate? _lastCreate;
-
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
@@ -658,12 +434,8 @@ public class StatusUpdateImporterResumeTests
             if (query.Contains("statusUpdates(first: $first", StringComparison.Ordinal))
             {
                 FetchCount++;
-                if (FailFetchAt == FetchCount)
-                {
-                    return Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Baseline read failed"}]}""");
-                }
-
-                return Json(FetchPage(variables));
+                return Json(
+                    """{"data":{"node":{"statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
             }
 
             if (query.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal))
@@ -672,98 +444,34 @@ public class StatusUpdateImporterResumeTests
                 MutationOperations.Add("createProjectV2StatusUpdate");
                 CreateBodies.Add(variables.GetProperty("body").GetString() ?? string.Empty);
                 ClientMutationId = variables.GetProperty("clientMutationId").GetString();
-                _lastCreate = new CandidateStatusUpdate(
-                    variables.GetProperty("body").GetString() ?? string.Empty,
-                    OptionalString(variables, "status"),
-                    OptionalString(variables, "startDate"),
-                    OptionalString(variables, "targetDate"));
 
                 var log = await ImportLog.LoadAsync(logDirectory, cancellationToken);
                 PendingWasPresentAtMutation = log?.PendingStatusUpdates.Count == 1;
-                PendingBaselineAtMutation = log?.PendingStatusUpdates.Values.FirstOrDefault()?.ExistingStatusUpdateIds;
 
                 if (FailDefinitively)
                 {
                     return Json("""{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Invalid input"}]}""");
                 }
 
-                if (Ambiguous || AmbiguousAtCreate == CreateMutationCount)
+                if (Ambiguous)
                 {
+                    for (var candidate = 1; candidate <= AmbiguousCandidates; candidate++)
+                    {
+                        TargetStatusUpdateIds.Add(
+                            "PVTSU_ambiguous_" + candidate.ToString(CultureInfo.InvariantCulture));
+                        AmbiguousTargetBodies.Add(
+                            variables.GetProperty("body").GetString() ?? string.Empty);
+                    }
                     throw new HttpRequestException("Response ended prematurely.");
                 }
 
                 var id = "PVTSU_created_" + CreateMutationCount.ToString(CultureInfo.InvariantCulture);
                 TargetStatusUpdateIds.Add(id);
-                _createdIds.Add(id);
-                _createdUpdates[id] = _lastCreate;
                 return Json("{\"data\":{\"createProjectV2StatusUpdate\":{\"statusUpdate\":{\"id\":\"" + id + "\"}}}}");
             }
 
             throw new InvalidOperationException($"Unexpected GraphQL operation: {query}");
         }
-
-        private string FetchPage(JsonElement variables)
-        {
-            var visible = TargetStatusUpdateIds
-                .Where(id => Resume || !HideCreatedIdsUntilResume || !_createdIds.Contains(id))
-                .ToList();
-            if (Resume)
-            {
-                for (var candidate = 1; candidate <= AmbiguousCandidates; candidate++)
-                {
-                    visible.Add("PVTSU_ambiguous_" + candidate.ToString(CultureInfo.InvariantCulture));
-                }
-            }
-
-            var after = variables.TryGetProperty("after", out var cursor) && cursor.ValueKind == JsonValueKind.String
-                ? cursor.GetString()
-                : null;
-            var skip = after is null
-                ? 0
-                : int.Parse(after["cursor-".Length..], CultureInfo.InvariantCulture) * PageSize;
-            var page = visible.Skip(skip).Take(PageSize).ToList();
-            var hasNextPage = visible.Count > skip + page.Count;
-            var pageIndex = (skip / PageSize) + 1;
-            var nodes = string.Join(",", page.Select(BuildNode));
-            return "{\"data\":{\"node\":{\"statusUpdates\":{\"nodes\":[" + nodes +
-                "],\"pageInfo\":{\"hasNextPage\":" + (hasNextPage ? "true" : "false") +
-                ",\"endCursor\":\"cursor-" + pageIndex.ToString(CultureInfo.InvariantCulture) + "\"}}}}}";
-        }
-
-        private string BuildNode(string id)
-        {
-            var update = id.StartsWith("PVTSU_ambiguous_", StringComparison.Ordinal)
-                ? AmbiguousCandidateMatchesExpected
-                    ? AmbiguousCandidateUsesCrLf && _lastCreate is not null
-                        ? _lastCreate with
-                        {
-                            Body = _lastCreate.Body.Replace("\n", "\r\n", StringComparison.Ordinal),
-                        }
-                        : _lastCreate
-                    : new CandidateStatusUpdate("Unrelated body", "OFF_TRACK", null, null)
-                : _createdUpdates.GetValueOrDefault(id);
-            update ??= new CandidateStatusUpdate("Existing body", "ON_TRACK", null, null);
-            return JsonSerializer.Serialize(new
-            {
-                id,
-                body = update.Body,
-                status = update.Status,
-                startDate = update.StartDate,
-                targetDate = update.TargetDate,
-            });
-        }
-
-        private static string? OptionalString(JsonElement variables, string propertyName)
-            => variables.TryGetProperty(propertyName, out var value)
-                && value.ValueKind == JsonValueKind.String
-                    ? value.GetString()
-                    : null;
-
-        private sealed record CandidateStatusUpdate(
-            string Body,
-            string? Status,
-            string? StartDate,
-            string? TargetDate);
 
         private static HttpResponseMessage Json(string body)
             => new(HttpStatusCode.OK)
