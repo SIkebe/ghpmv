@@ -11,10 +11,10 @@ namespace Ghpmv.Core.Tests;
 /// <summary>
 /// Crash-resume and reconciliation tests for <see cref="StatusUpdateImporter"/> (issue #46).
 /// GitHub exposes no idempotency key for <c>createProjectV2StatusUpdate</c> and no way to
-/// look an update up by content, so resume is entirely driven by the target node ids
-/// persisted in <c>import-log.json</c>: a pending record is written *before* the mutation
-/// leaves the process, and an ambiguous result is reconciled by diffing the target history
-/// against the recorded baseline instead of re-sending the create.
+/// rely on a create idempotency key, so resume is driven by the target node ids persisted
+/// in <c>import-log.json</c>: a pending record is written *before* the mutation leaves the
+/// process, and an ambiguous result is reconciled by diffing the target history against
+/// the recorded baseline and validating the candidate against the pending snapshot entry.
 /// </summary>
 public class StatusUpdateImporterResumeTests
 {
@@ -176,6 +176,45 @@ public class StatusUpdateImporterResumeTests
             // pending record must never turn into a duplicate status update.
             Assert.Equal(3, handler.FetchCount - fetchesAfterFirstRun);
             Assert.Equal(1, handler.CreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Reconciliation_rejects_a_sole_unrelated_new_status_update()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-status-resume-").FullName;
+        try
+        {
+            var cancellationToken = TestContext.Current.CancellationToken;
+            using var handler = new ResumeHandler(directory)
+            {
+                Ambiguous = true,
+                AmbiguousCandidateMatchesExpected = false,
+            };
+            using var client = CreateClient(handler);
+            var snapshot = CreateSnapshot(Update("Expected body"));
+            var importer = new StatusUpdateImporter(client);
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
+            handler.Resume = true;
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(snapshot, Target, directory, cancellationToken));
+
+            Assert.Contains(
+                "could not be reconciled by target id",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.Equal(1, handler.CreateMutationCount);
+            var log = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(log);
+            Assert.Empty(log.StatusUpdates);
+            Assert.Single(log.PendingStatusUpdates);
         }
         finally
         {
@@ -564,6 +603,8 @@ public class StatusUpdateImporterResumeTests
         /// <summary>How many new ids the ambiguous create left behind on the target.</summary>
         public int AmbiguousCandidates { get; init; } = 1;
 
+        public bool AmbiguousCandidateMatchesExpected { get; init; } = true;
+
         /// <summary>Fails the create with a definitive, pre-side-effect GraphQL error.</summary>
         public bool FailDefinitively { get; init; }
 
@@ -595,6 +636,8 @@ public class StatusUpdateImporterResumeTests
         public string[]? PendingBaselineAtMutation { get; private set; }
 
         private readonly HashSet<string> _createdIds = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, CandidateStatusUpdate> _createdUpdates = new(StringComparer.Ordinal);
+        private CandidateStatusUpdate? _lastCreate;
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -623,6 +666,11 @@ public class StatusUpdateImporterResumeTests
                 MutationOperations.Add("createProjectV2StatusUpdate");
                 CreateBodies.Add(variables.GetProperty("body").GetString() ?? string.Empty);
                 ClientMutationId = variables.GetProperty("clientMutationId").GetString();
+                _lastCreate = new CandidateStatusUpdate(
+                    variables.GetProperty("body").GetString() ?? string.Empty,
+                    OptionalString(variables, "status"),
+                    OptionalString(variables, "startDate"),
+                    OptionalString(variables, "targetDate"));
 
                 var log = await ImportLog.LoadAsync(logDirectory, cancellationToken);
                 PendingWasPresentAtMutation = log?.PendingStatusUpdates.Count == 1;
@@ -641,6 +689,7 @@ public class StatusUpdateImporterResumeTests
                 var id = "PVTSU_created_" + CreateMutationCount.ToString(CultureInfo.InvariantCulture);
                 TargetStatusUpdateIds.Add(id);
                 _createdIds.Add(id);
+                _createdUpdates[id] = _lastCreate;
                 return Json("{\"data\":{\"createProjectV2StatusUpdate\":{\"statusUpdate\":{\"id\":\"" + id + "\"}}}}");
             }
 
@@ -669,11 +718,41 @@ public class StatusUpdateImporterResumeTests
             var page = visible.Skip(skip).Take(PageSize).ToList();
             var hasNextPage = visible.Count > skip + page.Count;
             var pageIndex = (skip / PageSize) + 1;
-            var nodes = string.Join(",", page.Select(id => "{\"id\":\"" + id + "\"}"));
+            var nodes = string.Join(",", page.Select(BuildNode));
             return "{\"data\":{\"node\":{\"statusUpdates\":{\"nodes\":[" + nodes +
                 "],\"pageInfo\":{\"hasNextPage\":" + (hasNextPage ? "true" : "false") +
                 ",\"endCursor\":\"cursor-" + pageIndex.ToString(CultureInfo.InvariantCulture) + "\"}}}}}";
         }
+
+        private string BuildNode(string id)
+        {
+            var update = id.StartsWith("PVTSU_ambiguous_", StringComparison.Ordinal)
+                ? AmbiguousCandidateMatchesExpected
+                    ? _lastCreate
+                    : new CandidateStatusUpdate("Unrelated body", "OFF_TRACK", null, null)
+                : _createdUpdates.GetValueOrDefault(id);
+            update ??= new CandidateStatusUpdate("Existing body", "ON_TRACK", null, null);
+            return JsonSerializer.Serialize(new
+            {
+                id,
+                body = update.Body,
+                status = update.Status,
+                startDate = update.StartDate,
+                targetDate = update.TargetDate,
+            });
+        }
+
+        private static string? OptionalString(JsonElement variables, string propertyName)
+            => variables.TryGetProperty(propertyName, out var value)
+                && value.ValueKind == JsonValueKind.String
+                    ? value.GetString()
+                    : null;
+
+        private sealed record CandidateStatusUpdate(
+            string Body,
+            string? Status,
+            string? StartDate,
+            string? TargetDate);
 
         private static HttpResponseMessage Json(string body)
             => new(HttpStatusCode.OK)

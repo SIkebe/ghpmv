@@ -120,10 +120,19 @@ public class CliImportTests
                     VisibleFields = [],
                 },
             ],
+            StatusUpdates = [],
         };
         await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        await new ImportLog
+        {
+            ProjectId = "PVT_existing",
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+            TemplateRestorationRequired = true,
+        }.SaveAsync(directory, cancellationToken);
 
-        using var server = new GraphQlStubServer(EmptyProjectsResponse, OwnerResponse);
+        using var server = new GraphQlStubServer(
+            TemplateProjectResponse,
+            ExistingProjectResponse);
         try
         {
             var result = await RunCliAsync(directory, server, "--enable-browser-automation");
@@ -133,6 +142,9 @@ public class CliImportTests
             Assert.Contains("Filter mapping preflight failed", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain(server.RequestBodies, request =>
                 request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
+            var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.NotNull(importLog);
+            Assert.False(importLog.TemplateRestorationRequired);
         }
         finally
         {

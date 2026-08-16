@@ -119,6 +119,34 @@ public class ProjectTemplateWriteSessionTests
     }
 
     [Fact]
+    public async Task Pending_restoration_already_restored_clears_the_flag_without_unmarking()
+    {
+        var persistedRestorationRequired = true;
+        Task PersistAsync(bool required, CancellationToken _)
+        {
+            persistedRestorationRequired = required;
+            return Task.CompletedTask;
+        }
+
+        using var handler = new TemplateHandler(template: true);
+        using var client = CreateClient(handler);
+
+        var session = await ProjectTemplateWriteSession.PrepareAsync(
+            client,
+            ProjectId,
+            restorationWasPending: true,
+            PersistAsync,
+            onProgress: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(session.RestorationRequired);
+        Assert.False(persistedRestorationRequired);
+        Assert.Equal(0, handler.UnmarkCount);
+        Assert.Equal(0, handler.MarkCount);
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Fact]
     public async Task Restore_remarks_the_project_as_a_template()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

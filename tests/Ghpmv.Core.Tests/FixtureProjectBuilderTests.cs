@@ -106,6 +106,37 @@ public class FixtureProjectBuilderTests
             projectImportWasPending: false));
     }
 
+    [Fact]
+    public void Legacy_fixture_log_rebinds_to_the_status_update_snapshot_without_losing_item_state()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+        var legacySnapshot = snapshot with { StatusUpdates = null };
+        var legacyLog = new ImportLog
+        {
+            ProjectId = "PVT_fixture",
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(legacySnapshot),
+        };
+        legacyLog.Items["0"] = "PVTI_existing";
+        legacyLog.ItemStates["draft:0"] = new ImportItemState
+        {
+            TargetItemId = "PVTI_existing",
+            TargetContentIdentity = "draft",
+        };
+
+        var upgraded = FixtureProjectBuilder.UpgradeLegacyFixtureLog(legacyLog, snapshot);
+
+        Assert.NotNull(upgraded);
+        Assert.Equal(ImportLog.ComputeSnapshotFingerprint(snapshot), upgraded.SourceSnapshotFingerprint);
+        Assert.Equal("PVTI_existing", upgraded.Items["0"]);
+        Assert.Equal("PVTI_existing", upgraded.ItemStates["draft:0"].TargetItemId);
+        Assert.Empty(upgraded.StatusUpdates);
+        Assert.Empty(upgraded.PendingStatusUpdates);
+    }
+
     private static IReadOnlyList<StatusUpdateSnapshot> FixtureStatusUpdates()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(

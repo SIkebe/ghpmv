@@ -97,13 +97,17 @@ public sealed class FixtureProjectBuilder
             if (itemLog is not null)
             {
                 var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
-                if (!string.Equals(
-                        itemLog.SourceSnapshotFingerprint,
-                        snapshotFingerprint,
-                        StringComparison.Ordinal))
+                if (!string.Equals(itemLog.SourceSnapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal))
                 {
-                    throw new InvalidOperationException(
-                        $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
+                    itemLog = UpgradeLegacyFixtureLog(itemLog, snapshot);
+                    if (itemLog is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
+                    }
+
+                    await itemLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                    templateLog = itemLog;
                 }
             }
 
@@ -205,6 +209,27 @@ public sealed class FixtureProjectBuilder
             or { ItemStates.Count: > 0 }
             or { PendingDrafts.Count: > 0 }
             or { PendingContents.Count: > 0 };
+
+    internal static ImportLog? UpgradeLegacyFixtureLog(ImportLog log, ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (log.StatusUpdates.Count > 0
+            || log.PendingStatusUpdates.Count > 0
+            || !string.Equals(
+                log.SourceSnapshotFingerprint,
+                ImportLog.ComputeSnapshotFingerprint(snapshot with { StatusUpdates = null }),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return log with
+        {
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+        };
+    }
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
     {

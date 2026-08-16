@@ -86,6 +86,19 @@ public sealed class ProjectTemplateWriteSession
         }
 
         var wasTemplate = node.GetProperty("template").GetBoolean();
+        if (restorationWasPending && wasTemplate)
+        {
+            await persistRestorationStateAsync!(false, cancellationToken).ConfigureAwait(false);
+            return new ProjectTemplateWriteSession(
+                client,
+                projectId,
+                restorationRequired: false,
+                persistRestorationStateAsync)
+            {
+                OnProgress = onProgress,
+            };
+        }
+
         var session = new ProjectTemplateWriteSession(
             client,
             projectId,
