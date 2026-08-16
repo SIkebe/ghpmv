@@ -50,8 +50,11 @@ public sealed record StatusUpdateSnapshot
 {
     public required string Body { get; init; }
 
-    /// <summary>GraphQL <c>ProjectV2StatusUpdateStatus</c>.</summary>
-    public required string? Status { get; init; }
+    /// <summary>
+    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no
+    /// status or when a schema-v1 snapshot predates this optional property.
+    /// </summary>
+    public string? Status { get; init; }
 
     /// <summary>ISO 8601 date (yyyy-MM-dd).</summary>
     public string? StartDate { get; init; }

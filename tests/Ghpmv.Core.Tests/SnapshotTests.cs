@@ -347,6 +347,35 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void Statusless_update_round_trips_when_status_property_is_omitted()
+    {
+        var original = CreateFullSnapshot() with
+        {
+            StatusUpdates =
+            [
+                new StatusUpdateSnapshot
+                {
+                    Body = "Update without a status.",
+                    Status = null,
+                    CreatedAt = "2026-01-06T09:00:00Z",
+                    UpdatedAt = "2026-01-06T09:00:00Z",
+                },
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(original, SnapshotJsonContext.Default.ProjectSnapshot);
+        using var document = JsonDocument.Parse(json);
+        var serializedUpdate = document.RootElement.GetProperty("statusUpdates")[0];
+        Assert.False(serializedUpdate.TryGetProperty("status", out _));
+
+        var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates!);
+        Assert.Null(restoredUpdate.Status);
+        Assert.Equal("Update without a status.", restoredUpdate.Body);
+    }
+
+    [Fact]
     public void Deserialize_snapshot_without_status_updates_yields_null()
     {
         // Snapshots written before status update support stay loadable within schema
