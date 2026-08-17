@@ -431,6 +431,85 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public void Demo_fixture_positions_project_dates_and_iterations_around_the_reference_week()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2,
+            referenceDate: new DateOnly(2026, 8, 17));
+
+        var iterationField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint");
+        Assert.NotNull(iterationField.IterationConfiguration);
+        Assert.Equal(
+            ["2026-07-20", "2026-08-17", "2026-08-31", "2026-09-14"],
+            iterationField.IterationConfiguration.CompletedIterations!
+                .Concat(iterationField.IterationConfiguration.Iterations!)
+                .Select(iteration => iteration.StartDate));
+
+        Assert.Equal(
+            ["2026-07-27", "2026-08-21", "2026-09-12"],
+            snapshot.Items
+                .Where(item => item.Draft?.Title is "Fixture draft 1" or "Fixture draft 2" or "Fixture draft 3")
+                .Select(item => Assert.Single(item.FieldValues, value => value.FieldName == "Fixture Date").Date));
+    }
+
+    [Fact]
+    public async Task Dynamic_fixture_reference_date_is_persisted_across_retries()
+    {
+        var operationDirectory = Directory.CreateTempSubdirectory("ghpmv-fixture-reference-date-").FullName;
+        try
+        {
+            var first = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
+                operationDirectory,
+                useCurrentWeek: true,
+                hasPriorOperationState: false,
+                currentDate: new DateOnly(2026, 8, 20),
+                TestContext.Current.CancellationToken);
+            var retry = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
+                operationDirectory,
+                useCurrentWeek: true,
+                hasPriorOperationState: true,
+                currentDate: new DateOnly(2026, 9, 7),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(new DateOnly(2026, 8, 17), first);
+            Assert.Equal(first, retry);
+            Assert.Equal(
+                "2026-08-17",
+                await File.ReadAllTextAsync(
+                    Path.Combine(operationDirectory, "fixture-reference-date"),
+                    TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(operationDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_fixture_operation_without_reference_date_keeps_legacy_dates()
+    {
+        var operationDirectory = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-reference-date-").FullName;
+        try
+        {
+            var referenceDate = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
+                operationDirectory,
+                useCurrentWeek: true,
+                hasPriorOperationState: true,
+                currentDate: new DateOnly(2026, 8, 17),
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(new DateOnly(2026, 1, 1), referenceDate);
+        }
+        finally
+        {
+            Directory.Delete(operationDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Demo_fixture_normalizes_repository_identity_for_case_insensitive_retries()
     {
         var mixedCase = FixtureProjectBuilder.CreateSnapshot(

@@ -13,9 +13,11 @@ namespace Ghpmv.Core.Fixtures;
 public sealed class FixtureProjectBuilder
 {
     private const string RepositoryClaimFileName = "fixture-repository.txt";
+    private const string ReferenceDateFileName = "fixture-reference-date";
     private const string PendingRepositoryStatus = "pending";
     private const string FallbackPendingRepositoryStatus = "fallback-pending";
     private const string ClaimedRepositoryStatus = "claimed";
+    private static readonly DateOnly LegacyFixtureReferenceDate = new(2026, 1, 1);
 
     private readonly GitHubGraphQLClient _graphQl;
     private readonly GitHubRestClient _rest;
@@ -31,6 +33,8 @@ public sealed class FixtureProjectBuilder
     public Action<string>? OnProgress { get; set; }
 
     public required string OperationLogDirectory { get; init; }
+
+    public TimeProvider TimeProvider { get; init; } = global::System.TimeProvider.System;
 
     public bool RequireNewResources { get; init; }
 
@@ -76,8 +80,17 @@ public sealed class FixtureProjectBuilder
             OperationLogDirectory,
             apiHost,
             repositoryFullName);
+        var hasPriorOperationState = File.Exists(Path.Combine(operationDirectory, ProjectImportLog.FileName))
+            || File.Exists(Path.Combine(operationDirectory, ImportLog.FileName))
+            || File.Exists(Path.Combine(operationDirectory, RepositoryClaimFileName));
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        var referenceDate = await ResolveFixtureReferenceDateAsync(
+            operationDirectory,
+            useCurrentWeek: RequireNewResources,
+            hasPriorOperationState,
+            DateOnly.FromDateTime(TimeProvider.GetLocalNow().DateTime),
+            cancellationToken).ConfigureAwait(false);
         var projectMatches = await FindProjectsByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
         var (existing, projectOwnedByOperation) = SelectProjectForOperation(
             projectMatches,
@@ -206,7 +219,13 @@ public sealed class FixtureProjectBuilder
                     ?? throw new InvalidOperationException(
                         $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
 
-            var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber, teamSlug);
+            var snapshot = CreateSnapshot(
+                title,
+                repositoryFullName,
+                viewerLogin,
+                pullRequestNumber,
+                teamSlug,
+                referenceDate);
             var importStatusUpdates = true;
             IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
                 new Dictionary<int, string>();
@@ -1173,7 +1192,67 @@ public sealed class FixtureProjectBuilder
     private static bool HasDurableOperationState(string directory)
         => File.Exists(Path.Combine(directory, ProjectImportLog.FileName))
             || File.Exists(Path.Combine(directory, ImportLog.FileName))
-            || File.Exists(Path.Combine(directory, RepositoryClaimFileName));
+            || File.Exists(Path.Combine(directory, RepositoryClaimFileName))
+            || File.Exists(Path.Combine(directory, ReferenceDateFileName));
+
+    internal static async Task<DateOnly> ResolveFixtureReferenceDateAsync(
+        string operationDirectory,
+        bool useCurrentWeek,
+        bool hasPriorOperationState,
+        DateOnly currentDate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operationDirectory);
+        if (!useCurrentWeek)
+        {
+            return LegacyFixtureReferenceDate;
+        }
+
+        Directory.CreateDirectory(operationDirectory);
+        var path = Path.Combine(operationDirectory, ReferenceDateFileName);
+        if (File.Exists(path))
+        {
+            var value = (await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false)).Trim();
+            if (!DateOnly.TryParseExact(
+                    value,
+                    "yyyy-MM-dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out var persistedDate))
+            {
+                throw new InvalidDataException(
+                    $"Fixture reference date in '{path}' must use yyyy-MM-dd format.");
+            }
+
+            return persistedDate;
+        }
+
+        var referenceDate = hasPriorOperationState
+            ? LegacyFixtureReferenceDate
+            : StartOfWeek(currentDate);
+        var temporaryPath = path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+        try
+        {
+            await File.WriteAllTextAsync(
+                temporaryPath,
+                referenceDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                Encoding.UTF8,
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, path);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+
+        return referenceDate;
+    }
+
+    private static DateOnly StartOfWeek(DateOnly date)
+    {
+        var daysSinceMonday = ((int)date.DayOfWeek + 6) % 7;
+        return date.AddDays(-daysSinceMonday);
+    }
 
     private static string GetRepositoryId(JsonElement repository)
     {
@@ -1352,10 +1431,11 @@ public sealed class FixtureProjectBuilder
         string repositoryFullName,
         string viewerLogin,
         int pullRequestNumber,
-        string? teamSlug = null)
+        string? teamSlug = null,
+        DateOnly? referenceDate = null)
     {
         repositoryFullName = repositoryFullName.ToLowerInvariant();
-        var today = new DateTime(2026, 1, 1);
+        var today = (referenceDate ?? LegacyFixtureReferenceDate).ToDateTime(TimeOnly.MinValue);
         var sprint0Start = today.AddDays(-28).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint1Start = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint2Start = today.AddDays(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
