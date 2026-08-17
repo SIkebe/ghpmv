@@ -92,7 +92,7 @@ jobs:
           $env:GHPMV_TEST_PROJECT_NUMBER = ([Uri]$fixtureUrl.Trim()).Segments[-1].TrimEnd('/')
 
           $resultsDirectory = 'tests/Ghpmv.Integration.Tests/TestResults/ci'
-          dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --results-directory $resultsDirectory --logger 'trx;LogFileName=integration.trx'
+          dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --results-directory $resultsDirectory --report-xunit-trx --report-xunit-trx-filename integration.trx
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
