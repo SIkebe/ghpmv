@@ -5,7 +5,7 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Core.Export;
 
 /// <summary>
-/// Generates repository, organization and user mapping CSV templates next to exported
+/// Generates repository, organization, Team and user mapping CSV templates next to exported
 /// snapshots. Candidates include item and linked repositories, Auto-add repositories,
 /// View/Workflow filter identities, draft assignees and explicit user collaborators.
 /// Repository and organization templates use <c>source,target</c>; user templates use
@@ -17,6 +17,7 @@ public static class MappingTemplates
     public const string RepositoryMappingFileName = "repository-mappings.csv";
     public const string UserMappingFileName = "user-mappings.csv";
     public const string OrganizationMappingFileName = "organization-mappings.csv";
+    public const string TeamMappingFileName = "team-mappings.csv";
 
     /// <summary>
     /// Distinct repository mapping candidates from Issue/PR items, linked repositories,
@@ -109,6 +110,17 @@ public static class MappingTemplates
         return organizations;
     }
 
+    public static IReadOnlyList<string> ExtractLinkedTeams(IEnumerable<ProjectSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(snapshots);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return snapshots
+            .SelectMany(snapshot => snapshot.LinkedTeams ?? [])
+            .Select(team => team.Identity)
+            .Where(seen.Add)
+            .ToList();
+    }
+
     /// <summary>
     /// Writes the mapping templates into <paramref name="directory"/>.
     /// <c>user-mappings.csv</c> is only written when at least one draft assignee or explicit user collaborator exists.
@@ -140,6 +152,18 @@ public static class MappingTemplates
             rowFactory: source => string.Concat(source, ","),
             onProgress: onProgress,
             cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        var linkedTeams = ExtractLinkedTeams(snapshots);
+        if (linkedTeams.Count > 0)
+        {
+            await WriteTemplateAsync(
+                Path.Combine(directory, TeamMappingFileName),
+                linkedTeams,
+                header: "source,target",
+                rowFactory: source => string.Concat(source, ","),
+                onProgress: onProgress,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
 
         var userLogins = ExtractUserLogins(snapshots);
         if (userLogins.Count > 0)

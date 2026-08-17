@@ -33,6 +33,17 @@ public sealed class GitHubRestClientTests
     }
 
     [Fact]
+    public async Task DeleteAsync_uses_delete_method()
+    {
+        using var handler = new StubHandler(new HttpResponseMessage(HttpStatusCode.NoContent));
+        using var client = new GitHubRestClient("dummy-token", baseUri: null, handler);
+
+        await client.DeleteAsync("orgs/octo/teams/fixture", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpMethod.Delete, handler.Method);
+    }
+
+    [Fact]
     public async Task GetAsync_normalizes_configured_rest_base_uri_trailing_slash()
     {
         using var handler = new StubHandler(new HttpResponseMessage(HttpStatusCode.OK)

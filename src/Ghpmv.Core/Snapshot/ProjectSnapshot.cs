@@ -43,6 +43,12 @@ public sealed record ProjectSnapshot
     /// predates this field (schema additions are backward compatible within version 1).
     /// </summary>
     public IReadOnlyList<string>? LinkedRepositories { get; init; }
+
+    /// <summary>
+    /// Teams linked to an organization-owned Project. Null when the snapshot predates
+    /// this schema-v1 addition. Current user-owned Project exports always use an empty list.
+    /// </summary>
+    public IReadOnlyList<LinkedTeamSnapshot>? LinkedTeams { get; init; }
 }
 
 /// <summary>A historical Project status update.</summary>
@@ -83,6 +89,19 @@ public sealed record CollaboratorSnapshot
 
     /// <summary>GraphQL <c>ProjectV2Roles</c> (READER, WRITER, ADMIN).</summary>
     public required string Role { get; init; }
+}
+
+/// <summary>A Team linked to a Project, identified without persisting GitHub node IDs.</summary>
+public sealed record LinkedTeamSnapshot
+{
+    public required string Organization { get; init; }
+
+    public required string Slug { get; init; }
+
+    public required string Name { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Identity => $"{Organization}/{Slug}";
 }
 
 /// <summary>Project-level metadata (title, description, README, visibility).</summary>

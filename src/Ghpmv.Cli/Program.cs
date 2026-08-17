@@ -258,6 +258,10 @@ var organizationMappingOption = new Option<string?>("--org-mapping")
 {
     Description = "CSV file mapping source organizations to target organizations (header: source,target). Repository owner mappings are inferred when unambiguous.",
 };
+var teamMappingOption = new Option<string?>("--team-mapping")
+{
+    Description = "CSV file mapping linked Teams (header: source,target; rows: organization/slug,organization/slug). Unmapped Teams keep their slug in the target organization.",
+};
 
 var importCommand = new Command("import", "Import a JSON snapshot into the target organization or user.")
 {
@@ -270,6 +274,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     repoMappingOption,
     userMappingOption,
     organizationMappingOption,
+    teamMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -345,6 +350,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var organizationMapping = organizationMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(organizationMappingPath);
+        var teamMappingPath = parseResult.GetValue(teamMappingOption);
+        var teamMapping = teamMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(teamMappingPath);
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         if (projectTitle is not null)
@@ -352,7 +361,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
         }
 
-        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation);
+        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation, ownerType);
         if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
         {
             throw new InvalidOperationException(
@@ -524,6 +533,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
             OrganizationMapping = organizationMapping,
+            TeamMapping = teamMapping,
             BrowserViewEnrichmentPlanned = enableBrowserAutomation,
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = ValidateImportBeforeWriteAsync,
@@ -717,6 +727,7 @@ rootCommand.Subcommands.Add(importCommand);
 var requirementsCommand = new Command("requirements", "Inspect a snapshot and print the target capabilities required before import.")
 {
     inOption,
+    ownerTypeOption,
     enableBrowserOption,
 };
 requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -727,10 +738,12 @@ requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
         var snapshot = await SnapshotFile.LoadAsync(directory, cancellationToken);
         var plan = ImportCapabilityAnalyzer.Analyze(
             snapshot,
-            parseResult.GetValue(enableBrowserOption));
+            parseResult.GetValue(enableBrowserOption),
+            ParseOwnerType(parseResult.GetValue(ownerTypeOption)!));
         Console.WriteLine($"requires-organization-administrator={plan.RequiresOrganizationAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-project-administrator={plan.RequiresProjectAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-members-read={plan.RequiresMembersRead.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"requires-team-administrator={plan.RequiresTeamAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-visibility-management={plan.RequiresVisibilityManagement.ToString().ToLowerInvariant()}");
         foreach (var repository in plan.Repositories)
         {
@@ -777,6 +790,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     repoMappingOption,
     userMappingOption,
     organizationMappingOption,
+    teamMappingOption,
     tokenOption,
     targetBaseUrlOption,
     enableBrowserOption,
@@ -839,6 +853,10 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         var organizationMapping = organizationMappingPath is null
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(organizationMappingPath);
+        var teamMappingPath = parseResult.GetValue(teamMappingOption);
+        var teamMapping = teamMappingPath is null
+            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+            : CsvMapping.Load(teamMappingPath);
         var verifier = new ProjectVerifier(client)
         {
             OnProgress = Console.Error.WriteLine,
@@ -846,6 +864,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
             OrganizationMapping = organizationMapping,
+            TeamMapping = teamMapping,
         };
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;
@@ -1006,6 +1025,10 @@ var fixtureAllowExistingEmptyRepoOption = new Option<bool>("--fixture-allow-exis
 {
     Description = "With --fixture-require-new, permit only an explicitly prepared repository with no contents or issues.",
 };
+var fixtureTeamOption = new Option<string?>("--fixture-team")
+{
+    Description = "Existing dedicated Team slug to link to the API-backed fixture Project.",
+};
 var setupBrowserProfileOption = new Option<string?>("--browser-profile")
 {
     Description = "Named browser profile from 'ghpmv login --profile <name>' used with --fixture-ui.",
@@ -1024,6 +1047,7 @@ setupCommand.Options.Add(fixtureTitleOption);
 setupCommand.Options.Add(fixtureRepoOption);
 setupCommand.Options.Add(fixtureRequireNewOption);
 setupCommand.Options.Add(fixtureAllowExistingEmptyRepoOption);
+setupCommand.Options.Add(fixtureTeamOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
 setupCommand.Options.Add(baseUrlOption);
 setupCommand.Options.Add(browserBaseUrlOption);
@@ -1175,6 +1199,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 parseResult.GetValue(fixtureOrgOption)!,
                 parseResult.GetValue(fixtureTitleOption) ?? "gpm-fixture",
                 parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo",
+                parseResult.GetValue(fixtureTeamOption),
                 cancellationToken);
             Console.WriteLine(fixtureResult.Url);
             var fixtureDisposition = fixtureResult.Created

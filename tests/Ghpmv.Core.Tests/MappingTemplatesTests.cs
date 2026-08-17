@@ -145,6 +145,34 @@ public class MappingTemplatesTests
     }
 
     [Fact]
+    public async Task WriteAsync_writes_team_template_with_qualified_identities()
+    {
+        var directory = NewTempDirectory();
+        try
+        {
+            var snapshot = SnapshotWithItems() with
+            {
+                LinkedTeams =
+                [
+                    new LinkedTeamSnapshot { Organization = "source-org", Slug = "platform", Name = "Platform" },
+                    new LinkedTeamSnapshot { Organization = "source-org", Slug = "sdk", Name = "SDK" },
+                ],
+            };
+            await MappingTemplates.WriteAsync([snapshot], directory, cancellationToken: TestContext.Current.CancellationToken);
+
+            var teamPath = Path.Combine(directory, MappingTemplates.TeamMappingFileName);
+            Assert.Equal(
+                "source,target\nsource-org/platform,\nsource-org/sdk,\n",
+                await File.ReadAllTextAsync(teamPath, TestContext.Current.CancellationToken));
+            Assert.Empty(CsvMapping.Load(teamPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task WriteAsync_never_overwrites_existing_files()
     {
         var directory = NewTempDirectory();
