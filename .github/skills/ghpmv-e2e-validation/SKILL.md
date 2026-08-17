@@ -248,6 +248,22 @@ dotnet build Ghpmv.slnx -c Release --no-restore -warnaserror
 
 `read-only`、`api-only`、`browser-e2e` は build の exit code 0 を確認したら tests と CLI smoke を実行せず、それぞれの次の Step へ進む。browser enrichment、fixture 作成、GEI、export / import / verify は省略しない。
 
+`repository preparation mode` が `GEI` の場合は、実 resource 作成や PAT 入力より前に、同じ terminal で次を一 command ずつ実行する。
+
+```powershell
+gh --version
+gh gei migrate-repo --help
+```
+
+`gh gei migrate-repo --help` が extension 未インストールを理由に失敗した場合だけ、次を一 command ずつ実行し、今回の sentinel と exit code 0 を確認する。
+
+```powershell
+gh extension install github/gh-gei
+gh gei migrate-repo --help
+```
+
+既存 extension は自動 upgrade しない。help に `--github-source-org`、`--source-repo`、`--github-target-org`、`--target-repo`、`--target-repo-visibility` があり、data residency target では `--target-api-url` も使用可能であることを agent が出力から確認する。install 失敗、help 失敗、必須 option 不足のいずれかがあれば、Browser login、PAT 入力、fixture 作成へ進まず停止する。
+
 `baseline-full` だけが続けて deterministic tests と CLI smoke を実行する。
 
 ```powershell
@@ -377,6 +393,8 @@ choice は `<ENV_VAR> の入力を完了` とする。command、sentinel、marke
 
 作成 URL では **Repository access** を指定できない。URL を開いた後、現在の経路に応じて参照される全 repository または fixture 用の **All repositories** をユーザー自身に選んでもらい、permission と expiration を確認してから生成する。organization approval が必要なら **Active** になるまで待つ。data residency token を GitHub.com の settings URL で作らせたり、GitHub.com token を tenant API に使わせたりしない。classic PAT と GEI token にはこの URL を使わず、scope と SSO authorization を従来どおり案内する。
 
+GEI でこれから新規作成する target repository は `TARGET_TOKEN` 作成時点では個別選択できない。この完全E2E経路でtargetにfine-grained PATを使う場合は、target organizationの **All repositories** を必須とする。All repositoriesを許可できない場合は、PAT入力前にtargetのtoken typeをclassicへ切り替え、必要scopeを再提示する。migration後のtoken設定変更を前提にしたままGEIへ進まない。
+
 ### Classic PAT
 
 | token / 経路 | 必要な scope |
@@ -403,7 +421,7 @@ fine-grained PAT は organization-owned Project にだけ使用する。GitHub �
 |---|---|---|
 | source: 既存 Project の export | source Project の owner。参照される全 repository を選択。 | Organization **Projects: Read-only**。organization Issue Field がある場合は Organization **Issue Fields: Read-only**。Repository **Metadata: Read-only**。private repository item には **Issues: Read-only** と **Pull requests: Read-only**。 |
 | source: `setup --fixture` + export | source organization。**All repositories**。 | Repository **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**。Organization **Projects: Read and write**、**Issue Fields: Read and write**。 |
-| target: 既存または GEI 後 repository への import / verify | target Project の owner。mapping / Workflow が参照する全 target repository を選択。 | Organization **Projects: Read and write**。snapshot に organization Issue Field がある場合は Organization **Issue Fields: Read and write** と Repository **Issues: Read and write**。Repository **Metadata: Read-only**、linked repository には **Contents: Read and write**、private repository item には **Issues: Read-only** と **Pull requests: Read-only**。team collaborator を import する場合は Organization **Members: Read-only**。 |
+| target: 既存または GEI 後 repository への import / verify | target Project の owner。既存 repository は mapping / Workflow が参照する全 repository を選択。GEI で今から作る repository は **All repositories** 必須。許可できなければclassicを選ぶ。 | Organization **Projects: Read and write**。snapshot に organization Issue Field がある場合は Organization **Issue Fields: Read and write** と Repository **Issues: Read and write**。Repository **Metadata: Read-only**、linked repository には **Contents: Read and write**、private repository item には **Issues: Read-only** と **Pull requests: Read-only**。team collaborator を import する場合は Organization **Members: Read-only**。 |
 | target: fixture seed + import / verify | target organization。**All repositories**。 | Repository **Administration: Read and write**、**Contents: Read and write**、**Issues: Read and write**、**Pull requests: Read and write**。Organization **Projects: Read and write**、**Issue Fields: Read and write**。team collaborator を import する場合は Organization **Members: Read-only**。 |
 
 Organization が fine-grained PAT approval を要求する場合は承認済みであることを確認する。**既存 Project の export / import / verify だけを行うユーザーに fixture 作成用 permission を要求してはならない。**
@@ -471,6 +489,8 @@ Step 5 以降の `ghpmv` native command では PAT を `--token` argument に展
 ### Fine-grained fixture token の preflight
 
 `fixture preparation` が `create` で source に fine-grained PAT を選んだ場合、`setup --fixture` より先に次の preflight 専用 wrapper を endpoint ごとに別々に実行する。送信直前に一意な `<preflight-id>` を生成する。target の `fixture-seed` でも organization と token を置き換えて同じ確認を行う。
+
+`repository preparation mode` が `GEI` でtargetにfine-grained PATを選んだ場合も、GEIやsource fixture作成より前にtarget organizationの`issue-fields` preflightだけを`TARGET_TOKEN`で実行する。`repos` preflightはrepository作成permissionを確認するもので、GEIが別のclassic PATでrepositoryを作るこの経路には要求しない。GEI後のtarget repository accessはStep 7のIssue / PR queryで確認する。
 
 ```powershell
 $previousPreflightToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", [EnvironmentVariableTarget]::Process)
@@ -620,6 +640,7 @@ finally {
 `browser-e2e` では同じ export に browser option を追加する。
 
 ```powershell
+$env:GHPMV_DEMO_SNAPSHOT = Join-Path $env:TEMP "ghpmv-demo-snapshot-$(Get-Date -Format yyyyMMdd-HHmmss)"
 $previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
 $previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
 try {
@@ -709,7 +730,31 @@ finally {
 
 選択した command の placeholder を記録済みの実値へ置き換え、command ごとの一意な ID を付けた wrapper で同じ terminal session に送信し、exit code と migration completion を監視する。PAT option は追加せず、`GH_SOURCE_PAT` と `GH_PAT` の process environment 経由だけで渡す。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
 
-target repository full name を記録し、target の Issue / PR number が source と一致することを確認する。downloadable migration log は完了後 24 時間以内に保存する。target repository の Issues が無効なら `Migration Log` Issue は作成されない。migration 成功と number 維持を確認できるまで Step 8 へ進まない。
+target repository full name を記録する。まずexport済みsnapshotから、移行対象repositoryのsource Issue / PR numberを同じterminalで列挙する。
+
+```powershell
+$snapshot = Get-Content -LiteralPath (Join-Path $env:GHPMV_DEMO_SNAPSHOT 'snapshot.json') -Raw | ConvertFrom-Json
+$sourceRepositoryItems = @($snapshot.items | Where-Object { $_.type -in @('ISSUE', 'PULL_REQUEST') } | Select-Object type, repository, number)
+if ($sourceRepositoryItems.Count -eq 0) { throw 'The source snapshot contains no Issue or Pull Request item to validate after GEI.' }
+$sourceRepositoryItems | Format-Table -AutoSize
+```
+
+続けてsource item一件ごとに、`ISSUE` は `issues/<number>`、`PULL_REQUEST` は `pulls/<number>`へ置き換え、次のcommandを別々の一意なcommand IDで送る。このqueryにはGEI tokenではなく、後続import/verifyで使用する`TARGET_TOKEN`を使うため、fine-grained PATの新規repository accessも同時に確認できる。
+
+```powershell
+$previousTargetCheckToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", [EnvironmentVariableTarget]::Process)
+try {
+    [Environment]::SetEnvironmentVariable("GH_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    gh api "repos/<target-org>/<target-repo>/<issues-or-pulls>/<source-number>" --jq '.number'
+}
+finally {
+    [Environment]::SetEnvironmentVariable("GH_TOKEN", $previousTargetCheckToken, [EnvironmentVariableTarget]::Process)
+}
+```
+
+data residency targetでは`gh api`に`--hostname TENANT.ghe.com`を追加する。出力numberがsource numberと一致し、全queryがexit code 0の場合だけnumber維持と`TARGET_TOKEN`のrepository accessを確認済みとする。404または`Resource not accessible by personal access token`の場合は、migration失敗と断定せず、まずtarget repositoryの存在とfine-grained PATのRepository access / approvalを確認する。target Issue / PR number一致とtoken accessを確認できるまでStep 8へ進まない。
+
+downloadable migration log は完了後 24 時間以内に保存する。target repository の Issues が無効なら `Migration Log` Issue は作成されない。
 
 ### Fixture seed
 
@@ -759,7 +804,79 @@ target 側の `setup --fixture-ui` は不要。
 - `organization-mappings.csv`: source owner を target owner へ対応付ける。
 - `user-mappings.csv`: source login / mannequin user を実 target login へ対応付ける。
 
-target login は token 値ではなくユーザー名だけを確認する。EMU suffix を省略しない。編集後に CSV を再読し、空の target 値がないことを確認する。
+まず同じ terminal で次を実行し、存在する mapping file の全行と空 target を agent 自身が読む。生成されなかった optional file はエラーにしない。
+
+```powershell
+$mappingFiles = Get-ChildItem -LiteralPath $env:GHPMV_DEMO_SNAPSHOT -Filter '*-mappings.csv' -File
+if ($mappingFiles.Count -eq 0) { throw "No mapping CSV files were generated in $env:GHPMV_DEMO_SNAPSHOT" }
+foreach ($mappingFile in $mappingFiles) {
+    Write-Output ("--- {0} ---" -f $mappingFile.Name)
+    Get-Content -LiteralPath $mappingFile.FullName
+    $targetColumn = if ($mappingFile.Name -eq 'user-mappings.csv') { 'target-user' } else { 'target' }
+    $sourceColumn = if ($mappingFile.Name -eq 'user-mappings.csv') { 'mannequin-user' } else { 'source' }
+    foreach ($row in @(Import-Csv -LiteralPath $mappingFile.FullName)) {
+        if ([string]::IsNullOrWhiteSpace($row.$targetColumn)) {
+            Write-Output ("GHPMV_MAPPING_BLANK:{0}:{1}" -f $mappingFile.Name, $row.$sourceColumn)
+        }
+    }
+}
+```
+
+target login は token 値ではなくユーザー名だけを確認する。Browser account と token owner が同じで、すでに記録済みなら再質問しない。EMU suffix を省略しない。
+
+標準 fixture の単一 repository を GEI または fixture seed で用意した経路では、全 repository candidate は記録済みの同じ target repository、全 organization candidate は target organization、全 user candidate は確認済み target login へ対応する。次の placeholder を記録済み実値へ置き換え、一 command として送る。既に埋まっている target は上書きしない。GitHub login / organization / repository 名に comma が含まれていた場合はCSVを壊さず停止する。
+
+```powershell
+$targetRepository = '<target-org>/<target-repo>'
+$targetOrganization = '<target-org>'
+$targetUser = '<target-login>'
+$repoPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'repository-mappings.csv'
+$orgPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'organization-mappings.csv'
+$userPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'user-mappings.csv'
+if (!(Test-Path -LiteralPath $repoPath) -or !(Test-Path -LiteralPath $orgPath)) { throw 'Required repository or organization mapping CSV is missing.' }
+if (@($targetRepository, $targetOrganization, $targetUser) | Where-Object { $_ -match ',' }) { throw 'Mapping targets must not contain commas.' }
+$repoLines = @('source,target')
+foreach ($row in @(Import-Csv -LiteralPath $repoPath)) {
+    $target = if ([string]::IsNullOrWhiteSpace($row.target)) { $targetRepository } else { $row.target }
+    $repoLines += '{0},{1}' -f $row.source, $target
+}
+Set-Content -LiteralPath $repoPath -Value $repoLines -Encoding UTF8
+$orgLines = @('source,target')
+foreach ($row in @(Import-Csv -LiteralPath $orgPath)) {
+    $target = if ([string]::IsNullOrWhiteSpace($row.target)) { $targetOrganization } else { $row.target }
+    $orgLines += '{0},{1}' -f $row.source, $target
+}
+Set-Content -LiteralPath $orgPath -Value $orgLines -Encoding UTF8
+if (Test-Path -LiteralPath $userPath) {
+    $userLines = @('mannequin-user,mannequin-id,target-user')
+    foreach ($row in @(Import-Csv -LiteralPath $userPath)) {
+        $target = if ([string]::IsNullOrWhiteSpace($row.'target-user')) { $targetUser } else { $row.'target-user' }
+        $userLines += '{0},{1},{2}' -f $row.'mannequin-user', $row.'mannequin-id', $target
+    }
+    Set-Content -LiteralPath $userPath -Value $userLines -Encoding UTF8
+}
+```
+
+標準 fixture 以外で複数の target repository / user が必要な場合は、最初の inspection で出た `GHPMV_MAPPING_BLANK` ごとに一つずつ mapping 先を質問し、同じ plain CSV header を維持する等価 command を生成する。一律に同じ target へ置換しない。
+
+編集後は同じ terminal で次を実行する。空 target、header 不一致、空 source が一つでもあれば Import へ進まない。
+
+```powershell
+$remaining = @()
+foreach ($mappingFile in Get-ChildItem -LiteralPath $env:GHPMV_DEMO_SNAPSHOT -Filter '*-mappings.csv' -File) {
+    $targetColumn = if ($mappingFile.Name -eq 'user-mappings.csv') { 'target-user' } else { 'target' }
+    $sourceColumn = if ($mappingFile.Name -eq 'user-mappings.csv') { 'mannequin-user' } else { 'source' }
+    foreach ($row in @(Import-Csv -LiteralPath $mappingFile.FullName)) {
+        if ([string]::IsNullOrWhiteSpace($row.$sourceColumn) -or [string]::IsNullOrWhiteSpace($row.$targetColumn)) {
+            $remaining += '{0}:{1}' -f $mappingFile.Name, $row.$sourceColumn
+        }
+    }
+    Write-Output ("--- {0} ---" -f $mappingFile.Name)
+    Get-Content -LiteralPath $mappingFile.FullName
+}
+if ($remaining.Count -gt 0) { throw ('Incomplete mapping rows: ' + ($remaining -join ', ')) }
+Write-Output 'GHPMV_MAPPINGS_COMPLETE'
+```
 
 ## Step 9: Import
 
