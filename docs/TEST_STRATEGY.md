@@ -17,7 +17,7 @@
 | 層 | 場所 | 目的 | 外部依存 | 実行タイミング |
 |---|---|---|---|---|
 | 単体・ロジックテスト | `tests/Ghpmv.Core.Tests`、`tests/Ghpmv.Browser.Tests` の非 E2E テスト | CSV 解析、snapshot model、mapping、verify 差分、import conflict、UI snapshot serialization を検証する。 | なし | ローカルの .NET 変更と、.NET に影響する PR。 |
-| 実 API 統合テスト | `tests/Ghpmv.Integration.Tests` | GraphQL 接続、export/import/verify、View の API 設定、organization Issue Field lifecycle、collaborator/repository link、user-owned project、item resume/relink を実 GitHub API で検証する。 | `GHPMV_TEST_TOKEN` と fixture 用 org/project 変数。ローカルと資格情報のない PR では skip。 | secrets が使えるリポジトリ CI の .NET 変更 PR、毎日の scheduled run、手動実行、API 変更時のローカル検証。 |
+| 実 API 統合テスト | `tests/Ghpmv.Integration.Tests` | GraphQL 接続、export/import/verify、View の API 設定、organization Issue Field lifecycle、collaborator/repository/Team link、user-owned project、item resume/relink を実 GitHub API で検証する。 | `GHPMV_TEST_TOKEN` と fixture 用 org/project 変数。Team link E2E のため、token owner は source/target 両 organization で disposable Team を作成・削除でき、classic PAT は `admin:org`、fine-grained PAT は **Members: Read and write** が必要。ローカルと資格情報のない PR では skip。 | secrets が使えるリポジトリ CI の .NET 変更 PR、毎日の scheduled run、手動実行、API 変更時のローカル検証。 |
 | ブラウザー E2E テスト | `tests/Ghpmv.Browser.Tests` の E2E テスト | Playwright と GitHub Projects UI 経由で collaborator export、View round-trip、Workflow round-trip を検証する。 | `GHPMV_BROWSER_STATE`、`GHPMV_TEST_TOKEN`、source/target fixture org。未設定時は skip。 | `src/Ghpmv.Core/Browser` 変更時とリリース前に手動実行。scheduled/nightly は未実装。 |
 | 手動移行テスト | [MANUAL_TEST_PLAN.md](MANUAL_TEST_PLAN.md) | GEI repository migration、`ghpmv export`、mapping CSV 補完、`ghpmv import`、`ghpmv verify`、UI 目視確認までの実運用フローを検証する。 | source/target org、PAT、browser profile、必要に応じて EMU/GHEC-DR 環境。 | リリース候補前、移行手順の検証前。 |
 | CI packaging smoke test | `.github/workflows/ci.yml` | Release build、self-contained publish、framework-dependent publish、`--version` 起動を確認する。 | GitHub Actions runner、`global.json` で指定した .NET SDK。 | .NET に影響する PR の build/test 成功後。 |
@@ -67,7 +67,7 @@ Organization、Project番号、repository、browser profile、GEI、user mapping
 
 | 変数 | 使用箇所 | 意味 |
 |---|---|---|
-| `GHPMV_TEST_TOKEN` | 統合テスト、browser E2E | fixture org に対して SSO authorization 済みの token。 |
+| `GHPMV_TEST_TOKEN` | 統合テスト、browser E2E | fixture org に対して SSO authorization 済みの token。integration suite では source/target 両 organization の disposable Team を作成・削除できる token owner 権限に加え、classic PAT の `admin:org` または fine-grained PAT の **Members: Read and write** が必要。単一tokenで両orgを操作するため、cross-organization構成では通常classic PATを使う。 |
 | `GHPMV_TEST_ORG` | 統合テスト、browser E2E | source fixture organization。未設定時はテスト側の既定値を使う。 |
 | `GHPMV_TEST_TARGET_ORG` | 統合テスト、browser E2E | target fixture organization。未設定時はテスト側の既定値を使う。 |
 | `GHPMV_TEST_PROJECT_NUMBER` | 統合テスト | source fixture project number。未設定時は共有 fixture 番号を使う。 |

@@ -22,12 +22,13 @@ public class CliImportTests
             VerifyProjectResponse,
             VerifyItemsResponse,
             VerifyStatusUpdatesResponse,
-            VerifyFieldsResponse);
+            VerifyFieldsResponse,
+            VerifyTeamsResponse);
         try
         {
             var result = await RunVerifyCliAsync(directory, server, "--report-json", reportPath);
 
-            Assert.Equal(4, server.RequestBodies.Count);
+            Assert.Equal(5, server.RequestBodies.Count);
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("Project: Match", result.Output, StringComparison.Ordinal);
             Assert.Contains("LinkedRepository: PartialMatch", result.Output, StringComparison.Ordinal);
@@ -791,6 +792,7 @@ public class CliImportTests
     {
         Collaborators = null,
         LinkedRepositories = [],
+        LinkedTeams = [],
     };
 
     private static ProjectSnapshot SnapshotWithStatusUpdates() => MinimalSnapshot() with
@@ -898,6 +900,9 @@ public class CliImportTests
           "statusUpdates":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
         }}}}
         """;
+
+    private const string VerifyTeamsResponse =
+        """{"data":{"organization":{"projectV2":{"teams":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}""";
 
     private sealed class GraphQlStubServer : IDisposable
     {

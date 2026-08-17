@@ -20,6 +20,7 @@ public enum VerifyStatus
     Mismatch,
     PartialMatch,
     NotVerified,
+    NotApplicable,
 }
 
 /// <summary>One difference found by <see cref="ProjectVerifier"/>.</summary>

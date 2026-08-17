@@ -103,7 +103,7 @@ public static class ImportCapabilityPreflight
             && !viewerCanUpdate)
         {
             throw new InvalidOperationException(
-                $"Target Project #{projectNumber} requires Project administrator or organization owner access for collaborators or visibility changes.");
+                $"Target Project #{projectNumber} requires Project administrator or organization owner access for collaborators, linked Teams, or visibility changes.");
         }
     }
 
