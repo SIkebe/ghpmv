@@ -26,6 +26,7 @@ public sealed class ProjectVerifier
     private const string StatusUpdateCategory = "StatusUpdate";
     private const string CollaboratorCategory = "Collaborator";
     private const string LinkedRepositoryCategory = "LinkedRepository";
+    private const string TeamLinkCategory = "TeamLink";
 
     private readonly GitHubGraphQLClient _client;
 
@@ -50,6 +51,9 @@ public sealed class ProjectVerifier
     /// <summary>Source → target organization mapping, used to normalize View and Workflow filters.</summary>
     public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
+    /// <summary>Source → target Team mapping, with both sides in "organization/slug" form.</summary>
+    public IReadOnlyDictionary<string, string> TeamMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
+
     /// <summary>
     /// Optional post-processing hook for the target snapshot. Browser-assisted verification
     /// uses this to re-read UI-only settings before comparison.
@@ -69,7 +73,17 @@ public sealed class ProjectVerifier
             PostExportAsync = PostExportAsync,
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        return Compare(source, target, RepositoryMapping, UserMapping, OrganizationMapping);
+        var effectiveTeamMapping = OwnerType == ProjectOwnerType.User
+            ? ReadOnlyDictionary<string, string>.Empty
+            : BuildEffectiveTeamMapping(source.LinkedTeams, TeamMapping, targetOrgLogin);
+        return CompareCore(
+            source,
+            target,
+            RepositoryMapping,
+            UserMapping,
+            OrganizationMapping,
+            effectiveTeamMapping,
+            teamLinksApplicable: OwnerType == ProjectOwnerType.Organization);
     }
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access).</summary>
@@ -95,12 +109,47 @@ public sealed class ProjectVerifier
         IReadOnlyDictionary<string, string> repositoryMapping,
         IReadOnlyDictionary<string, string> userMapping,
         IReadOnlyDictionary<string, string> organizationMapping)
+        => CompareCore(
+            source,
+            target,
+            repositoryMapping,
+            userMapping,
+            organizationMapping,
+            ReadOnlyDictionary<string, string>.Empty,
+            teamLinksApplicable: true);
+
+    /// <summary>Pure snapshot comparison with repository, user, organization and Team mappings.</summary>
+    public static VerifyReport Compare(
+        ProjectSnapshot source,
+        ProjectSnapshot target,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlyDictionary<string, string> userMapping,
+        IReadOnlyDictionary<string, string> organizationMapping,
+        IReadOnlyDictionary<string, string> teamMapping)
+        => CompareCore(
+            source,
+            target,
+            repositoryMapping,
+            userMapping,
+            organizationMapping,
+            teamMapping,
+            teamLinksApplicable: true);
+
+    private static VerifyReport CompareCore(
+        ProjectSnapshot source,
+        ProjectSnapshot target,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlyDictionary<string, string> userMapping,
+        IReadOnlyDictionary<string, string> organizationMapping,
+        IReadOnlyDictionary<string, string> teamMapping,
+        bool teamLinksApplicable)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(repositoryMapping);
         ArgumentNullException.ThrowIfNull(userMapping);
         ArgumentNullException.ThrowIfNull(organizationMapping);
+        ArgumentNullException.ThrowIfNull(teamMapping);
 
         source = ProjectFilterTransformer.TransformSnapshot(
             source,
@@ -118,6 +167,11 @@ public sealed class ProjectVerifier
             source = ApplyUserMapping(source, userMapping);
         }
 
+        if (teamMapping.Count > 0)
+        {
+            source = ApplyTeamMapping(source, teamMapping);
+        }
+
         var differences = new List<VerifyDifference>();
         var notVerified = new HashSet<string>(StringComparer.Ordinal);
         CompareProject(source.Project, target.Project, differences);
@@ -133,6 +187,11 @@ public sealed class ProjectVerifier
         CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
         CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
         CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
+        if (teamLinksApplicable)
+        {
+            CompareLinkedTeams(source.LinkedTeams, target.LinkedTeams, differences, notVerified);
+        }
+
         var categories = new List<VerifyCategoryResult>
         {
             CategoryResult(ProjectCategory, differences, notVerified),
@@ -147,6 +206,9 @@ public sealed class ProjectVerifier
         {
             categories.Add(CategoryResult(StatusUpdateCategory, differences, notVerified));
         }
+        categories.Add(teamLinksApplicable
+            ? CategoryResult(TeamLinkCategory, differences, notVerified)
+            : new VerifyCategoryResult { Category = TeamLinkCategory, Status = VerifyStatus.NotApplicable });
 
         return new VerifyReport
         {
@@ -199,6 +261,71 @@ public sealed class ProjectVerifier
                     ? collaborator with { Login = mappedLogin }
                     : collaborator).ToList(),
         };
+    }
+
+    private static ProjectSnapshot ApplyTeamMapping(
+        ProjectSnapshot source,
+        IReadOnlyDictionary<string, string> teamMapping)
+    {
+        var collaboratorMapping = (source.LinkedTeams ?? [])
+            .Select(team =>
+            {
+                if (!teamMapping.TryGetValue(team.Identity, out var mapped)
+                    || !TeamLinkMapping.TryParseIdentity(mapped, out _, out var targetSlug))
+                {
+                    return (SourceSlug: team.Slug, TargetSlug: (string?)null);
+                }
+
+                return (SourceSlug: team.Slug, TargetSlug: (string?)targetSlug);
+            })
+            .Where(mapping => mapping.TargetSlug is not null)
+            .GroupBy(mapping => mapping.SourceSlug, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First().TargetSlug!,
+                StringComparer.OrdinalIgnoreCase);
+
+        return source with
+        {
+            LinkedTeams = source.LinkedTeams?.Select(team =>
+            {
+                if (!teamMapping.TryGetValue(team.Identity, out var mapped)
+                    || !TeamLinkMapping.TryParseIdentity(mapped, out var organization, out var slug))
+                {
+                    return team;
+                }
+
+                return team with { Organization = organization, Slug = slug };
+            }).ToList(),
+            Collaborators = source.Collaborators?.Select(collaborator =>
+                string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)
+                && collaboratorMapping.TryGetValue(collaborator.Login, out var mappedSlug)
+                    ? collaborator with { Login = mappedSlug }
+                    : collaborator).ToList(),
+        };
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildEffectiveTeamMapping(
+        IReadOnlyList<LinkedTeamSnapshot>? teams,
+        IReadOnlyDictionary<string, string> teamMapping,
+        string targetOrganization)
+    {
+        if (teams is null)
+        {
+            return ReadOnlyDictionary<string, string>.Empty;
+        }
+
+        var resolutions = TeamLinkMapping.Resolve(teams, teamMapping, targetOrganization);
+        var invalid = resolutions.FirstOrDefault(resolution => resolution.Status != TeamLinkMappingStatus.Mapped);
+        if (invalid is not null)
+        {
+            throw new InvalidOperationException($"Team mapping preflight failed: {invalid.Message}.");
+        }
+
+        return resolutions.ToDictionary(
+            resolution => resolution.Source.Identity,
+            resolution => resolution.TargetIdentity!,
+            StringComparer.OrdinalIgnoreCase);
     }
 
     // ----- project metadata -----
@@ -480,6 +607,39 @@ public sealed class ProjectVerifier
         {
             Add(differences, VerifySeverity.Warning, LinkedRepositoryCategory,
                 $"linked repository '{extra}' exists only in the target");
+        }
+    }
+
+    private static void CompareLinkedTeams(
+        IReadOnlyList<LinkedTeamSnapshot>? source,
+        IReadOnlyList<LinkedTeamSnapshot>? target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source is null || target is null)
+        {
+            notVerified.Add(TeamLinkCategory);
+            if (source is not null)
+            {
+                Add(differences, VerifySeverity.Warning, TeamLinkCategory,
+                    "linked Teams were captured in the source but could not be read from the target");
+            }
+
+            return;
+        }
+
+        var targetSet = target.Select(team => team.Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var team in source.Where(team => !targetSet.Contains(team.Identity)))
+        {
+            AddError(differences, TeamLinkCategory,
+                $"linked Team '{team.Identity}' is missing in the target");
+        }
+
+        var sourceSet = source.Select(team => team.Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in target.Where(team => !sourceSet.Contains(team.Identity)))
+        {
+            Add(differences, VerifySeverity.Warning, TeamLinkCategory,
+                $"linked Team '{extra.Identity}' exists only in the target");
         }
     }
 

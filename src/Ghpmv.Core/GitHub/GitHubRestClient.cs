@@ -91,6 +91,17 @@ public sealed class GitHubRestClient : IDisposable
             text);
     }
 
+    public async Task DeleteAsync(string path, CancellationToken cancellationToken = default)
+    {
+        using var response = await _httpClient.DeleteAsync(path, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return;
+        }
+
+        _ = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
     public void Dispose() => _httpClient.Dispose();
 
     private static StringContent CreateJsonContent(object body)

@@ -22,7 +22,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 
 1. GEI で source repository を target organization へ移行できることを確認する。
 2. GEI 移行後の target repository に対して、`ghpmv` が source Project の Issue / PR item を repository mapping + 同一番号で再リンクできることを確認する。
-3. `ghpmv` が Project metadata / fields / items / values / order / archived state / Status Updates / linked repositories / explicit collaborators / Views / Workflows を移行できることを確認する。
+3. `ghpmv` が Project metadata / fields / items / values / order / archived state / Status Updates / linked repositories / linked Teams / explicit collaborators / Views / Workflows を移行できることを確認する。
 4. `ghpmv verify` で移行結果を検証し、既知の恒久制限以外に error が出ないことを確認する。
 5. セッション失効、mapping 不足、browser automation 無効時など、手動運用で起きやすい失敗が分かりやすく検出されることを確認する。
 
@@ -34,6 +34,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 - target repository に Issue #1 / Issue #2 / open PR #3 相当が存在し、source と同じ number で参照できる。
 - `ghpmv export --enable-browser-automation` が snapshot を作成し、Views / Workflows / explicit collaborators の warning が想定範囲内である。
 - `repository-mappings.csv` と必要に応じて `user-mappings.csv` を補完したうえで、`ghpmv import --enable-browser-automation` が完了する。
+- `team-mappings.csv` で renamed Team を解決し、target Team の Projects ページと Project の Manage access にリンクが表示される。
 - `ghpmv verify` が `OK: the target project matches the snapshot.`、または既知制限に由来する warning のみを出す。
 - target Project の UI 目視確認で、少なくとも以下が一致する。
   - Project title / description / README
@@ -42,6 +43,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
   - archived item の archived state
   - Status Updates の履歴件数、順序、status、日付、本文、元情報注記
   - linked repository
+  - linked Team と Team に付与される read permission
   - explicit project collaborators
   - Table / Board / Roadmap views
   - enabled / disabled workflows と Auto-add settings
@@ -62,6 +64,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Item order | `ghpmv verify` + 目視 | archived item の position は GitHub API 制限により対象外。 |
 | Status Updates | `ghpmv verify` + 目視 | 履歴順、全 status、nullable な start/target date、Markdown 本文、元作成者/日時注記。target 側の作成者/作成日時そのものは比較しない。 |
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
+| Project-to-Team links | `ghpmv verify` + Team Projects / Manage access UI | `organization/slug` で識別。explicit collaborator とは別カテゴリ。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
 | Views | browser export/import + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum など。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
@@ -76,6 +79,12 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 - Insights charts。
 - REDACTED / 権限不足で見えない items。
 - archived item の position。
+
+### 2.3 Team link E2E の自動/手動期待値
+
+Credentialed scheduled/manual `tests/Ghpmv.Integration.Tests` runs must execute `TeamLinkRoundTripTests` without skips. The test creates uniquely named disposable source/target Teams and Projects, verifies 0/1/multiple exported links, renamed Team mapping, import, verify, target re-export, rerun idempotence, and target-only reporting, then deletes every created resource in `finally`.
+
+The manual GEI + ghpmv path complements the API test by checking UI semantics: the migrated Project appears on the target Team's **Projects** page, the Team has read access in Project **Settings → Manage access**, renamed mapping selects the intended Team, rerunning import does not duplicate the link, and explicit Team collaborators remain distinguishable from Team links.
 
 ---
 
@@ -112,6 +121,9 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 - Status Updates 5 件（`INACTIVE` / `ON_TRACK` / `AT_RISK` / `OFF_TRACK` / `COMPLETE`、日付 null/値あり、Markdown 本文）
+- `--fixture-team <slug>` を指定した場合、その既存の専用 Team への Project link
+
+Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
 Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定と Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer でそれらだけを補完します。手動で UI をぽちぽち濃くする必要はありません。
 
@@ -184,6 +196,7 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 |---|---|---|
 | 通常の Project 移行 | `export` / `import` / `verify` | README の [Token permissions](../README.md#token-permissions) にある command 別の最小権限。 |
 | API-backed test fixture 作成 | `setup --fixture` | 下記の fine-grained PAT、または classic PAT。 |
+| 実 API integration suite | `dotnet test tests/Ghpmv.Integration.Tests` | 上記 fixture 権限に加え、token owner が source / target 両 organization で disposable Team を作成・削除できること。REST Team API 用に classic PAT は `admin:org`、fine-grained PAT は **Organization permissions → Members: Read and write** が必要。suite は両 organization に1つの `GHPMV_TEST_TOKEN` を使うため、通常の cross-organization 構成では両方を操作できる classic PAT を使う。 |
 | UI-only fixture 作成 | `setup --fixture-ui` | Project API を読める token と、同じユーザーで保存した browser profile。 |
 | GEI source | `gh gei migrate-repo --github-source-pat` | 下記の GEI source role / classic PAT scope。 |
 | GEI destination | `gh gei migrate-repo --github-target-pat` | 下記の GEI destination role / classic PAT scope。 |
@@ -279,6 +292,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture-org $env:GHPMV_SOURCE_ORG `
   --fixture-title gpm-fixture `
   --fixture-repo $env:GHPMV_FIXTURE_REPO `
+  --fixture-team <dedicated-source-team-slug> `
   --token $env:GHPMV_SOURCE_TOKEN
 ```
 
@@ -466,6 +480,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - `$env:GHPMV_SNAPSHOT_DIR/snapshot.json` が作成される。
 - `snapshot.json` の `statusUpdates` が source UI と同じ reverse-chronological sequence で、5件の status/date/body/creator/createdAt/updatedAt を含む。
 - `repository-mappings.csv` が生成される。
+- linked Team がある場合は `team-mappings.csv` が生成され、source 値は `organization/slug` になっている。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 
 ### 7.2 Mapping CSV を補完
@@ -507,7 +522,14 @@ source,target
 gpm-source,gpm-target
 ```
 
-import と verify には同じ 3 種類の mapping file を渡します。生成されなかった optional file の引数だけを外してください。
+`team-mappings.csv` は source/target の両方を `organization/slug` で記述します。target Team の slug が同じ場合、空欄は import 先 organization の同一 slug として解決されます。renamed Team の E2E では明示的に記入します。
+
+```csv
+source,target
+gpm-source/platform,gpm-target/engineering
+```
+
+import と verify には同じ 4 種類の mapping file を渡します。生成されなかった optional file の引数だけを外してください。
 
 ### 7.3 Target Project へ import
 
@@ -521,6 +543,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
   --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
   --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --org-mapping "$env:GHPMV_SNAPSHOT_DIR/organization-mappings.csv" `
+  --team-mapping "$env:GHPMV_SNAPSHOT_DIR/team-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --project-title "gpm-fixture migrated $(Get-Date -Format yyyyMMdd-HHmmss)" `
@@ -549,6 +572,7 @@ dotnet run --project src/Ghpmv.Cli -- verify `
   --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
   --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
   --org-mapping "$env:GHPMV_SNAPSHOT_DIR/organization-mappings.csv" `
+  --team-mapping "$env:GHPMV_SNAPSHOT_DIR/team-mappings.csv" `
   --enable-browser-automation `
   --browser-profile target `
   --report-json "$env:GHPMV_SNAPSHOT_DIR/verify-report.json" `
@@ -557,7 +581,7 @@ dotnet run --project src/Ghpmv.Cli -- verify `
 
 `--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
-source / target の repository 名または user login が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator は target 側の名前へ正規化して比較されます。`user-mappings.csv` が存在しない場合は `--user-mapping` を外してください。
+source / target の repository 名、user login、または Team slug が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` / `--team-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator、linked Team は target 側の名前へ正規化して比較されます。生成されていない optional mapping の引数は外してください。
 
 期待値:
 
@@ -637,10 +661,15 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] disabled workflow が disabled のまま、または仕様どおり一時有効化後に disabled へ戻っている。
 - [ ] target plan 上限を超える Auto-add が warning + skip になる。
 
-### 8.7 Access / linked repositories
+### 8.7 Access / linked repositories / linked Teams
 
 - [ ] linked repository が target repository に置き換わっている。
 - [ ] explicit project collaborator と role が一致。
+- [ ] target Team の **Projects** ページに migrated Project が表示される。
+- [ ] Project の **Settings → Manage access** で linked Team の read permission を確認できる。
+- [ ] renamed Team mapping 後の `target-org/slug` が `TeamLink` category で一致する。
+- [ ] import を `--on-conflict update` で再実行しても Team link が重複しない。
+- [ ] explicit Team collaborator の role 差分と Team link 差分が別カテゴリで報告される。
 - [ ] inherited access は判定対象外として記録。
 
 ---
@@ -658,12 +687,15 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-5 | Auto-add 上限に近い Project へ import | 超過分が warning + skip される。 |
 | N-6 | `verify` 前に target field value を手動変更 | `ghpmv verify` が差分を error として検出する。 |
 | N-7 | `verify` 前に target Status Update の status/date/body を変更 | `StatusUpdate` category と JSON report が sequence 上の差分を error として検出する。 |
+| N-8 | `team-mappings.csv` を存在しない Team に向けて import | Project 作成・metadata 更新より前に `unresolved` preflight error で停止する。 |
+| N-9 | Team read/maintainer 権限のない token、または admin access のない既存 Project で import | Team mutation の実行前に `permission` preflight error で停止する。 |
+| N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
 
 ---
 
 ## 10. クリーンアップ
 
-手動テストごとに作った target Project / target repository は、結果記録後に削除します。
+手動テストごとに作った target Project / target repository / 専用 Team は、結果記録後に削除します。共有 Team は削除・変更しません。
 
 ```powershell
 gh repo delete "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO" --yes

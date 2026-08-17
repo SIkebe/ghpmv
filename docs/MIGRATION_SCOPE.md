@@ -18,6 +18,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Linked repositories | ✅ | Exported and re-linked during import when the target repository can be resolved through `--repo-mapping`. |
 | Project collaborators | ✅ with browser automation / API import-only | GitHub exposes a write API but no read API for project collaborators. With `--enable-browser-automation`, `ghpmv` exports explicitly listed project collaborators from Settings → Manage access and imports them through the API. Inherited/base-role access is outside `ghpmv`'s scope and is expected to come from GEI, organization/team/repository settings, or enterprise policy. |
 | Project status updates | ✅ | Body, status, start/target dates, and history order are migrated. Because GitHub cannot preserve the original author or creation time, `ghpmv` prepends them to the recreated body. |
+| Project-to-Team links | ✅ for organization-owned Projects | Exported through `ProjectV2.teams`, stored as `organization/slug`, resolved before any write, and recreated with `linkProjectV2ToTeam`. Explicit Team collaborators remain separate. Target-only links are reported but not removed. User-owned Projects use empty/no-op/not-applicable behavior. |
 | Project templates | ❌ | Template status itself is not part of schema v1 (#47). When importing status updates into an existing template target, `ghpmv` temporarily unmarks it and restores its original template state only after all import writers finish. |
 
 ## Fields and field values
@@ -86,7 +87,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 |---|---:|---|
 | `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. An ambiguous Status Update create that did not persist its target ID keeps durable pending state and requires manual reconciliation instead of claiming a body/status/date match. |
-| Mapping CSV templates | ✅ | `export` writes repository, organization, and user mapping templates without overwriting existing files. |
+| Mapping CSV templates | ✅ | `export` writes repository, organization, Team, and user mapping templates without overwriting existing files. Team rows use `organization/slug` on both sides. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
 | Update check opt-out | ✅ | Use `--no-update-check` or `GHPMV_NO_UPDATE_CHECK`. No telemetry is sent. |
 
@@ -98,9 +99,10 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 4. **Fill in `repository-mappings.csv`.** Every Issue / PR Project item needs a source repository mapped to a target repository visible to the target token.
 5. **Fill in `organization-mappings.csv`.** Browser-assisted import requires every `org:` filter value to resolve before it writes the Project. Organization mappings can be inferred from repository owners when the repository mappings make the result unambiguous.
 6. **Fill in `user-mappings.csv` if generated.** This is important for Enterprise Managed Users, where target logins usually have a `_shortcode` suffix.
-7. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
+7. **Review `team-mappings.csv` if generated.** Blank targets keep the source slug in the target organization. Fill `target-org/new-slug` for renamed Teams. Import stops before any Project write when a Team is unresolved, a mapping is many-to-one, Team read permission is missing, or the existing Project is not updatable.
+8. **Enable browser automation only when needed.** Run `ghpmv setup --browsers` and `ghpmv login`, then pass `--enable-browser-automation` to export, import, and verify when Views or Workflows must be fully migrated and checked.
 
-Pass the same repository, user, and organization mappings to `ghpmv verify`. If browser automation is disabled, `ghpmv` still migrates projects, fields, items, values, ordering, archived state, and linked repositories, but Views and Workflows are not fully recreated.
+Pass the same repository, user, organization, and Team mappings to `ghpmv verify`. If browser automation is disabled, `ghpmv` still migrates projects, fields, items, values, ordering, archived state, and linked repositories, but Views and Workflows are not fully recreated.
 
 ## Unsupported areas
 

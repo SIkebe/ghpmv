@@ -47,6 +47,19 @@ public sealed class FixtureProjectBuilder
         string title = "gpm-fixture",
         string repositoryName = "fixture-repo",
         CancellationToken cancellationToken = default)
+        => await CreateAsync(
+            organization,
+            title,
+            repositoryName,
+            teamSlug: null,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task<FixtureProjectSetupResult> CreateAsync(
+        string organization,
+        string title,
+        string repositoryName,
+        string? teamSlug,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(organization);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -58,7 +71,8 @@ public sealed class FixtureProjectBuilder
             apiHost,
             organization,
             title,
-            repositoryName);
+            repositoryName,
+            teamSlug);
         // Keep this order consistent so overlapping operation and repository scopes cannot deadlock.
         using var operationLock = AcquireFixtureOperationLock(operationDirectory);
         var repositoryFullName = $"{organization}/{repositoryName}";
@@ -205,7 +219,13 @@ public sealed class FixtureProjectBuilder
                     ?? throw new InvalidOperationException(
                         $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
 
-            var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber, referenceDate);
+            var snapshot = CreateSnapshot(
+                title,
+                repositoryFullName,
+                viewerLogin,
+                pullRequestNumber,
+                teamSlug,
+                referenceDate);
             var importStatusUpdates = true;
             IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
                 new Dictionary<int, string>();
@@ -1124,11 +1144,13 @@ public sealed class FixtureProjectBuilder
         string apiHost,
         string organization,
         string title,
-        string repositoryName)
+        string repositoryName,
+        string? teamSlug)
     {
+        var teamIdentity = teamSlug is null ? string.Empty : $"\n{teamSlug.ToLowerInvariant()}";
         var current = GetOperationDirectory(
             root,
-            $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}");
+            $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}{teamIdentity}");
         if (HasDurableOperationState(current))
         {
             return current;
@@ -1136,12 +1158,12 @@ public sealed class FixtureProjectBuilder
 
         var legacyInputs = new List<string>
         {
-            $"{apiHost}\n{organization}\n{title}\n{repositoryName}",
+            $"{apiHost}\n{organization}\n{title}\n{repositoryName}{(teamSlug is null ? string.Empty : $"\n{teamSlug}")}",
         };
         if (string.Equals(apiHost, "https://api.github.com", StringComparison.Ordinal))
         {
-            legacyInputs.Add($"{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}");
-            legacyInputs.Add($"{organization}\n{title}\n{repositoryName}");
+            legacyInputs.Add($"{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}{teamIdentity}");
+            legacyInputs.Add($"{organization}\n{title}\n{repositoryName}{(teamSlug is null ? string.Empty : $"\n{teamSlug}")}");
         }
 
         var legacyDirectories = legacyInputs
@@ -1409,6 +1431,7 @@ public sealed class FixtureProjectBuilder
         string repositoryFullName,
         string viewerLogin,
         int pullRequestNumber,
+        string? teamSlug = null,
         DateOnly? referenceDate = null)
     {
         repositoryFullName = repositoryFullName.ToLowerInvariant();
@@ -1578,6 +1601,17 @@ public sealed class FixtureProjectBuilder
                 },
             ],
             LinkedRepositories = [repositoryFullName],
+            LinkedTeams = teamSlug is null
+                ? []
+                :
+                [
+                    new LinkedTeamSnapshot
+                    {
+                        Organization = repositoryFullName[..repositoryFullName.IndexOf('/', StringComparison.Ordinal)],
+                        Slug = teamSlug,
+                        Name = teamSlug,
+                    },
+                ],
         };
 
         static ItemSnapshot Draft(int position, string title, bool archived, IReadOnlyList<string> assignees, params FieldValueSnapshot[] values) => new()

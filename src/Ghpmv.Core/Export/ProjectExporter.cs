@@ -18,6 +18,7 @@ public sealed class ProjectExporter
     private const int FieldsPageSize = 50;
     private const int ItemsPageSize = 50;
     private const int StatusUpdatesPageSize = 50;
+    private const int TeamsPageSize = 50;
 
     private readonly GitHubGraphQLClient _client;
 
@@ -72,6 +73,9 @@ public sealed class ProjectExporter
             ownerLogin,
             projectNumber,
             cancellationToken).ConfigureAwait(false);
+        var linkedTeams = OwnerType == ProjectOwnerType.Organization
+            ? await FetchLinkedTeamsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+            : [];
 
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
@@ -91,6 +95,7 @@ public sealed class ProjectExporter
             // populate explicit collaborators from Settings → Manage access.
             Collaborators = null,
             LinkedRepositories = linkedRepositories,
+            LinkedTeams = linkedTeams,
         };
 
         if (PostExportAsync is not null)
@@ -229,6 +234,36 @@ public sealed class ProjectExporter
         }
 
         return nodes;
+    }
+
+    private async Task<List<LinkedTeamSnapshot>> FetchLinkedTeamsAsync(
+        string ownerLogin,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var teams = new List<LinkedTeamSnapshot>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            TeamsQuery,
+            new { login = ownerLogin, number = projectNumber, first = TeamsPageSize },
+            "organization.projectV2.teams",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var organization = node.GetProperty("organization").GetProperty("login").GetString() ?? string.Empty;
+            var slug = node.GetProperty("slug").GetString() ?? string.Empty;
+            if (organization.Length == 0 || slug.Length == 0)
+            {
+                throw new GitHubGraphQLException("A linked Team was returned without its organization login or slug.");
+            }
+
+            teams.Add(new LinkedTeamSnapshot
+            {
+                Organization = organization,
+                Slug = slug,
+                Name = node.GetProperty("name").GetString() ?? string.Empty,
+            });
+        }
+
+        return teams;
     }
 
     private static ProjectInfoSnapshot ParseProjectInfo(JsonElement project) => new()
@@ -673,6 +708,24 @@ public sealed class ProjectExporter
     private string FieldsQuery => FieldsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
     private string StatusUpdatesQuery => StatusUpdatesQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
+    private const string TeamsQuery =
+        """
+        query($login: String!, $number: Int!, $first: Int!, $after: String) {
+          organization(login: $login) {
+            projectV2(number: $number) {
+              teams(first: $first, after: $after) {
+                nodes {
+                  name
+                  slug
+                  organization { login }
+                }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }
+        """;
 
     private string ListProjectsQuery => ListProjectsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
@@ -127,7 +128,7 @@ public class ProjectExporterTests
             item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: false }).Text);
         var teamsValue = item.FieldValues.Single(value => value is { FieldName: "Teams", IsIssueField: true });
         Assert.Equal(["Platform", "SDK"], teamsValue.MultiSelectOptionNames);
-        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Equal(5, handler.RequestBodies.Count);
         Assert.Contains("isIssueField", handler.RequestBodies[3], StringComparison.Ordinal);
         Assert.Contains("issueField", handler.RequestBodies[3], StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -162,8 +163,60 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(["First", "Second"], snapshot.Fields.Select(field => field.Name));
-        Assert.Equal(5, handler.RequestBodies.Count);
+        Assert.Equal(6, handler.RequestBodies.Count);
         Assert.Contains("\"after\":\"field-cursor\"", handler.RequestBodies[4], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_paginates_linked_teams_and_uses_stable_logical_identities()
+    {
+        using var handler = new StubHandler(
+            [
+                TeamsResponse(
+                    """[{"name":"Platform","slug":"platform","organization":{"login":"source"}}]""",
+                    hasNextPage: true,
+                    endCursor: "team-cursor"),
+                TeamsResponse(
+                    """[{"name":"SDK","slug":"sdk","organization":{"login":"source"}}]"""),
+            ],
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        var linkedTeams = Assert.IsAssignableFrom<IReadOnlyList<LinkedTeamSnapshot>>(snapshot.LinkedTeams);
+        Assert.Equal(["source/platform", "source/sdk"], linkedTeams.Select(team => team.Identity));
+        Assert.Equal(["Platform", "SDK"], linkedTeams.Select(team => team.Name));
+        Assert.DoesNotContain(
+            JsonSerializer.Serialize(snapshot, SnapshotJsonContext.Default.ProjectSnapshot),
+            "TEAM_",
+            StringComparison.Ordinal);
+        Assert.Contains(handler.RequestBodies, body => body.Contains("\"after\":\"team-cursor\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task User_owned_export_has_empty_team_links_without_querying_teams()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]").Replace("\"organization\"", "\"user\"", StringComparison.Ordinal),
+            EmptyItemsResponse.Replace("\"organization\"", "\"user\"", StringComparison.Ordinal),
+            EmptyStatusUpdatesResponse.Replace("\"organization\"", "\"user\"", StringComparison.Ordinal),
+            FieldsResponse("[]").Replace("\"organization\"", "\"user\"", StringComparison.Ordinal));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client)
+        {
+            OwnerType = ProjectOwnerType.User,
+        }.ExportAsync("source-user", 1, TestContext.Current.CancellationToken);
+
+        Assert.Empty(snapshot.LinkedTeams!);
+        Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("teams(first:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -464,7 +517,7 @@ public class ProjectExporterTests
         Assert.NotNull(snapshot.StatusUpdates);
         Assert.Equal(["Page one", "Page two"], snapshot.StatusUpdates.Select(update => update.Body));
         Assert.Equal(["ON_TRACK", "OFF_TRACK"], snapshot.StatusUpdates.Select(update => update.Status));
-        Assert.Equal(5, handler.RequestBodies.Count);
+        Assert.Equal(6, handler.RequestBodies.Count);
         Assert.Contains("\"after\":\"c1\"", handler.RequestBodies[3], StringComparison.Ordinal);
         Assert.Contains("\"first\":50", handler.RequestBodies[3], StringComparison.Ordinal);
         Assert.Contains("\"after\":null", handler.RequestBodies[2], StringComparison.Ordinal);
@@ -582,6 +635,14 @@ public class ProjectExporterTests
         ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
         ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
+    private static string TeamsResponse(
+        string teams,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
+        "{\"data\":{\"organization\":{\"projectV2\":{\"teams\":{\"nodes\":" + teams +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler) =>
         new(
             "dummy-token",
@@ -589,9 +650,21 @@ public class ProjectExporterTests
             handler,
             delayAsync: static (_, _) => Task.CompletedTask);
 
-    private sealed class StubHandler(params string[] responses) : HttpMessageHandler
+    private sealed class StubHandler : HttpMessageHandler
     {
-        private readonly Queue<string> _responses = new(responses);
+        private readonly Queue<string> _responses;
+        private readonly Queue<string> _teamResponses;
+
+        public StubHandler(params string[] responses)
+            : this([], responses)
+        {
+        }
+
+        public StubHandler(IReadOnlyList<string> teamResponses, params string[] responses)
+        {
+            _responses = new Queue<string>(responses);
+            _teamResponses = new Queue<string>(teamResponses);
+        }
 
         public List<string> RequestBodies { get; } = [];
 
@@ -599,10 +672,16 @@ public class ProjectExporterTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            RequestBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            RequestBodies.Add(body);
+            var response = body.Contains("teams(first:", StringComparison.Ordinal)
+                ? _teamResponses.Count > 0
+                    ? _teamResponses.Dequeue()
+                    : TeamsResponse("[]")
+                : _responses.Dequeue();
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json"),
+                Content = new StringContent(response, Encoding.UTF8, "application/json"),
             };
         }
     }
