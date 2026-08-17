@@ -992,7 +992,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
             BeforeWriteAsync = parseResult.GetValue(fixtureUiOption)
-                ? async token =>
+                ? async ct =>
                 {
                     if (authenticatedFixtureUiSession is not null)
                     {
@@ -1011,8 +1011,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     });
                     try
                     {
-                        var apiLogin = await graphQl.GetViewerLoginAsync(token);
-                        await session.ValidateAuthenticationAsync(apiLogin, token);
+                        var apiLogin = await graphQl.GetViewerLoginAsync(ct);
+                        await session.ValidateAuthenticationAsync(apiLogin, ct);
                         authenticatedFixtureUiSession = session;
                     }
                     catch
