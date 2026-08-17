@@ -99,12 +99,24 @@
       ],
       "properties": {
         "organization": { "type": "string", "minLength": 1 },
-        "apiBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
-        "webBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "apiBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://api(?:\\.github\\.com|\\.[A-Za-z0-9-]+\\.ghe\\.com)(?:/graphql)?/?$"
+        },
+        "webBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?:github\\.com|[A-Za-z0-9-]+\\.ghe\\.com)/?$"
+        },
         "uploadsBaseUrl": {
           "oneOf": [
             { "type": "null" },
-            { "type": "string", "format": "uri", "pattern": "^https://" }
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://uploads(?:\\.github\\.com|\\.[A-Za-z0-9-]+\\.ghe\\.com)/?$"
+            }
           ]
         },
         "browserProfile": { "type": "string", "minLength": 1 },

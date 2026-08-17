@@ -201,6 +201,18 @@ public class E2eTestSettingsTests
                 TokenEnvironmentVariable = "GHPMV_SOURCE_TOKEN",
             },
         };
+        var nonGitHubApiHost = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                ApiBaseUrl = "https://example.com/graphql",
+                WebBaseUrl = "https://github.com",
+                BrowserProfile = "source",
+                BrowserStateEnvironmentVariable = "SOURCE_STATE",
+                TokenEnvironmentVariable = "SOURCE_TOKEN",
+            },
+        };
 
         Assert.Contains(
             "target.webBaseUrl must be the origin https://example.ghe.com",
@@ -209,6 +221,10 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "require different token environment variables",
             Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentCredentials.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "apiBaseUrl must use api.github.com or api.<tenant>.ghe.com",
+            Assert.Throws<InvalidDataException>(() => nonGitHubApiHost.Validate()).Message,
             StringComparison.Ordinal);
     }
 

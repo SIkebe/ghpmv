@@ -192,19 +192,31 @@ public sealed partial record E2eTestSettings
 
         var apiUri = ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);
         var webUri = ValidateAbsoluteHttpsUrl(endpoint.WebBaseUrl, $"{propertyName}.webBaseUrl", sourceName);
+        if ((apiUri.AbsolutePath.Length > 1
+                && !string.Equals(apiUri.AbsolutePath.TrimEnd('/'), "/graphql", StringComparison.OrdinalIgnoreCase))
+            || !string.IsNullOrEmpty(apiUri.Query)
+            || !string.IsNullOrEmpty(apiUri.Fragment)
+            || !string.IsNullOrEmpty(apiUri.UserInfo))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.apiBaseUrl must be a GitHub API origin with an optional /graphql path.");
+        }
+
         var expectedWebHost = apiUri.Host switch
         {
             "api.github.com" => "github.com",
             var host when host.StartsWith("api.", StringComparison.OrdinalIgnoreCase)
                 && host.EndsWith(".ghe.com", StringComparison.OrdinalIgnoreCase)
-                && host.Length > "api..ghe.com".Length => host["api.".Length..],
+                && host.Length > "api..ghe.com".Length
+                && host.Count(character => character == '.') == 3 => host["api.".Length..],
             _ => throw new InvalidDataException(
                 $"{sourceName}: {propertyName}.apiBaseUrl must use api.github.com or api.<tenant>.ghe.com."),
         };
         if (!HasSameOrigin(webUri, apiUri, expectedWebHost)
             || (webUri.AbsolutePath.Length > 1 && webUri.AbsolutePath != "/")
             || !string.IsNullOrEmpty(webUri.Query)
-            || !string.IsNullOrEmpty(webUri.Fragment))
+            || !string.IsNullOrEmpty(webUri.Fragment)
+            || !string.IsNullOrEmpty(webUri.UserInfo))
         {
             throw new InvalidDataException(
                 $"{sourceName}: {propertyName}.webBaseUrl must be the origin https://{expectedWebHost} matching its API endpoint.");
@@ -222,7 +234,8 @@ public sealed partial record E2eTestSettings
             if (!HasSameOrigin(uploadsUri, apiUri, expectedUploadsHost)
                 || (uploadsUri.AbsolutePath.Length > 1 && uploadsUri.AbsolutePath != "/")
                 || !string.IsNullOrEmpty(uploadsUri.Query)
-                || !string.IsNullOrEmpty(uploadsUri.Fragment))
+                || !string.IsNullOrEmpty(uploadsUri.Fragment)
+                || !string.IsNullOrEmpty(uploadsUri.UserInfo))
             {
                 throw new InvalidDataException(
                     $"{sourceName}: {propertyName}.uploadsBaseUrl must be the origin https://{expectedUploadsHost} matching its API endpoint.");
