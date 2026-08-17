@@ -171,6 +171,10 @@ public sealed partial record E2eTestSettings
             throw new InvalidDataException(
                 $"{sourceName}: gei.sourceRepository and gei.targetRepository are required.");
         }
+        ValidateRepositoryName(Gei.SourceRepository, "gei.sourceRepository", sourceName);
+        ValidateRepositoryName(Gei.TargetRepository, "gei.targetRepository", sourceName);
+        ValidateOptionalUserLogin(Gei.SourceTokenOwnerLogin, "gei.sourceTokenOwnerLogin", sourceName);
+        ValidateOptionalUserLogin(Gei.TargetTokenOwnerLogin, "gei.targetTokenOwnerLogin", sourceName);
 
         ValidateEnvironmentVariable(Gei.SourceTokenEnvironmentVariable, "gei.sourceTokenEnvironmentVariable", sourceName);
         ValidateEnvironmentVariable(Gei.TargetTokenEnvironmentVariable, "gei.targetTokenEnvironmentVariable", sourceName);
@@ -217,6 +221,9 @@ public sealed partial record E2eTestSettings
         {
             throw new InvalidDataException($"{sourceName}: users.collaboratorLogin is required.");
         }
+        ValidateOptionalUserLogin(Users.SourceBrowserLogin, "users.sourceBrowserLogin", sourceName);
+        ValidateOptionalUserLogin(Users.TargetBrowserLogin, "users.targetBrowserLogin", sourceName);
+        ValidateUserLogin(Users.CollaboratorLogin, "users.collaboratorLogin", sourceName);
 
         var sourceLogins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mapping in Users.Mappings)
@@ -226,6 +233,8 @@ public sealed partial record E2eTestSettings
                 throw new InvalidDataException(
                     $"{sourceName}: every users.mappings entry requires non-empty sourceLogin and targetLogin.");
             }
+            ValidateUserLogin(mapping.SourceLogin, "users.mappings.sourceLogin", sourceName);
+            ValidateUserLogin(mapping.TargetLogin, "users.mappings.targetLogin", sourceName);
 
             if (!sourceLogins.Add(mapping.SourceLogin))
             {
@@ -240,6 +249,11 @@ public sealed partial record E2eTestSettings
         if (string.IsNullOrWhiteSpace(endpoint.Organization))
         {
             throw new InvalidDataException($"{sourceName}: {propertyName}.organization is required.");
+        }
+        if (!OrganizationName().IsMatch(endpoint.Organization))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.organization is not a valid GitHub organization login.");
         }
 
         if (string.IsNullOrWhiteSpace(endpoint.BrowserProfile))
@@ -256,7 +270,7 @@ public sealed partial record E2eTestSettings
         var apiUri = ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);
         var webUri = ValidateAbsoluteHttpsUrl(endpoint.WebBaseUrl, $"{propertyName}.webBaseUrl", sourceName);
         if ((apiUri.AbsolutePath.Length > 1
-                && !string.Equals(apiUri.AbsolutePath.TrimEnd('/'), "/graphql", StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(apiUri.AbsolutePath.TrimEnd('/'), "/graphql", StringComparison.Ordinal))
             || !apiUri.IsDefaultPort
             || !string.IsNullOrEmpty(apiUri.Query)
             || !string.IsNullOrEmpty(apiUri.Fragment)
@@ -329,6 +343,8 @@ public sealed partial record E2eTestSettings
             throw new InvalidDataException(
                 $"{sourceName}: {propertyName}.sourceRepository and targetRepository are required.");
         }
+        ValidateRepositoryName(fixture.SourceRepository, $"{propertyName}.sourceRepository", sourceName);
+        ValidateRepositoryName(fixture.TargetRepository, $"{propertyName}.targetRepository", sourceName);
     }
 
     private static Uri ValidateAbsoluteHttpsUrl(string value, string propertyName, string sourceName)
@@ -355,6 +371,32 @@ public sealed partial record E2eTestSettings
         {
             throw new InvalidDataException(
                 $"{sourceName}: {propertyName} must contain an environment variable name, not a token value.");
+        }
+    }
+
+    private static void ValidateRepositoryName(string value, string propertyName, string sourceName)
+    {
+        if (!RepositoryName().IsMatch(value) || value is "." or "..")
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName} is not a valid GitHub repository short name.");
+        }
+    }
+
+    private static void ValidateOptionalUserLogin(string value, string propertyName, string sourceName)
+    {
+        if (!string.IsNullOrEmpty(value))
+        {
+            ValidateUserLogin(value, propertyName, sourceName);
+        }
+    }
+
+    private static void ValidateUserLogin(string value, string propertyName, string sourceName)
+    {
+        if (!UserLogin().IsMatch(value))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName} is not a valid GitHub user login.");
         }
     }
 
@@ -501,6 +543,15 @@ public sealed partial record E2eTestSettings
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex BrowserProfileName();
+
+    [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$", RegexOptions.CultureInvariant)]
+    private static partial Regex OrganizationName();
+
+    [GeneratedRegex("^[A-Za-z0-9._-]{1,100}$", RegexOptions.CultureInvariant)]
+    private static partial Regex RepositoryName();
+
+    [GeneratedRegex("^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?$", RegexOptions.CultureInvariant)]
+    private static partial Regex UserLogin();
 }
 
 public sealed record E2eEndpointSettings

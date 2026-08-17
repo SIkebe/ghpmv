@@ -24,9 +24,9 @@
       "additionalProperties": false,
       "required": ["sourceBrowserLogin", "targetBrowserLogin", "collaboratorLogin", "mappings"],
       "properties": {
-        "sourceBrowserLogin": { "type": "string" },
-        "targetBrowserLogin": { "type": "string" },
-        "collaboratorLogin": { "type": "string", "minLength": 1 },
+        "sourceBrowserLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "targetBrowserLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "collaboratorLogin": { "$ref": "#/$defs/userLogin" },
         "mappings": {
           "type": "array",
           "items": {
@@ -34,8 +34,8 @@
             "additionalProperties": false,
             "required": ["sourceLogin", "targetLogin"],
             "properties": {
-              "sourceLogin": { "type": "string", "minLength": 1 },
-              "targetLogin": { "type": "string", "minLength": 1 }
+              "sourceLogin": { "$ref": "#/$defs/userLogin" },
+              "targetLogin": { "$ref": "#/$defs/userLogin" }
             }
           }
         }
@@ -56,8 +56,8 @@
         "targetRole"
       ],
       "properties": {
-        "sourceRepository": { "type": "string", "minLength": 1 },
-        "targetRepository": { "type": "string", "minLength": 1 },
+        "sourceRepository": { "$ref": "#/$defs/repositoryName" },
+        "targetRepository": { "$ref": "#/$defs/repositoryName" },
         "targetRepositoryVisibility": { "enum": ["private", "internal", "public"] },
         "sourceTokenEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
@@ -67,8 +67,8 @@
           "$ref": "#/$defs/environmentVariable",
           "description": "Must differ from sourceTokenEnvironmentVariable for cross-deployment GEI."
         },
-        "sourceTokenOwnerLogin": { "type": "string" },
-        "targetTokenOwnerLogin": { "type": "string" },
+        "sourceTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "targetTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "sourceRole": { "$ref": "#/$defs/geiRole" },
         "targetRole": { "$ref": "#/$defs/geiRole" }
       }
@@ -137,7 +137,10 @@
         "tokenEnvironmentVariable"
       ],
       "properties": {
-        "organization": { "type": "string", "minLength": 1 },
+        "organization": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
         "apiBaseUrl": {
           "type": "string",
           "format": "uri",
@@ -178,8 +181,8 @@
       "required": ["projectNumber", "sourceRepository", "targetRepository"],
       "properties": {
         "projectNumber": { "type": "integer", "minimum": 1 },
-        "sourceRepository": { "type": "string", "minLength": 1 },
-        "targetRepository": { "type": "string", "minLength": 1 }
+        "sourceRepository": { "$ref": "#/$defs/repositoryName" },
+        "targetRepository": { "$ref": "#/$defs/repositoryName" }
       }
     },
     "environmentVariable": {
@@ -188,6 +191,18 @@
     },
     "geiRole": {
       "enum": ["owner", "migrator-active", "migrator-pending"]
+    },
+    "repositoryName": {
+      "type": "string",
+      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$"
+    },
+    "userLogin": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?$"
+    },
+    "optionalUserLogin": {
+      "type": "string",
+      "pattern": "^(?:|[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?)$"
     }
   }
 }

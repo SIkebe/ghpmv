@@ -269,6 +269,22 @@ public class E2eTestSettingsTests
                 BrowserProfile = "source",
             },
         };
+        var unsafeOrganization = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source;Remove-Item",
+                BrowserProfile = "source",
+            },
+        };
+        var unsafeRepository = new E2eTestSettings
+        {
+            Gei = new E2eGeiSettings { SourceRepository = "repo;Remove-Item" },
+        };
+        var unsafeUserLogin = new E2eTestSettings
+        {
+            Users = new E2eUserSettings { CollaboratorLogin = "user;Remove-Item" },
+        };
 
         Assert.Contains(
             "source.browserProfile is required",
@@ -297,6 +313,18 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "require different browser profiles",
             Assert.Throws<InvalidDataException>(() => sharedProfile.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "is not a valid GitHub organization login",
+            Assert.Throws<InvalidDataException>(() => unsafeOrganization.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "is not a valid GitHub repository short name",
+            Assert.Throws<InvalidDataException>(() => unsafeRepository.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "is not a valid GitHub user login",
+            Assert.Throws<InvalidDataException>(() => unsafeUserLogin.Validate()).Message,
             StringComparison.Ordinal);
     }
 
