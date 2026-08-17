@@ -101,11 +101,17 @@ public sealed partial record E2eTestSettings
 
         ValidateEndpoint(Source, "source", sourceName);
         ValidateEndpoint(Target, "target", sourceName);
-        var tokenEnvironmentVariables = new[]
+        var tokenEnvironmentVariables = new List<string>
         {
             Source.TokenEnvironmentVariable,
             Target.TokenEnvironmentVariable,
         };
+        if (Execution.RepositoryPreparationMode == "gei")
+        {
+            tokenEnvironmentVariables.Add(Gei.SourceTokenEnvironmentVariable);
+            tokenEnvironmentVariables.Add(Gei.TargetTokenEnvironmentVariable);
+        }
+
         var browserStateEnvironmentVariables = new[]
         {
             Source.BrowserStateEnvironmentVariable,
@@ -118,6 +124,12 @@ public sealed partial record E2eTestSettings
         {
             throw new InvalidDataException(
                 $"{sourceName}: environment variable '{roleOverlap}' cannot store both a token and browser state path.");
+        }
+
+        if (string.Equals(Source.BrowserProfile, Target.BrowserProfile, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: source and target require different browser profiles.");
         }
 
         if (!HasSameDeployment(Source, Target))
@@ -138,12 +150,6 @@ public sealed partial record E2eTestSettings
             {
                 throw new InvalidDataException(
                     $"{sourceName}: cross-deployment source and target require different browser-state environment variables.");
-            }
-
-            if (string.Equals(Source.BrowserProfile, Target.BrowserProfile, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException(
-                    $"{sourceName}: cross-deployment source and target require different browser profiles.");
             }
 
             if (Execution.RepositoryPreparationMode == "gei"
@@ -239,6 +245,12 @@ public sealed partial record E2eTestSettings
         if (string.IsNullOrWhiteSpace(endpoint.BrowserProfile))
         {
             throw new InvalidDataException($"{sourceName}: {propertyName}.browserProfile is required.");
+        }
+
+        if (!BrowserProfileName().IsMatch(endpoint.BrowserProfile))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.browserProfile must contain only letters, digits, '.', '_', or '-' and start with a letter or digit.");
         }
 
         var apiUri = ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);
@@ -486,6 +498,9 @@ public sealed partial record E2eTestSettings
 
     [GeneratedRegex("^(?:ghp|gho|ghu|ghs|ghr|github_pat)_", RegexOptions.CultureInvariant)]
     private static partial Regex GitHubTokenPrefix();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", RegexOptions.CultureInvariant)]
+    private static partial Regex BrowserProfileName();
 }
 
 public sealed record E2eEndpointSettings

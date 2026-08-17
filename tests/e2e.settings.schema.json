@@ -158,7 +158,10 @@
             }
           ]
         },
-        "browserProfile": { "type": "string", "minLength": 1 },
+        "browserProfile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
         "browserStateEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
           "description": "Must not match either endpoint's tokenEnvironmentVariable."

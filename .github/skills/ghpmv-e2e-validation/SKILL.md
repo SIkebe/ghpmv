@@ -196,7 +196,7 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 
 このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。
 
-同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名が設定済みなのに固定名のstorage-stateを使ってはならない。
+同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
 
 設定済みでも、実resource作成の説明と同意、Organization administrator / GEI roleの現在状態、PAT permission / approval、warning許容、cleanup同意は省略しない。特に`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
 

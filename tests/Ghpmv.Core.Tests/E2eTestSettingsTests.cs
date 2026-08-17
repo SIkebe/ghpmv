@@ -246,6 +246,29 @@ public class E2eTestSettingsTests
                 BrowserStateEnvironmentVariable = "SHARED_E2E_VALUE",
             },
         };
+        var geiTokenOverlapsBrowserState = new E2eTestSettings
+        {
+            Gei = new E2eGeiSettings
+            {
+                SourceTokenEnvironmentVariable = "GHPMV_SOURCE_BROWSER_STATE",
+            },
+        };
+        var unsafeProfile = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                BrowserProfile = "source; Remove-Item",
+            },
+        };
+        var sharedProfile = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                BrowserProfile = "source",
+            },
+        };
 
         Assert.Contains(
             "source.browserProfile is required",
@@ -262,6 +285,18 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "cannot store both a token and browser state path",
             Assert.Throws<InvalidDataException>(() => overlappingCredentialRoles.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cannot store both a token and browser state path",
+            Assert.Throws<InvalidDataException>(() => geiTokenOverlapsBrowserState.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "browserProfile must contain only letters",
+            Assert.Throws<InvalidDataException>(() => unsafeProfile.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "require different browser profiles",
+            Assert.Throws<InvalidDataException>(() => sharedProfile.Validate()).Message,
             StringComparison.Ordinal);
     }
 
