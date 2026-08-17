@@ -5,6 +5,11 @@ namespace Ghpmv.Core.Tests;
 
 public class E2eTestSettingsTests
 {
+    private static readonly JsonSerializerOptions CamelCaseJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
     [Fact]
     public void Load_accepts_comments_trailing_commas_gei_and_user_mappings()
     {
@@ -126,7 +131,7 @@ public class E2eTestSettingsTests
     {
         var json = JsonSerializer.Serialize(
             new E2eTestSettings(),
-            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            CamelCaseJsonOptions);
         json = json.Replace(
             "\"sourceBrowserLogin\":\"\"",
             "\"sourceBrowserLogin\":null",
