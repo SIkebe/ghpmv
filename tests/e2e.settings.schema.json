@@ -159,8 +159,14 @@
           ]
         },
         "browserProfile": { "type": "string", "minLength": 1 },
-        "browserStateEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
-        "tokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" }
+        "browserStateEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must not match either endpoint's tokenEnvironmentVariable."
+        },
+        "tokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must not match either endpoint's browserStateEnvironmentVariable."
+        }
       }
     },
     "fixture": {

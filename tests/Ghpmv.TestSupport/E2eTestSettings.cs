@@ -101,6 +101,25 @@ public sealed partial record E2eTestSettings
 
         ValidateEndpoint(Source, "source", sourceName);
         ValidateEndpoint(Target, "target", sourceName);
+        var tokenEnvironmentVariables = new[]
+        {
+            Source.TokenEnvironmentVariable,
+            Target.TokenEnvironmentVariable,
+        };
+        var browserStateEnvironmentVariables = new[]
+        {
+            Source.BrowserStateEnvironmentVariable,
+            Target.BrowserStateEnvironmentVariable,
+        };
+        var roleOverlap = tokenEnvironmentVariables
+            .Intersect(browserStateEnvironmentVariables, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (roleOverlap is not null)
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: environment variable '{roleOverlap}' cannot store both a token and browser state path.");
+        }
+
         if (!HasSameDeployment(Source, Target))
         {
             if (string.Equals(

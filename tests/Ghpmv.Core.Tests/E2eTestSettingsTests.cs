@@ -144,50 +144,51 @@ public class E2eTestSettingsTests
             Assert.Throws<JsonException>(() => E2eTestSettings.Load(path));
         }
 
-        [Fact]
-        public void LoadDefault_honors_explicit_path_and_local_precedence()
-        {
-            var root = Path.Combine(Path.GetTempPath(), $"ghpmv-e2e-discovery-{Guid.NewGuid():N}");
-            var testsDirectory = Path.Combine(root, "tests");
-            var explicitMissingPath = Path.Combine(root, "missing.jsonc");
-            Directory.CreateDirectory(testsDirectory);
-
-            try
-            {
-                Assert.Throws<FileNotFoundException>(
-                    () => E2eTestSettings.LoadDefault(explicitMissingPath, root, root));
-
-                var shared = new E2eTestSettings
-                {
-                    Source = new E2eEndpointSettings
-                    {
-                        Organization = "shared-org",
-                        BrowserProfile = "source",
-                    },
-                };
-                var local = shared with
-                {
-                    Source = shared.Source with { Organization = "local-org" },
-                };
-                File.WriteAllText(
-                    Path.Combine(testsDirectory, "e2e.settings.jsonc"),
-                    JsonSerializer.Serialize(shared, CamelCaseJsonOptions));
-                File.WriteAllText(
-                    Path.Combine(testsDirectory, "e2e.settings.local.jsonc"),
-                    JsonSerializer.Serialize(local, CamelCaseJsonOptions));
-
-                var result = E2eTestSettings.LoadDefault(explicitPath: null, root, root);
-
-                Assert.Equal("local-org", result.Source.Organization);
-            }
-            finally
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void LoadDefault_honors_explicit_path_and_local_precedence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"ghpmv-e2e-discovery-{Guid.NewGuid():N}");
+        var testsDirectory = Path.Combine(root, "tests");
+        var explicitMissingPath = Path.Combine(root, "missing.jsonc");
+        Directory.CreateDirectory(testsDirectory);
+
+        try
+        {
+            Assert.Throws<FileNotFoundException>(
+                () => E2eTestSettings.LoadDefault(explicitMissingPath, root, root));
+
+            var shared = new E2eTestSettings
+            {
+                Source = new E2eEndpointSettings
+                {
+                    Organization = "shared-org",
+                    BrowserProfile = "source",
+                },
+            };
+            var local = shared with
+            {
+                Source = shared.Source with { Organization = "local-org" },
+            };
+            File.WriteAllText(
+                Path.Combine(testsDirectory, "e2e.settings.jsonc"),
+                JsonSerializer.Serialize(shared, CamelCaseJsonOptions));
+            File.WriteAllText(
+                Path.Combine(testsDirectory, "e2e.settings.local.jsonc"),
+                JsonSerializer.Serialize(local, CamelCaseJsonOptions));
+
+            var result = E2eTestSettings.LoadDefault(explicitPath: null, root, root);
+
+            Assert.Equal("local-org", result.Source.Organization);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -230,6 +231,21 @@ public class E2eTestSettingsTests
         {
             Users = new E2eUserSettings { CollaboratorLogin = "" },
         };
+        var overlappingCredentialRoles = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                BrowserProfile = "source",
+                TokenEnvironmentVariable = "SHARED_E2E_VALUE",
+            },
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "SHARED_E2E_VALUE",
+            },
+        };
 
         Assert.Contains(
             "source.browserProfile is required",
@@ -242,6 +258,10 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "users.collaboratorLogin is required",
             Assert.Throws<InvalidDataException>(() => emptyCollaborator.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cannot store both a token and browser state path",
+            Assert.Throws<InvalidDataException>(() => overlappingCredentialRoles.Validate()).Message,
             StringComparison.Ordinal);
     }
 
