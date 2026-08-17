@@ -58,12 +58,20 @@ public sealed partial record E2eTestSettings
     public static E2eTestSettings LoadDefault()
     {
         var explicitPath = Environment.GetEnvironmentVariable(SettingsPathEnvironmentVariable);
+        return LoadDefault(explicitPath, Directory.GetCurrentDirectory(), AppContext.BaseDirectory);
+    }
+
+    internal static E2eTestSettings LoadDefault(
+        string? explicitPath,
+        string currentDirectory,
+        string baseDirectory)
+    {
         if (!string.IsNullOrWhiteSpace(explicitPath))
         {
             return Load(explicitPath);
         }
 
-        foreach (var directory in CandidateDirectories())
+        foreach (var directory in CandidateDirectories(currentDirectory, baseDirectory))
         {
             var localPath = Path.Combine(directory, "tests", "e2e.settings.local.jsonc");
             if (File.Exists(localPath))
@@ -118,6 +126,16 @@ public sealed partial record E2eTestSettings
                 throw new InvalidDataException(
                     $"{sourceName}: cross-deployment source and target require different browser profiles.");
             }
+
+            if (Execution.RepositoryPreparationMode == "gei"
+                && string.Equals(
+                    Gei.SourceTokenEnvironmentVariable,
+                    Gei.TargetTokenEnvironmentVariable,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"{sourceName}: cross-deployment GEI requires different source and target token environment variables.");
+            }
         }
 
         ValidateFixture(Fixtures.Integration, "fixtures.integration", sourceName);
@@ -160,6 +178,14 @@ public sealed partial record E2eTestSettings
         {
             throw new InvalidDataException(
                 $"{sourceName}: execution.repositoryPreparationMode must be gei or fixture-seed.");
+        }
+
+        if (Execution.RepositoryPreparationMode == "gei"
+            && Target.ApiBaseUrl.Contains(".ghe.com", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(Target.UploadsBaseUrl))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: GEI to a GHEC data-residency target requires target.uploadsBaseUrl.");
         }
 
         if (string.IsNullOrWhiteSpace(Users.CollaboratorLogin))
@@ -418,10 +444,10 @@ public sealed partial record E2eTestSettings
         }
     }
 
-    private static IEnumerable<string> CandidateDirectories()
+    private static IEnumerable<string> CandidateDirectories(params string[] starts)
     {
         HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+        foreach (var start in starts)
         {
             var directory = new DirectoryInfo(Path.GetFullPath(start));
             while (directory is not null)

@@ -59,8 +59,14 @@
         "sourceRepository": { "type": "string", "minLength": 1 },
         "targetRepository": { "type": "string", "minLength": 1 },
         "targetRepositoryVisibility": { "enum": ["private", "internal", "public"] },
-        "sourceTokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
-        "targetTokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
+        "sourceTokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must differ from targetTokenEnvironmentVariable for cross-deployment GEI."
+        },
+        "targetTokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must differ from sourceTokenEnvironmentVariable for cross-deployment GEI."
+        },
         "sourceTokenOwnerLogin": { "type": "string" },
         "targetTokenOwnerLogin": { "type": "string" },
         "sourceRole": { "$ref": "#/$defs/geiRole" },
@@ -84,6 +90,39 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "execution": {
+            "properties": {
+              "repositoryPreparationMode": { "const": "gei" }
+            },
+            "required": ["repositoryPreparationMode"]
+          },
+          "target": {
+            "properties": {
+              "apiBaseUrl": { "pattern": "^https://api\\.[A-Za-z0-9-]+\\.ghe\\.com" }
+            },
+            "required": ["apiBaseUrl"]
+          }
+        },
+        "required": ["execution", "target"]
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "uploadsBaseUrl": {
+                "type": "string",
+                "pattern": "^https://uploads\\.[A-Za-z0-9-]+\\.ghe\\.com/?$"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "endpoint": {
       "type": "object",

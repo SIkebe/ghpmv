@@ -143,6 +143,48 @@ public class E2eTestSettingsTests
         {
             Assert.Throws<JsonException>(() => E2eTestSettings.Load(path));
         }
+
+        [Fact]
+        public void LoadDefault_honors_explicit_path_and_local_precedence()
+        {
+            var root = Path.Combine(Path.GetTempPath(), $"ghpmv-e2e-discovery-{Guid.NewGuid():N}");
+            var testsDirectory = Path.Combine(root, "tests");
+            var explicitMissingPath = Path.Combine(root, "missing.jsonc");
+            Directory.CreateDirectory(testsDirectory);
+
+            try
+            {
+                Assert.Throws<FileNotFoundException>(
+                    () => E2eTestSettings.LoadDefault(explicitMissingPath, root, root));
+
+                var shared = new E2eTestSettings
+                {
+                    Source = new E2eEndpointSettings
+                    {
+                        Organization = "shared-org",
+                        BrowserProfile = "source",
+                    },
+                };
+                var local = shared with
+                {
+                    Source = shared.Source with { Organization = "local-org" },
+                };
+                File.WriteAllText(
+                    Path.Combine(testsDirectory, "e2e.settings.jsonc"),
+                    JsonSerializer.Serialize(shared, CamelCaseJsonOptions));
+                File.WriteAllText(
+                    Path.Combine(testsDirectory, "e2e.settings.local.jsonc"),
+                    JsonSerializer.Serialize(local, CamelCaseJsonOptions));
+
+                var result = E2eTestSettings.LoadDefault(explicitPath: null, root, root);
+
+                Assert.Equal("local-org", result.Source.Organization);
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
         finally
         {
             File.Delete(path);
@@ -256,6 +298,35 @@ public class E2eTestSettingsTests
                 TokenEnvironmentVariable = "TARGET_TOKEN",
             },
         };
+        var sharedCrossDeploymentGeiToken = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://example.ghe.com",
+                UploadsBaseUrl = "https://uploads.example.ghe.com",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "TARGET_STATE",
+                TokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+            Gei = new E2eGeiSettings
+            {
+                TargetTokenEnvironmentVariable = "GHPMV_GEI_SOURCE_TOKEN",
+            },
+        };
+        var missingDataResidencyUploads = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://example.ghe.com",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "TARGET_STATE",
+                TokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+        };
         var nonDefaultApiPort = new E2eTestSettings
         {
             Source = new E2eEndpointSettings
@@ -284,6 +355,14 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "require different browser profiles",
             Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentProfile.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "GEI requires different source and target token environment variables",
+            Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentGeiToken.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "requires target.uploadsBaseUrl",
+            Assert.Throws<InvalidDataException>(() => missingDataResidencyUploads.Validate()).Message,
             StringComparison.Ordinal);
         Assert.Contains(
             "apiBaseUrl must be a GitHub API origin",
