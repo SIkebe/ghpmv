@@ -99,6 +99,27 @@ public sealed class FixtureProjectBuilder
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
         }
 
+        var beforeWriteInvoked = false;
+        async Task InvokeBeforeWriteOnceAsync(CancellationToken token)
+        {
+            if (beforeWriteInvoked)
+            {
+                return;
+            }
+
+            await (BeforeWriteAsync?.Invoke(token) ?? Task.CompletedTask).ConfigureAwait(false);
+            beforeWriteInvoked = true;
+        }
+
+        if (RequireNewResources && itemLog is not null)
+        {
+            await ValidateClaimedRepositoryAsync(
+                repositoryFullName,
+                operationDirectory,
+                InvokeBeforeWriteOnceAsync,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         ImportLog? templateLog = itemLog;
         async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
         {
@@ -114,6 +135,7 @@ public sealed class FixtureProjectBuilder
         ProjectTemplateWriteSession? templateWriteSession = null;
         if (itemLog is { TemplateRestorationRequired: true })
         {
+            await InvokeBeforeWriteOnceAsync(cancellationToken).ConfigureAwait(false);
             templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
                 _graphQl,
                 itemLog.ProjectId,
@@ -126,9 +148,46 @@ public sealed class FixtureProjectBuilder
         try
         {
             var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
-            var repositoryFullName = $"{organization}/{repositoryName}";
+            Func<CancellationToken, Task>? reserveProjectAsync = null;
+            Func<CancellationToken, Task>? releaseProjectAsync = null;
+            if (RequireNewResources && itemLog is null)
+            {
+                var reservationImporter = new ProjectImporter(_graphQl)
+                {
+                    OnProgress = OnProgress,
+                    OperationLogDirectory = operationDirectory,
+                };
+                var projectReservedByThisCall = false;
+                reserveProjectAsync = async token =>
+                {
+                    await InvokeBeforeWriteOnceAsync(token).ConfigureAwait(false);
+                    projectReservedByThisCall = await reservationImporter.ReserveProjectAsync(
+                        organization,
+                        title,
+                        token).ConfigureAwait(false);
+                };
+                releaseProjectAsync = token => projectReservedByThisCall
+                    ? reservationImporter.ReleaseReservedProjectAsync(token)
+                    : Task.CompletedTask;
+            }
+
             var pullRequestNumber = itemLog is null
-                ? await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false)
+                ? await EnsureRepositoryAsync(
+                    organization,
+                    repositoryName,
+                    RequireNewResources,
+                    AllowExistingEmptyRepository,
+                    operationDirectory,
+                    async token =>
+                    {
+                        await InvokeBeforeWriteOnceAsync(token).ConfigureAwait(false);
+                        if (reserveProjectAsync is not null)
+                        {
+                            await reserveProjectAsync(token).ConfigureAwait(false);
+                        }
+                    },
+                    releaseProjectAsync,
+                    cancellationToken).ConfigureAwait(false)
                 : await FindOpenFixturePullRequestNumberAsync(repositoryFullName, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException(
                         $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
@@ -153,6 +212,12 @@ public sealed class FixtureProjectBuilder
                     templateLog = itemLog;
                 }
             }
+
+            await PersistLegacyProjectIdAsync(
+                projectLog,
+                itemLog,
+                operationDirectory,
+                cancellationToken).ConfigureAwait(false);
 
             if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
             {
@@ -184,16 +249,33 @@ public sealed class FixtureProjectBuilder
                 }
             }
 
+            if (RequireNewResources
+                && existing is not null
+                && projectOwnedByOperation
+                && !importStatusUpdates
+                && IsCompletedOperation(projectLog, itemLog))
+            {
+                OnProgress?.Invoke($"Fixture project already completed; no API fixture writes are required: {existing.Url}");
+                return new FixtureProjectSetupResult(
+                    existing.Number,
+                    existing.Url,
+                    Created: false,
+                    OwnedByOperation: true);
+            }
+
             var projectImporter = new ProjectImporter(_graphQl)
             {
                 OnProgress = OnProgress,
-                OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
+                OnConflict = RequireNewResources || existing is not null
+                    ? ConflictAction.Update
+                    : ConflictAction.Fail,
                 OperationLogDirectory = operationDirectory,
                 PendingItemProjectId = itemLog?.ProjectId,
                 RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     [repositoryFullName] = repositoryFullName,
                 },
+                BeforeWriteAsync = InvokeBeforeWriteOnceAsync,
             };
             var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
 
@@ -202,6 +284,7 @@ public sealed class FixtureProjectBuilder
                 project,
                 cancellationToken).ConfigureAwait(false);
 
+            var operationWarningCount = projectImporter.Warnings.Count;
             if (shouldImportItems)
             {
                 var itemImporter = new ItemImporter(_graphQl)
@@ -221,6 +304,8 @@ public sealed class FixtureProjectBuilder
                 {
                     OnProgress?.Invoke("warning: " + warning);
                 }
+
+                operationWarningCount += itemResult.Warnings.Count;
             }
             else
             {
@@ -242,6 +327,7 @@ public sealed class FixtureProjectBuilder
                     await templateLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
                 }
 
+                await InvokeBeforeWriteOnceAsync(cancellationToken).ConfigureAwait(false);
                 if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
                 {
                     templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
@@ -265,7 +351,16 @@ public sealed class FixtureProjectBuilder
                     cancellationToken).ConfigureAwait(false);
             }
 
-            return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
+            await MarkOperationCompletedAsync(
+                operationDirectory,
+                operationWarningCount,
+                cancellationToken).ConfigureAwait(false);
+
+            return new FixtureProjectSetupResult(
+                project.ProjectNumber,
+                project.Url,
+                Created: existing is null,
+                OwnedByOperation: existing is null || projectOwnedByOperation);
         }
         finally
         {
@@ -273,8 +368,6 @@ public sealed class FixtureProjectBuilder
             {
                 await templateWriteSession.RestoreAsync(CancellationToken.None).ConfigureAwait(false);
             }
-
-            operationWarningCount += itemResult.Warnings.Count;
         }
     }
 
@@ -1697,6 +1790,12 @@ public sealed class FixtureProjectBuilder
     }
 
     private sealed record ProjectRef(string Id, int Number, string Url);
+
+    private sealed record RepositoryOperationState(
+        string ApiHost,
+        string FullName,
+        string Status,
+        string Value);
 
     internal sealed record FixtureStatusUpdate(string Id, StatusUpdateSnapshot Update);
 

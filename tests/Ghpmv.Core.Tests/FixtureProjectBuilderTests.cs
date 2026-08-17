@@ -1,5 +1,9 @@
 using System.Globalization;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using Ghpmv.Core.Fixtures;
+using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 
