@@ -1044,6 +1044,78 @@ public class ProjectImporterLogicTests
             var warning = Assert.Single(importer.Warnings);
             Assert.Contains(expectedWarning, warning, StringComparison.Ordinal);
         }
+
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Operation_owned_iteration_field_resumes_without_a_warning()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-iteration-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_target",
+                ImportCompleted = false,
+                HasUnresolvedWarnings = false,
+                CreatedFields =
+                {
+                    ["Custom"] = "PVTF_custom",
+                },
+            }.SaveAsync(directory, TestContext.Current.CancellationToken);
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                """
+                {"data":{"node":{"fields":{"nodes":[{
+                  "__typename":"ProjectV2IterationField","id":"PVTF_custom","name":"Custom","dataType":"ITERATION"
+                }]}}}}
+                """);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Project = MinimalSnapshot("Roadmap").Project with
+                {
+                    ShortDescription = null,
+                    Readme = null,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Custom",
+                        DataType = "ITERATION",
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(importer.Warnings);
+            var log = await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("PVTF_custom", log.CreatedFields["Custom"]);
+            Assert.False(log.HasUnresolvedWarnings);
+        }
         finally
         {
             Directory.Delete(directory, recursive: true);

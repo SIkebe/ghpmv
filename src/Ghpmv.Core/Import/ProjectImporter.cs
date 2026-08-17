@@ -214,6 +214,7 @@ public sealed class ProjectImporter
         _operationLog.CreatedProjectId = null;
         _operationLog.ImportCompleted = null;
         _operationLog.HasUnresolvedWarnings = null;
+        _operationLog.CreatedFields.Clear();
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -353,6 +354,7 @@ public sealed class ProjectImporter
         _operationLog.CreatedProjectId = null;
         _operationLog.ImportCompleted = null;
         _operationLog.HasUnresolvedWarnings = null;
+        _operationLog.CreatedFields.Clear();
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         return beforeWriteInvoked;
@@ -867,6 +869,7 @@ public sealed class ProjectImporter
                 }
 
                 existingFields[field.Name] = reconciled;
+                _operationLog.CreatedFields[field.Name] = reconciled.Id;
                 _operationLog.PendingFields.Remove(field.Name);
                 await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -887,7 +890,19 @@ public sealed class ProjectImporter
                 }
                 else if (field.DataType == "ITERATION")
                 {
-                    Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
+                    var operationOwned = _operationLog?.CreatedFields.TryGetValue(
+                        field.Name,
+                        out var createdFieldId) is true
+                        && string.Equals(createdFieldId, target.Id, StringComparison.Ordinal);
+                    if (operationOwned)
+                    {
+                        OnProgress?.Invoke(
+                            $"Iteration field '{field.Name}' was created by this operation; resuming without re-creating it.");
+                    }
+                    else
+                    {
+                        Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
+                    }
                 }
                 else
                 {
@@ -936,6 +951,7 @@ public sealed class ProjectImporter
                 existingFields[createdField.Name] = createdField;
                 if (_operationLog is not null)
                 {
+                    _operationLog.CreatedFields[field.Name] = createdField.Id;
                     _operationLog.PendingFields.Remove(field.Name);
                     await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
                 }
