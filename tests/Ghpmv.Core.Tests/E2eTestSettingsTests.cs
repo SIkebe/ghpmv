@@ -173,6 +173,45 @@ public class E2eTestSettingsTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Validate_rejects_mismatched_deployment_urls_and_shared_cross_deployment_state()
+    {
+        var mismatchedWebHost = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://github.com",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "TARGET_STATE",
+                TokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+        };
+        var sharedCrossDeploymentCredentials = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://example.ghe.com",
+                UploadsBaseUrl = "https://uploads.example.ghe.com",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "GHPMV_SOURCE_BROWSER_STATE",
+                TokenEnvironmentVariable = "GHPMV_SOURCE_TOKEN",
+            },
+        };
+
+        Assert.Contains(
+            "target.webBaseUrl must be the origin https://example.ghe.com",
+            Assert.Throws<InvalidDataException>(() => mismatchedWebHost.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "require different token environment variables",
+            Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentCredentials.Validate()).Message,
+            StringComparison.Ordinal);
+    }
+
     private static string WriteSettings(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"ghpmv-e2e-settings-{Guid.NewGuid():N}.jsonc");

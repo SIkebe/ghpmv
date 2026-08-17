@@ -26,4 +26,11 @@ internal static class IntegrationTestSettings
 
     public static GitHubGraphQLClient CreateClient(string token)
         => new(token, GitHubGraphQLClient.NormalizeBaseUrl(E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri));
+
+    public static GitHubRestClient CreateRestClient(string token)
+    {
+        var graphQlEndpoint = GitHubGraphQLClient.NormalizeBaseUrl(
+            E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri);
+        return new GitHubRestClient(token, GitHubRestClient.ToRestBaseUri(graphQlEndpoint));
+    }
 }

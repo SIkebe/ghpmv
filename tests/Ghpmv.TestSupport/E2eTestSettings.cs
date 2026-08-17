@@ -93,6 +93,27 @@ public sealed partial record E2eTestSettings
 
         ValidateEndpoint(Source, "source", sourceName);
         ValidateEndpoint(Target, "target", sourceName);
+        if (!HasSameDeployment(Source, Target))
+        {
+            if (string.Equals(
+                    Source.TokenEnvironmentVariable,
+                    Target.TokenEnvironmentVariable,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"{sourceName}: cross-deployment source and target require different token environment variables.");
+            }
+
+            if (string.Equals(
+                    Source.BrowserStateEnvironmentVariable,
+                    Target.BrowserStateEnvironmentVariable,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"{sourceName}: cross-deployment source and target require different browser-state environment variables.");
+            }
+        }
+
         ValidateFixture(Fixtures.Integration, "fixtures.integration", sourceName);
         ValidateFixture(Fixtures.Browser, "fixtures.browser", sourceName);
         if (string.IsNullOrWhiteSpace(Gei.SourceRepository)
@@ -169,11 +190,43 @@ public sealed partial record E2eTestSettings
             throw new InvalidDataException($"{sourceName}: {propertyName}.browserProfile is required.");
         }
 
-        ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);
-        ValidateAbsoluteHttpsUrl(endpoint.WebBaseUrl, $"{propertyName}.webBaseUrl", sourceName);
+        var apiUri = ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);
+        var webUri = ValidateAbsoluteHttpsUrl(endpoint.WebBaseUrl, $"{propertyName}.webBaseUrl", sourceName);
+        var expectedWebHost = apiUri.Host switch
+        {
+            "api.github.com" => "github.com",
+            var host when host.StartsWith("api.", StringComparison.OrdinalIgnoreCase)
+                && host.EndsWith(".ghe.com", StringComparison.OrdinalIgnoreCase)
+                && host.Length > "api..ghe.com".Length => host["api.".Length..],
+            _ => throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.apiBaseUrl must use api.github.com or api.<tenant>.ghe.com."),
+        };
+        if (!HasSameOrigin(webUri, apiUri, expectedWebHost)
+            || (webUri.AbsolutePath.Length > 1 && webUri.AbsolutePath != "/")
+            || !string.IsNullOrEmpty(webUri.Query)
+            || !string.IsNullOrEmpty(webUri.Fragment))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.webBaseUrl must be the origin https://{expectedWebHost} matching its API endpoint.");
+        }
+
         if (endpoint.UploadsBaseUrl is not null)
         {
-            ValidateAbsoluteHttpsUrl(endpoint.UploadsBaseUrl, $"{propertyName}.uploadsBaseUrl", sourceName);
+            var uploadsUri = ValidateAbsoluteHttpsUrl(
+                endpoint.UploadsBaseUrl,
+                $"{propertyName}.uploadsBaseUrl",
+                sourceName);
+            var expectedUploadsHost = string.Equals(apiUri.Host, "api.github.com", StringComparison.OrdinalIgnoreCase)
+                ? "uploads.github.com"
+                : $"uploads.{expectedWebHost}";
+            if (!HasSameOrigin(uploadsUri, apiUri, expectedUploadsHost)
+                || (uploadsUri.AbsolutePath.Length > 1 && uploadsUri.AbsolutePath != "/")
+                || !string.IsNullOrEmpty(uploadsUri.Query)
+                || !string.IsNullOrEmpty(uploadsUri.Fragment))
+            {
+                throw new InvalidDataException(
+                    $"{sourceName}: {propertyName}.uploadsBaseUrl must be the origin https://{expectedUploadsHost} matching its API endpoint.");
+            }
         }
 
         ValidateEnvironmentVariable(
@@ -201,13 +254,23 @@ public sealed partial record E2eTestSettings
         }
     }
 
-    private static void ValidateAbsoluteHttpsUrl(string value, string propertyName, string sourceName)
+    private static Uri ValidateAbsoluteHttpsUrl(string value, string propertyName, string sourceName)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
         {
             throw new InvalidDataException($"{sourceName}: {propertyName} must be an absolute HTTPS URL.");
         }
+
+        return uri;
     }
+
+    private static bool HasSameDeployment(E2eEndpointSettings left, E2eEndpointSettings right)
+        => HasSameOrigin(new Uri(left.ApiBaseUrl), new Uri(right.ApiBaseUrl), new Uri(right.ApiBaseUrl).Host);
+
+    private static bool HasSameOrigin(Uri value, Uri reference, string expectedHost)
+        => string.Equals(value.Scheme, reference.Scheme, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(value.Host, expectedHost, StringComparison.OrdinalIgnoreCase)
+            && value.Port == reference.Port;
 
     private static void ValidateEnvironmentVariable(string value, string propertyName, string sourceName)
     {
@@ -497,16 +560,20 @@ public static class E2eTestEnvironment
         FirstEnvironmentValue("GHPMV_TEST_COLLABORATOR_LOGIN") ?? Current.Users.CollaboratorLogin;
 
     public static string? SourceBrowserStatePath =>
-        FirstEnvironmentValue(Current.Source.BrowserStateEnvironmentVariable, "GHPMV_BROWSER_STATE");
+        FirstEnvironmentValue(Current.Source.BrowserStateEnvironmentVariable)
+        ?? (UsesSameDeployment ? FirstEnvironmentValue("GHPMV_BROWSER_STATE") : null);
 
     public static string? TargetBrowserStatePath =>
-        FirstEnvironmentValue(Current.Target.BrowserStateEnvironmentVariable, "GHPMV_BROWSER_STATE");
+        FirstEnvironmentValue(Current.Target.BrowserStateEnvironmentVariable)
+        ?? (UsesSameDeployment ? FirstEnvironmentValue("GHPMV_BROWSER_STATE") : null);
 
     public static string? SourceToken =>
-        FirstEnvironmentValue(Current.Source.TokenEnvironmentVariable, "GHPMV_TEST_TOKEN");
+        FirstEnvironmentValue(Current.Source.TokenEnvironmentVariable)
+        ?? (UsesSameDeployment ? FirstEnvironmentValue("GHPMV_TEST_TOKEN") : null);
 
     public static string? TargetToken =>
-        FirstEnvironmentValue(Current.Target.TokenEnvironmentVariable, "GHPMV_TEST_TOKEN");
+        FirstEnvironmentValue(Current.Target.TokenEnvironmentVariable)
+        ?? (UsesSameDeployment ? FirstEnvironmentValue("GHPMV_TEST_TOKEN") : null);
 
     public static Uri IntegrationApiBaseUrl
     {
@@ -524,6 +591,18 @@ public static class E2eTestEnvironment
             }
 
             return source;
+        }
+    }
+
+    private static bool UsesSameDeployment
+    {
+        get
+        {
+            var source = new Uri(Current.Source.ApiBaseUrl);
+            var target = new Uri(Current.Target.ApiBaseUrl);
+            return string.Equals(source.Scheme, target.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(source.Host, target.Host, StringComparison.OrdinalIgnoreCase)
+                && source.Port == target.Port;
         }
     }
 
