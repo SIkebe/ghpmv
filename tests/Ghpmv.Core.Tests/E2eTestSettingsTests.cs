@@ -115,26 +115,27 @@ public class E2eTestSettingsTests
             Assert.Contains("missing required property 'source'", exception.Message, StringComparison.Ordinal);
         }
 
-        [Fact]
-        public void Load_rejects_json_null_for_non_nullable_settings()
+        finally
         {
-            var json = JsonSerializer.Serialize(
-                new E2eTestSettings(),
-                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
-            json = json.Replace(
-                "\"sourceBrowserLogin\":\"\"",
-                "\"sourceBrowserLogin\":null",
-                StringComparison.Ordinal);
-            var path = WriteSettings(json);
+            File.Delete(path);
+        }
+    }
 
-            try
-            {
-                Assert.Throws<JsonException>(() => E2eTestSettings.Load(path));
-            }
-            finally
-            {
-                File.Delete(path);
-            }
+    [Fact]
+    public void Load_rejects_json_null_for_non_nullable_settings()
+    {
+        var json = JsonSerializer.Serialize(
+            new E2eTestSettings(),
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+        json = json.Replace(
+            "\"sourceBrowserLogin\":\"\"",
+            "\"sourceBrowserLogin\":null",
+            StringComparison.Ordinal);
+        var path = WriteSettings(json);
+
+        try
+        {
+            Assert.Throws<JsonException>(() => E2eTestSettings.Load(path));
         }
         finally
         {
