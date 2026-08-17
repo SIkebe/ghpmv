@@ -1471,6 +1471,7 @@ public sealed class ProjectImporter
                           id
                           name
                           slug
+                          viewerCanAdminister
                           organization { login }
                         }
                       }
@@ -1485,6 +1486,13 @@ public sealed class ProjectImporter
                 if (team.ValueKind != JsonValueKind.Object)
                 {
                     unresolved.Add($"target Team '{resolution.TargetIdentity}' was not found");
+                    continue;
+                }
+
+                if (!team.GetProperty("viewerCanAdminister").GetBoolean())
+                {
+                    permissionFailures.Add(
+                        $"the target token cannot administer target Team '{resolution.TargetIdentity}', which is required to link a Project");
                     continue;
                 }
 

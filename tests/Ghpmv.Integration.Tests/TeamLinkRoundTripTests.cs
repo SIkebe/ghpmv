@@ -165,7 +165,7 @@ public class TeamLinkRoundTripTests
                 {
                     await cleanup();
                 }
-                catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException)
+                catch (Exception exception)
                 {
                     cleanupFailures.Add(exception);
                 }
@@ -179,7 +179,7 @@ public class TeamLinkRoundTripTests
                     {
                         Directory.Delete(directory, recursive: true);
                     }
-                    catch (IOException exception)
+                    catch (Exception exception)
                     {
                         cleanupFailures.Add(exception);
                     }

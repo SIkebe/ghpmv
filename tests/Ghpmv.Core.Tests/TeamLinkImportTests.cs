@@ -172,6 +172,33 @@ public class TeamLinkImportTests
     }
 
     [Fact]
+    public async Task Team_member_without_team_admin_permission_fails_preflight()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
+        try
+        {
+            using var handler = new TeamImportHandler(viewerCanAdministerTeam: false);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportIntoAsync(
+                    Snapshot(new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" }),
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("permission:", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("cannot administer target Team 'target/platform'", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, handler.MutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task User_owned_import_ignores_team_links()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
@@ -223,6 +250,7 @@ public class TeamLinkImportTests
         bool projectExists = true,
         bool viewerCanUpdate = true,
         bool viewerCanManageAccess = true,
+        bool viewerCanAdministerTeam = true,
         string ownerField = "organization") : HttpMessageHandler
     {
         private bool _linked;
@@ -263,7 +291,7 @@ public class TeamLinkImportTests
             {
                 TeamResolutionCount++;
                 response = teamExists
-                    ? """{"data":{"organization":{"team":{"id":"T_target","name":"Engineering","slug":"engineering","organization":{"login":"target"}}}}}"""
+                    ? "{\"data\":{\"organization\":{\"team\":{\"id\":\"T_target\",\"name\":\"Engineering\",\"slug\":\"engineering\",\"viewerCanAdminister\":" + viewerCanAdministerTeam.ToString().ToLowerInvariant() + ",\"organization\":{\"login\":\"target\"}}}}}"
                     : """{"data":{"organization":{"team":null}}}""";
             }
             else if (query.Contains("query($login: String!)", StringComparison.Ordinal))
