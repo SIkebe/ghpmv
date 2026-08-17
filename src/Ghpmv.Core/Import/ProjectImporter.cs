@@ -832,7 +832,7 @@ public sealed class ProjectImporter
     {
         _warnings.Clear();
         ImportCapabilityPreflight.ValidateProjectCapabilities(
-            ImportCapabilityAnalyzer.Analyze(snapshot, BrowserViewEnrichmentPlanned),
+            ImportCapabilityAnalyzer.Analyze(snapshot, BrowserViewEnrichmentPlanned, OwnerType),
             project.Number,
             project.ViewerCanUpdate,
             ShouldUpdateVisibility(project.Public, snapshot.Project.Public));

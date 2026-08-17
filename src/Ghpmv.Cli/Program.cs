@@ -361,7 +361,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
         }
 
-        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation);
+        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation, ownerType);
         if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
         {
             throw new InvalidOperationException(
@@ -727,6 +727,7 @@ rootCommand.Subcommands.Add(importCommand);
 var requirementsCommand = new Command("requirements", "Inspect a snapshot and print the target capabilities required before import.")
 {
     inOption,
+    ownerTypeOption,
     enableBrowserOption,
 };
 requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -737,10 +738,12 @@ requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
         var snapshot = await SnapshotFile.LoadAsync(directory, cancellationToken);
         var plan = ImportCapabilityAnalyzer.Analyze(
             snapshot,
-            parseResult.GetValue(enableBrowserOption));
+            parseResult.GetValue(enableBrowserOption),
+            ParseOwnerType(parseResult.GetValue(ownerTypeOption)!));
         Console.WriteLine($"requires-organization-administrator={plan.RequiresOrganizationAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-project-administrator={plan.RequiresProjectAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-members-read={plan.RequiresMembersRead.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"requires-team-administrator={plan.RequiresTeamAdministrator.ToString().ToLowerInvariant()}");
         Console.WriteLine($"requires-visibility-management={plan.RequiresVisibilityManagement.ToString().ToLowerInvariant()}");
         foreach (var repository in plan.Repositories)
         {

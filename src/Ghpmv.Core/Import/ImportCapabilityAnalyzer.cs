@@ -1,4 +1,5 @@
 using Ghpmv.Core.Export;
+using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Import;
@@ -25,18 +26,28 @@ public sealed record ImportCapabilityPlan(
     bool RequiresProjectAdministrator,
     bool RequiresMembersRead,
     bool RequiresVisibilityManagement,
-    IReadOnlyList<RepositoryCapabilityRequirement> Repositories);
+    IReadOnlyList<RepositoryCapabilityRequirement> Repositories,
+    bool RequiresTeamAdministrator = false);
 
 public static class ImportCapabilityAnalyzer
 {
     public static ImportCapabilityPlan Analyze(
         ProjectSnapshot snapshot,
-        bool includeBrowserAutomation = false)
+        bool includeBrowserAutomation = false,
+        ProjectOwnerType ownerType = ProjectOwnerType.Organization)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
         var requirements = new Dictionary<string, RepositoryCapability>(StringComparer.OrdinalIgnoreCase);
         var hasOrganizationIssueFields = snapshot.Fields.Any(field => field.IssueField is not null);
+        var hasApplicableCollaborators = snapshot.Collaborators?.Any(collaborator =>
+            ownerType == ProjectOwnerType.Organization
+            || !string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)) is true;
+        var hasTeamCollaborators = ownerType == ProjectOwnerType.Organization
+            && snapshot.Collaborators?.Any(collaborator =>
+                string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)) is true;
+        var hasLinkedTeams = ownerType == ProjectOwnerType.Organization
+            && snapshot.LinkedTeams is { Count: > 0 };
         if (includeBrowserAutomation)
         {
             foreach (var repository in MappingTemplates.ExtractSourceRepositories([snapshot]))
@@ -91,15 +102,15 @@ public static class ImportCapabilityAnalyzer
         }
 
         return new ImportCapabilityPlan(
-            RequiresOrganizationAdministrator: snapshot.Fields.Any(field => field.IssueField is not null),
-            RequiresProjectAdministrator: snapshot.Collaborators is { Count: > 0 },
-            RequiresMembersRead: snapshot.Collaborators?.Any(collaborator =>
-                string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)) is true,
+            RequiresOrganizationAdministrator: hasOrganizationIssueFields,
+            RequiresProjectAdministrator: hasApplicableCollaborators || hasLinkedTeams,
+            RequiresMembersRead: hasTeamCollaborators || hasLinkedTeams,
             RequiresVisibilityManagement: snapshot.Project.Public,
             Repositories: requirements
                 .OrderBy(requirement => requirement.Key, StringComparer.OrdinalIgnoreCase)
                 .Select(requirement => new RepositoryCapabilityRequirement(requirement.Key, requirement.Value))
-                .ToArray());
+                .ToArray(),
+            RequiresTeamAdministrator: hasLinkedTeams);
     }
 
     private static void Add(

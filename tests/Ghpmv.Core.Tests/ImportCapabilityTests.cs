@@ -27,6 +27,10 @@ public class ImportCapabilityTests
                         IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
                     },
                 ],
+                LinkedTeams =
+                [
+                    new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" },
+                ],
             };
             await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
             var startInfo = new ProcessStartInfo("dotnet")
@@ -58,6 +62,10 @@ public class ImportCapabilityTests
                 "requires-organization-administrator=true",
                 await output,
                 StringComparison.Ordinal);
+            Assert.Contains(
+                "requires-team-administrator=true",
+                await output,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -84,6 +92,10 @@ public class ImportCapabilityTests
             Collaborators =
             [
                 new CollaboratorSnapshot { Type = "TEAM", Login = "platform", Role = "WRITER" },
+            ],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" },
             ],
             LinkedRepositories = ["source/repo"],
             Workflows =
@@ -132,6 +144,7 @@ public class ImportCapabilityTests
         Assert.True(plan.RequiresOrganizationAdministrator);
         Assert.True(plan.RequiresProjectAdministrator);
         Assert.True(plan.RequiresMembersRead);
+        Assert.True(plan.RequiresTeamAdministrator);
         Assert.True(plan.RequiresVisibilityManagement);
         var fullName = Assert.Single(plan.Repositories, requirement =>
             requirement.SourceRepository == "source/repo");
@@ -151,6 +164,30 @@ public class ImportCapabilityTests
         Assert.DoesNotContain(
             apiOnlyPlan.Repositories,
             requirement => requirement.SourceRepository == "repo");
+    }
+
+    [Fact]
+    public void Analyzer_ignores_team_capabilities_for_user_owned_projects()
+    {
+        var snapshot = MinimalSnapshot() with
+        {
+            Collaborators =
+            [
+                new CollaboratorSnapshot { Type = "TEAM", Login = "platform", Role = "WRITER" },
+            ],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" },
+            ],
+        };
+
+        var plan = ImportCapabilityAnalyzer.Analyze(
+            snapshot,
+            ownerType: ProjectOwnerType.User);
+
+        Assert.False(plan.RequiresProjectAdministrator);
+        Assert.False(plan.RequiresMembersRead);
+        Assert.False(plan.RequiresTeamAdministrator);
     }
 
     [Theory]
