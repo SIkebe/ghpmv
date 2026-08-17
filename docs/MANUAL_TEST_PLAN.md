@@ -170,7 +170,7 @@ PowerShell で `.env` を読み込む例:
 ```powershell
 Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Object {
     $name, $value = $_ -split '=', 2
-    [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    Set-Item -LiteralPath "Env:$name" -Value $value
 }
 ```
 

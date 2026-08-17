@@ -501,7 +501,7 @@ $geiSourceSecureToken = Read-Host "GHPMV_GEI_SOURCE_TOKEN for <source-org> on <s
 $geiTargetSecureToken = Read-Host "GHPMV_GEI_TARGET_TOKEN for <target-org> on <target-host> (classic PAT for GEI destination)" -AsSecureString; $env:GHPMV_GEI_TARGET_TOKEN = [System.Net.NetworkCredential]::new("", $geiTargetSecureToken).Password; if ([string]::IsNullOrWhiteSpace($env:GHPMV_GEI_TARGET_TOKEN)) { Remove-Item Env:GHPMV_GEI_TARGET_TOKEN -ErrorAction SilentlyContinue; Write-Output "GHPMV_GEI_TARGET_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_GEI_TARGET_TOKEN_READY:<token-prompt-id>" }
 ```
 
-Step 5 以降の `ghpmv` native command では PAT を `--token` argument に展開しない。command ごとに、対応する `SOURCE_TOKEN` または `TARGET_TOKEN` を process-scoped `GHPMV_TOKEN` へ一時 mapping し、`GHPMV_TOKEN` より先に解決される既存の process-scoped `GITHUB_TOKEN` を一時削除して、`--token` を省略する。`finally` で両方の以前の値へ戻す。以前の値が `null` なら `SetEnvironmentVariable` は一時変数を削除する。これにより意図した side の PAT を確実に使いながら、PAT を process argument inspection へ露出させない。
+Step 5 以降の `ghpmv` native command では PAT を `--token` argument に展開しない。command ごとに、対応する `SOURCE_TOKEN` または `TARGET_TOKEN` を process-scoped `GHPMV_TOKEN` へ一時 mapping し、`GHPMV_TOKEN` より先に解決される既存の process-scoped `GITHUB_TOKEN` を一時削除して、`--token` を省略する。`finally` で両方の以前の値へ戻す。以前の値が `null` なら `Remove-Item Env:` で一時変数を削除する。これにより意図した side の PAT を確実に使いながら、PAT を process argument inspection へ露出させない。
 
 ### Fine-grained fixture token の preflight
 
@@ -510,18 +510,20 @@ Step 5 以降の `ghpmv` native command では PAT を `--token` argument に展
 `repository preparation mode` が `GEI` でtargetにfine-grained PATを選んだ場合も、GEIやsource fixture作成より前にtarget organizationの`issue-fields` preflightだけを`TARGET_TOKEN`で実行する。`repos` preflightはrepository作成permissionを確認するもので、GEIが別のclassic PATでrepositoryを作るこの経路には要求しない。GEI後のtarget repository accessはStep 7のIssue / PR queryで確認する。
 
 ```powershell
-$previousPreflightToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", [EnvironmentVariableTarget]::Process)
-[Environment]::SetEnvironmentVariable("GH_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
+$previousPreflightToken = $env:GH_TOKEN
+$env:GH_TOKEN = $env:SOURCE_TOKEN
 try {
     $preflightEndpoint = "<repos-or-issue-fields>"
     $preflightRequiredPermission = if ($preflightEndpoint -eq "repos") { "administration=write" } elseif ($preflightEndpoint -eq "issue-fields") { "issue_fields=write" } else { throw "Unsupported preflight endpoint: $preflightEndpoint" }
-    $preflightResponse = gh api --include --method POST -H "X-GitHub-Api-Version: 2026-03-10" "orgs/<source-org>/$preflightEndpoint" 2>&1
+    $preflightResponse = '{}' | gh api --include --method POST --input - -H "X-GitHub-Api-Version: 2026-03-10" "orgs/<source-org>/$preflightEndpoint" 2>&1
     $preflightNativeExitCode = $LASTEXITCODE
     $preflightText = $preflightResponse | Out-String
     Write-Output $preflightResponse
     $preflightPermissionPattern = 'X-Accepted-GitHub-Permissions:\s*[^\r\n]*' + [regex]::Escape($preflightRequiredPermission)
-    $preflightMissingFieldPattern = '(?is)("code"\s*:\s*"missing_field"|must not be blank|can(?:not|''t) be blank|Invalid input:\s*data cannot be null|Validation Failed)'
-    $preflightExpected422 = $preflightNativeExitCode -ne 0 -and $preflightText -match '(HTTP(?:/\S+)?\s+422\b|\(HTTP 422\))' -and $preflightText -match $preflightPermissionPattern -and $preflightText -match $preflightMissingFieldPattern
+    $preflightPermissionHeaderPresent = $preflightText -match 'X-Accepted-GitHub-Permissions:'
+    $preflightPermissionAccepted = !$preflightPermissionHeaderPresent -or $preflightText -match $preflightPermissionPattern
+    $preflightMissingFieldPattern = '(?is)("code"\s*:\s*"missing_field"|missing required keys|must not be blank|can(?:not|''t) be blank|Invalid input:\s*data cannot be null|Validation Failed)'
+    $preflightExpected422 = $preflightNativeExitCode -ne 0 -and $preflightText -match '(HTTP(?:/\S+)?\s+422\b|\(HTTP 422\))' -and $preflightPermissionAccepted -and $preflightText -match $preflightMissingFieldPattern
     $preflightExitCode = if ($preflightExpected422) { 0 } elseif ($preflightNativeExitCode -ne 0) { $preflightNativeExitCode } else { 1 }
     Write-Output "GHPMV_PREFLIGHT_DONE:<preflight-id>:$preflightExitCode"
 }
@@ -530,14 +532,14 @@ finally {
         Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue
     }
     else {
-        [Environment]::SetEnvironmentVariable("GH_TOKEN", $previousPreflightToken, [EnvironmentVariableTarget]::Process)
+        $env:GH_TOKEN = $previousPreflightToken
     }
 }
 ```
 
 `repos` と `issue-fields` を一つの wrapper にまとめず、それぞれ異なる `<preflight-id>` で送り、今回の ID と完全一致する `GHPMV_PREFLIGHT_DONE:<preflight-id>:0` を確認する。wrapper は endpoint から `administration=write` または `issue_fields=write` を選ぶため、permission 名を別途手入力しない。target preflight では `$env:SOURCE_TOKEN` を `$env:TARGET_TOKEN` に置き換える。GitHub CLI は `github.com` と `*.ghe.com` の両方に `GH_TOKEN` を使うため、data residency 側も token variable は変えない。
 
-semantic success は、native command が non-zero、HTTP status が 422、`X-Accepted-GitHub-Permissions` header に endpoint ごとの必須 permission があること、本文が必須 field または必須 request body の不足を示すことのすべてを満たす場合だけとする。本文の文言は API version と endpoint により `Validation Failed`、`missing_field`、`must not be blank`、`Invalid input: data cannot be null` などに変わり得るため、`Validation Failed` の固定文字列だけを要求しない。transport error、403、422 以外、permission header 不一致、または必須入力不足を示さない 422 は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。`GH_TOKEN` が cached credentials より優先され、`--hostname` が接続先 tenant を選ぶ。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
+semantic success は、native command が non-zero、HTTP status が 422、本文が必須 field または必須 request body の不足を示し、fine-grained PATで`X-Accepted-GitHub-Permissions` headerが返る場合はendpointごとの必須permissionと一致する場合だけとする。classic PATではこのheaderが省略されるため、header不在だけをfailureにしない。本文の文言は API version と endpoint により `Validation Failed`、`missing_field`、`missing required keys`、`must not be blank`、`Invalid input: data cannot be null` などに変わり得るため、固定文字列だけを要求しない。transport error、403、422 以外、返されたpermission headerの不一致、または必須入力不足を示さない422はfailureのままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。`GH_TOKEN` が cached credentials より優先され、`--hostname` が接続先 tenant を選ぶ。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
 
 どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が上記の permission header 付き missing-field 422 なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) と、token ownerがorganization administratorであることを確認する。Migrator roleやclassic PATの`admin:org` scopeだけではadministrator roleを代替しない。repository creation policy、organization の PAT restriction、SSOも別に確認し、原因を一つに断定しない。administrator roleとpermissionを満たしたtokenでも403になる場合は`setup --fixture`を実行せず停止する。
 
@@ -570,11 +572,11 @@ run ID 付き推奨値では、作成前に GitHub Projects (classic) REST endpo
 `api-only`:
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:SOURCE_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
       --fixture `
       --fixture-org <source-org> `
@@ -583,19 +585,19 @@ try {
       --fixture-require-new
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
 `browser-e2e` では API fixture と UI fixture を同じ owned operation として実行する。`--fixture-project` を指定した別 command に分けない。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:SOURCE_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
       --fixture `
       --fixture-ui `
@@ -606,8 +608,8 @@ try {
       --browser-profile source
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -640,19 +642,19 @@ Workflow は再設定できる。warning が出た場合は、目視だけで終
 
 ```powershell
 $env:GHPMV_DEMO_SNAPSHOT = Join-Path $env:TEMP "ghpmv-demo-snapshot-$(Get-Date -Format yyyyMMdd-HHmmss)"
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:SOURCE_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
       --org <source-org> `
       --project <source-project-number> `
       --out $env:GHPMV_DEMO_SNAPSHOT
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -660,11 +662,11 @@ finally {
 
 ```powershell
 $env:GHPMV_DEMO_SNAPSHOT = Join-Path $env:TEMP "ghpmv-demo-snapshot-$(Get-Date -Format yyyyMMdd-HHmmss)"
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:SOURCE_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- export `
       --org <source-org> `
       --project <source-project-number> `
@@ -673,8 +675,8 @@ try {
       --browser-profile source
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -733,11 +735,11 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 $sourceApiUrl = <resolved-source-api-url-or-$null>
 $targetApiUrl = <resolved-target-api-url-or-$null>
 $targetUploadsUrl = <resolved-target-uploads-url-or-$null>
-$previousGeiSourcePat = [Environment]::GetEnvironmentVariable("GH_SOURCE_PAT", [EnvironmentVariableTarget]::Process)
-$previousGeiTargetPat = [Environment]::GetEnvironmentVariable("GH_PAT", [EnvironmentVariableTarget]::Process)
+$previousGeiSourcePat = $env:GH_SOURCE_PAT
+$previousGeiTargetPat = $env:GH_PAT
 try {
-    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $env:GHPMV_GEI_SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GH_PAT", $env:GHPMV_GEI_TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    $env:GH_SOURCE_PAT = $env:GHPMV_GEI_SOURCE_TOKEN
+    $env:GH_PAT = $env:GHPMV_GEI_TARGET_TOKEN
     $geiArguments = @(
         'migrate-repo',
         '--github-source-org', '<source-org>',
@@ -755,8 +757,8 @@ try {
     & gh gei @geiArguments
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $previousGeiSourcePat, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GH_PAT", $previousGeiTargetPat, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGeiSourcePat) { Remove-Item Env:GH_SOURCE_PAT -ErrorAction SilentlyContinue } else { $env:GH_SOURCE_PAT = $previousGeiSourcePat }
+    if ($null -eq $previousGeiTargetPat) { Remove-Item Env:GH_PAT -ErrorAction SilentlyContinue } else { $env:GH_PAT = $previousGeiTargetPat }
 }
 ```
 
@@ -774,13 +776,13 @@ $sourceRepositoryItems | Format-Table -AutoSize
 続けてsource item一件ごとに、`ISSUE` は `issues/<number>`、`PULL_REQUEST` は `pulls/<number>`へ置き換え、次のcommandを別々の一意なcommand IDで送る。このqueryにはGEI tokenではなく、後続import/verifyで使用する`TARGET_TOKEN`を使うため、fine-grained PATの新規repository accessも同時に確認できる。
 
 ```powershell
-$previousTargetCheckToken = [Environment]::GetEnvironmentVariable("GH_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousTargetCheckToken = $env:GH_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GH_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
+    $env:GH_TOKEN = $env:TARGET_TOKEN
     gh api "repos/<target-org>/<target-repo>/<issues-or-pulls>/<source-number>" --jq '.number'
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GH_TOKEN", $previousTargetCheckToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousTargetCheckToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousTargetCheckToken }
 }
 ```
 
@@ -802,11 +804,11 @@ target seed title と repository name も空の自由入力カードにしない
 target seed title と repository name も `'` を `''` に置換したうえで PowerShell single-quoted argument として渡す。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
       --fixture `
       --fixture-org <target-org> `
@@ -815,8 +817,8 @@ try {
       --fixture-require-new
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -919,11 +921,11 @@ Write-Output 'GHPMV_MAPPINGS_COMPLETE'
 `api-only` では browser option を付けない。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
       --org <target-org> `
       --in $env:GHPMV_DEMO_SNAPSHOT `
@@ -932,8 +934,8 @@ try {
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv"
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -942,11 +944,11 @@ target が data residency の場合は `--target-base-url <target-api-url>` を�
 `browser-e2e` では同じ import に browser option を追加する。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
       --org <target-org> `
       --in $env:GHPMV_DEMO_SNAPSHOT `
@@ -957,8 +959,8 @@ try {
       --browser-profile target
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -975,11 +977,11 @@ Import と同じ mapping / browser profile を渡す。
 `api-only` では browser option を付けない。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
       --org <target-org> `
       --project <target-project-number> `
@@ -990,8 +992,8 @@ try {
       --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
@@ -1000,11 +1002,11 @@ target が data residency の場合は `--target-base-url <target-api-url>` を�
 `browser-e2e` では同じ verify に browser option を追加する。
 
 ```powershell
-$previousGhpmvToken = [Environment]::GetEnvironmentVariable("GHPMV_TOKEN", [EnvironmentVariableTarget]::Process)
-$previousGitHubToken = [Environment]::GetEnvironmentVariable("GITHUB_TOKEN", [EnvironmentVariableTarget]::Process)
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
 try {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $env:TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $null, [EnvironmentVariableTarget]::Process)
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
       --org <target-org> `
       --project <target-project-number> `
@@ -1017,8 +1019,8 @@ try {
       --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
 }
 finally {
-    [Environment]::SetEnvironmentVariable("GHPMV_TOKEN", $previousGhpmvToken, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GITHUB_TOKEN", $previousGitHubToken, [EnvironmentVariableTarget]::Process)
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
 ```
 
