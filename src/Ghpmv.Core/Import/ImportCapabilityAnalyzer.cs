@@ -36,6 +36,7 @@ public static class ImportCapabilityAnalyzer
         ArgumentNullException.ThrowIfNull(snapshot);
 
         var requirements = new Dictionary<string, RepositoryCapability>(StringComparer.OrdinalIgnoreCase);
+        var hasOrganizationIssueFields = snapshot.Fields.Any(field => field.IssueField is not null);
         if (includeBrowserAutomation)
         {
             foreach (var repository in MappingTemplates.ExtractSourceRepositories([snapshot]))
@@ -57,7 +58,7 @@ public static class ImportCapabilityAnalyzer
                 "PULL_REQUEST" => RepositoryCapability.MetadataRead | RepositoryCapability.PullRequestsRead,
                 _ => RepositoryCapability.MetadataRead,
             };
-            if (item.Type == "ISSUE" && item.FieldValues.Any(value => value.IsIssueField is true))
+            if (item.Type == "ISSUE" && hasOrganizationIssueFields)
             {
                 capability |= RepositoryCapability.IssuesWrite;
             }

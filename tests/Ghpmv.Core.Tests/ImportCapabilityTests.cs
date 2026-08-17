@@ -153,6 +153,54 @@ public class ImportCapabilityTests
             requirement => requirement.SourceRepository == "repo");
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Analyzer_requires_issue_write_for_every_issue_when_snapshot_has_issue_fields(
+        bool includeLegacyValue)
+    {
+        var snapshot = MinimalSnapshot() with
+        {
+            Fields =
+            [
+                new FieldSnapshot
+                {
+                    Name = "Teams",
+                    DataType = "MULTI_SELECT",
+                    Options = [],
+                    IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+                },
+            ],
+            Items =
+            [
+                new ItemSnapshot
+                {
+                    Type = "ISSUE",
+                    Position = 0,
+                    IsArchived = false,
+                    Repository = "source/repo",
+                    Number = 1,
+                    FieldValues = includeLegacyValue
+                        ?
+                        [
+                            new FieldValueSnapshot
+                            {
+                                FieldName = "Teams",
+                                IsIssueField = null,
+                                MultiSelectOptionNames = ["Platform"],
+                            },
+                        ]
+                        : [],
+                },
+            ],
+        };
+
+        var requirement = Assert.Single(
+            ImportCapabilityAnalyzer.Analyze(snapshot).Repositories);
+
+        Assert.True(requirement.Capabilities.HasFlag(RepositoryCapability.IssuesWrite));
+    }
+
     [Fact]
     public async Task Preflight_accepts_admin_and_writable_mapped_repository()
     {
