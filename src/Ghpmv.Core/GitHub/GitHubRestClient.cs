@@ -73,6 +73,21 @@ public sealed class GitHubRestClient : IDisposable
         return await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<GitHubRestProbeResponse> PostValidationProbeAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2026-03-10");
+        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        response.Headers.TryGetValues("X-Accepted-GitHub-Permissions", out var acceptedPermissions);
+        return new GitHubRestProbeResponse(
+            response.StatusCode,
+            acceptedPermissions is null ? null : string.Join(",", acceptedPermissions),
+            text);
+    }
+
     public void Dispose() => _httpClient.Dispose();
 
     private static StringContent CreateJsonContent(object body)
@@ -98,3 +113,8 @@ public sealed class GitHubRestClient : IDisposable
         return document.RootElement.Clone();
     }
 }
+
+public sealed record GitHubRestProbeResponse(
+    HttpStatusCode StatusCode,
+    string? AcceptedPermissions,
+    string Body);

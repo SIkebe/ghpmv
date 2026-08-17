@@ -407,6 +407,7 @@ public sealed class ProjectImporter
             _operationLog.ImportCompleted = false;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             ValidatePendingItemProject(existing.Id);
+            ValidateProjectUpdatePermission(existing.ViewerCanUpdate, existing.Number);
             ValidatePendingFieldOperations(snapshot, existing.Id);
             ValidatePendingViewOperations(snapshot, existing.Id);
             if (!beforeWriteInvoked)
@@ -443,6 +444,7 @@ public sealed class ProjectImporter
                     return BuildSkippedResult(existing);
 
                 case ConflictAction.Update:
+                    ValidateProjectUpdatePermission(existing.ViewerCanUpdate, existing.Number);
                     ValidatePendingFieldOperations(snapshot, existing.Id);
                     ValidatePendingViewOperations(snapshot, existing.Id);
                     OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -512,6 +514,7 @@ public sealed class ProjectImporter
         }
 
         ValidatePendingItemProject(project.Id);
+        ValidateProjectUpdatePermission(project.ViewerCanUpdate, project.Number);
         ValidatePendingFieldOperations(snapshot, project.Id);
         ValidatePendingViewOperations(snapshot, project.Id);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -1557,7 +1560,7 @@ public sealed class ProjectImporter
             """
             mutation($ownerId: ID!, $title: String!, $clientMutationId: String!) {
               createProjectV2(input: { ownerId: $ownerId, title: $title, clientMutationId: $clientMutationId }) {
-                projectV2 { id number title url public }
+                    projectV2 { id number title url public viewerCanUpdate }
               }
             }
             """,
@@ -2125,13 +2128,30 @@ public sealed class ProjectImporter
     internal static bool ShouldUpdateVisibility(bool currentPublic, bool desiredPublic)
         => currentPublic != desiredPublic;
 
+    internal static void ValidateProjectUpdatePermission(bool viewerCanUpdate, int projectNumber)
+    {
+        if (!viewerCanUpdate)
+        {
+            throw new InvalidOperationException(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The authenticated user cannot update target Project #{projectNumber}. Use a Project administrator or organization owner before importing."));
+        }
+    }
+
     private static ProjectRef ParseProjectRef(JsonElement node) => new(
         node.GetProperty("id").GetString() ?? throw new GitHubGraphQLException("Project id was null."),
         node.GetProperty("number").GetInt32(),
         node.GetProperty("url").GetString() ?? string.Empty,
-        node.TryGetProperty("public", out var visibility) && visibility.GetBoolean());
+        node.TryGetProperty("public", out var visibility) && visibility.GetBoolean(),
+        !node.TryGetProperty("viewerCanUpdate", out var viewerCanUpdate) || viewerCanUpdate.GetBoolean());
 
-    private sealed record ProjectRef(string Id, int Number, string Url, bool Public);
+    private sealed record ProjectRef(
+        string Id,
+        int Number,
+        string Url,
+        bool Public,
+        bool ViewerCanUpdate);
 
     private sealed record TargetField(string Id, string Name, string DataType, string TypeName);
 
@@ -2247,7 +2267,7 @@ public sealed class ProjectImporter
         query($login: String!, $first: Int!, $after: String) {
           __OWNER__(login: $login) {
             projectsV2(first: $first, after: $after) {
-              nodes { id number title url public }
+              nodes { id number title url public viewerCanUpdate }
               pageInfo { hasNextPage endCursor }
             }
           }
@@ -2258,7 +2278,7 @@ public sealed class ProjectImporter
         """
         query($login: String!, $number: Int!) {
           __OWNER__(login: $login) {
-            projectV2(number: $number) { id number title url public }
+            projectV2(number: $number) { id number title url public viewerCanUpdate }
           }
         }
         """;

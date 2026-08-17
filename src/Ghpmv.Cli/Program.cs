@@ -324,6 +324,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
     using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var rest = new GitHubRestClient(
+        token,
+        graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl));
     client.OnRetry = Console.Error.WriteLine;
     BrowserSession? session = null;
     ProjectTemplateWriteSession? templateWriteSession = null;
@@ -347,6 +350,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (projectTitle is not null)
         {
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
+        }
+
+        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation);
+        if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
+        {
+            throw new InvalidOperationException(
+                "Snapshots containing organization Issue Fields cannot be imported into a user-owned Project.");
         }
 
         async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
@@ -402,6 +412,30 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             });
             var apiLogin = await client.GetViewerLoginAsync(ct);
             await session.ValidateAuthenticationAsync(apiLogin, ct);
+        }
+
+        var importPreflightCompleted = false;
+        async Task ValidateImportBeforeWriteAsync(CancellationToken ct)
+        {
+            if (importPreflightCompleted)
+            {
+                return;
+            }
+
+            await ImportCapabilityPreflight.ValidateAsync(
+                ownerType == ProjectOwnerType.Organization
+                    ? capabilityPlan
+                    : capabilityPlan with { RequiresOrganizationAdministrator = false },
+                org,
+                repoMapping,
+                rest,
+                ct);
+            if (enableBrowserAutomation)
+            {
+                await ValidateBrowserBeforeWriteAsync(ct);
+            }
+
+            importPreflightCompleted = true;
         }
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
@@ -492,7 +526,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OrganizationMapping = organizationMapping,
             BrowserViewEnrichmentPlanned = enableBrowserAutomation,
             OnProgress = Console.Error.WriteLine,
-            BeforeWriteAsync = enableBrowserAutomation ? ValidateBrowserBeforeWriteAsync : null,
+            BeforeWriteAsync = ValidateImportBeforeWriteAsync,
             OperationLogDirectory = inDirectory,
             PendingItemProjectId = pendingItemProjectId,
         };
@@ -652,7 +686,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException or System.Text.Json.JsonException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException or System.Text.Json.JsonException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
@@ -679,6 +713,40 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 });
 
 rootCommand.Subcommands.Add(importCommand);
+
+var requirementsCommand = new Command("requirements", "Inspect a snapshot and print the target capabilities required before import.")
+{
+    inOption,
+    enableBrowserOption,
+};
+requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    try
+    {
+        var directory = parseResult.GetValue(inOption)!;
+        var snapshot = await SnapshotFile.LoadAsync(directory, cancellationToken);
+        var plan = ImportCapabilityAnalyzer.Analyze(
+            snapshot,
+            parseResult.GetValue(enableBrowserOption));
+        Console.WriteLine($"requires-organization-administrator={plan.RequiresOrganizationAdministrator.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"requires-project-administrator={plan.RequiresProjectAdministrator.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"requires-members-read={plan.RequiresMembersRead.ToString().ToLowerInvariant()}");
+        Console.WriteLine($"requires-visibility-management={plan.RequiresVisibilityManagement.ToString().ToLowerInvariant()}");
+        foreach (var repository in plan.Repositories)
+        {
+            Console.WriteLine(
+                $"repository={repository.SourceRepository} capabilities={ImportCapabilityPreflight.Format(repository.Capabilities)}");
+        }
+
+        return 0;
+    }
+    catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+});
+rootCommand.Subcommands.Add(requirementsCommand);
 
 // verify
 var verifyOrgOption = new Option<string>("--org")
@@ -1042,6 +1110,53 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
         graphQl.OnRetry = Console.Error.WriteLine;
         using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
+        var fixturePreflightCompleted = false;
+        async Task ValidateFixtureBeforeWriteAsync(CancellationToken ct)
+        {
+            if (fixturePreflightCompleted)
+            {
+                return;
+            }
+
+            await ImportCapabilityPreflight.ValidateAsync(
+                new ImportCapabilityPlan(
+                    RequiresOrganizationAdministrator: true,
+                    RequiresProjectAdministrator: false,
+                    RequiresMembersRead: false,
+                    RequiresVisibilityManagement: false,
+                    []),
+                parseResult.GetValue(fixtureOrgOption)!,
+                System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+                rest,
+                ct);
+            if (parseResult.GetValue(fixtureUiOption) && authenticatedFixtureUiSession is null)
+            {
+                var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                    ? parseResult.GetValue(baseUrlOption)
+                    : null;
+                var browserSession = new BrowserSession(new BrowserSessionOptions
+                {
+                    BaseUrl = BrowserBaseUrl.Resolve(
+                        graphQlBaseUri,
+                        parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    Profile = parseResult.GetValue(setupBrowserProfileOption),
+                });
+                try
+                {
+                    var apiLogin = await graphQl.GetViewerLoginAsync(ct);
+                    await browserSession.ValidateAuthenticationAsync(apiLogin, ct);
+                    authenticatedFixtureUiSession = browserSession;
+                }
+                catch
+                {
+                    await browserSession.DisposeAsync();
+                    throw;
+                }
+            }
+
+            fixturePreflightCompleted = true;
+        }
+
         var fixtureOperationDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "ghpmv",
@@ -1052,37 +1167,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
-            BeforeWriteAsync = parseResult.GetValue(fixtureUiOption)
-                ? async ct =>
-                {
-                    if (authenticatedFixtureUiSession is not null)
-                    {
-                        return;
-                    }
-
-                    var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                        ? parseResult.GetValue(baseUrlOption)
-                        : null;
-                    var session = new BrowserSession(new BrowserSessionOptions
-                    {
-                        BaseUrl = BrowserBaseUrl.Resolve(
-                            graphQlBaseUri,
-                            parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
-                        Profile = parseResult.GetValue(setupBrowserProfileOption),
-                    });
-                    try
-                    {
-                        var apiLogin = await graphQl.GetViewerLoginAsync(ct);
-                        await session.ValidateAuthenticationAsync(apiLogin, ct);
-                        authenticatedFixtureUiSession = session;
-                    }
-                    catch
-                    {
-                        await session.DisposeAsync();
-                        throw;
-                    }
-                }
-                : null,
+            BeforeWriteAsync = ValidateFixtureBeforeWriteAsync,
         };
         try
         {

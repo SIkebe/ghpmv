@@ -470,6 +470,16 @@ dotnet run --project src/Ghpmv.Cli -- export `
 
 ### 7.2 Mapping CSV を補完
 
+target token / browser accountを確定する前にsnapshot-driven requirementsを確認します。
+
+```powershell
+dotnet run --project src/Ghpmv.Cli -c Release --no-build -- requirements `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --enable-browser-automation
+```
+
+organization administrator、Project admin、Members read、visibility policy、repositoryごとのread/write/Contents/same-owner/browser access要件をtoken planとmappingへ反映します。`import`は同じ分析を再実行し、Issue Fields validation probeとmapped repository role/accessを最初のwriteより前に検証します。
+
 生成された `repository-mappings.csv` の **すべての空の target column** を GEI 移行後 repository、または 6.4 で作成した target fixture repository に合わせます。linked repository の完全名だけでなく、Workflow filter などから repository short name の候補行が生成されることがあります。両方の行を同じ target repository へ対応付けてください。
 
 ```csv

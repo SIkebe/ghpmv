@@ -326,9 +326,11 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 
 secure input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
 
-**PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** `SOURCE_TOKEN` / `TARGET_TOKEN` の必要な全 token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
+`fixture preparation=create`では標準fixtureのcapabilityが既知なので、上記全inventoryを一つのphaseで準備する。`fixture preparation=existing`ではsnapshot内容がexportまで未確定のため、最初のphaseでは`SOURCE_TOKEN`だけを作成・入力する。Step 6の`requirements`結果を確認した後、`TARGET_TOKEN`とGEI tokenのtype / role / permission / URLを確定し、残りのsecure inputを同じterminalで行う。snapshot未確認のままtargetへ過剰なroleやpermissionを要求しない。
 
-token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。標準fixtureの`SOURCE_TOKEN` / `TARGET_TOKEN`のroleは`organization administrator`、GEI tokenのroleは別途確認したownerまたはmigrator statusを表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、全 required PAT の準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
+**PAT の入力を求める前に、現在のphaseに必要な権限を classic / fine-grained の両方で提示する。** 現在phaseの token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
+
+token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。標準fixtureの`SOURCE_TOKEN` / `TARGET_TOKEN`のroleは`organization administrator`、GEI tokenのroleは別途確認したownerまたはmigrator statusを表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、現在phaseの全PATの準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
 
 fine-grained PAT を選んだ token は URL status を `pending` にする。source / target organization login、host、fixture preparation、repository preparation mode が未確定なら、先に不足値を質問する。該当 token の完全な pre-filled URL を assistant 本文へ表示して検証し、status を `shown-and-validated` に更新するまで、次の操作を禁止する。
 
@@ -340,7 +342,7 @@ source と target の両方が fine-grained の場合は、**Source fine-grained
 
 agent が対話 terminal を操作できる場合は、`Read-Host` command を同じ terminal instance の `send_terminal_input` actionへ agent が送信し、ユーザーには表示された prompt へ PAT 値だけを入力してもらう。readiness command を送信して出力を読めた terminal は操作可能であるため、shell tool を試したり、`Read-Host` command を本文へ掲載してユーザーに実行させたりしない。agent が terminal canvas を開くことも入力 action を呼ぶこともできない場合に限り、`Read-Host` command を質問カードより前の assistant 本文へ code block として掲載する。入力完了後は Step 4 の preflight から Step 10 まで、token を設定した同じ PowerShell terminal で command を実行する。agent の shell tool が別 process で動く場合は、token を必要とする command をその tool へ切り替えない。
 
-mode と repository preparation mode から作成した `required token inventory` に存在する token だけを準備する。GEI 経路では ghpmv 用二件に加えて GEI 用二件も必須であり、四件すべてが ready になるまで preflight、fixture、export、GEI、import、verify のいずれにも進まない。
+mode と repository preparation mode から作成した `required token inventory` に存在する token だけを準備する。source resourceを読むStep 5/6へ進むには`SOURCE_TOKEN`がreadyでなければならない。GEIへ進む前には`TARGET_TOKEN`と二件のGEI tokenを含む四件すべて、fixture-seed / import / verifyへ進む前には`SOURCE_TOKEN`と`TARGET_TOKEN`がreadyでなければならない。
 
 `setup --fixture` で organization repository を自動作成する完全自動経路では、確実性を優先する場合は classic PAT を推奨する。fine-grained PAT を選んだ場合は、下記の permission 設定だけで成功とみなさず、fixture 実行前に repository を作成しない preflight を必ず行う。
 
@@ -352,8 +354,8 @@ mode と repository preparation mode から作成した `required token inventor
 
 1. 新しい質問を出さず、確認済みの token type / host / organization / fixture 経路から、fine-grained を選んだ side の URL を内部で組み立てる。classic を選んだ side の fine-grained URL は生成しない。
 2. 次の assistant 本文に token plan と、fine-grained を選んだ token ごとの label、placeholder のない完全な raw autolink を実際に表示する。classic / GEI token の作成ページ URL も同じ本文に表示する。「これから生成します」「後で表示します」という予告だけで終わらせない。
-3. URL を含むその同じ assistant response で、inventory 内の全 required PAT を対象に readiness 用 `ask_user` を一度だけ呼ぶ。
-4. choices は `必要な PAT をすべて作成・承認済み` と `まだ準備中` にする。一部 token だけを準備済みとして secure input へ進まない。
+3. URL を含むその同じ assistant response で、現在phaseの全PATを対象に readiness 用 `ask_user` を一度だけ呼ぶ。
+4. choices は `このphaseに必要なPATをすべて作成・承認済み` と `まだ準備中` にする。一部 token だけを準備済みとして secure input へ進まない。
 
 assistant response 本文に今回の完全な URL が一つも存在しない状態では、`PAT を準備できましたか？`、permission 確認、PAT terminal 入力のいずれにも進んではならない。URL を生成できない必須値がある場合だけ、その不足値を一つ質問する。
 
@@ -463,7 +465,7 @@ role status が `owner` または `migrator-active` になった後、secure inp
 - GEI destination on GitHub.com: `https://github.com/settings/tokens/new`
 - GEI destination with data residency: `https://TENANT.ghe.com/settings/tokens/new`
 
-各data-residency URLの`TENANT`は確認済みの実subdomainへ置き換える。各 URL の直前または token plan の同じ行に、該当 role に対応する scope、SSO authorization、organization access が必要であることを示す。四件の required token がすべて ready になるまで、GEI source / destination のいずれかを後回しにしたまま Step 5 以降へ進まない。
+各data-residency URLの`TENANT`は確認済みの実subdomainへ置き換える。各 URL の直前または token plan の同じ行に、該当 role に対応する scope、SSO authorization、organization access が必要であることを示す。GEI source / destination tokenはStep 7より前に両方をreadyにし、どちらかを後回しにしたままmigrationへ進まない。
 
 `read-only`:
 
@@ -687,6 +689,24 @@ source が data residency の場合は、browser option の有無にかかわら
 - View / Workflow / collaborator warning
 
 warning がある場合、どの UI-only field が欠落したかを示して続行可否を確認する。
+
+`api-only` / `browser-e2e`では、target PAT入力またはtarget resource準備より前に同じterminalでsnapshot-driven capabilityを算出する。
+
+```powershell
+dotnet run --project src\Ghpmv.Cli -c Release --no-build -- requirements --in $env:GHPMV_DEMO_SNAPSHOT
+```
+
+`browser-e2e`では`--enable-browser-automation`を追加する。`api-only`では追加せず、UI-only Workflow/filter repository要件を要求しない。
+
+exit code 0と全出力をagentが確認し、次をstateへ記録する。
+
+- `requires-organization-administrator=true`: target token/browser accountをorganization administratorに限定する。
+- `requires-project-administrator=true`: collaborator replay前にtarget Project adminであることを要求する。
+- `requires-members-read=true`: target token planへMembers readを追加する。
+- `requires-visibility-management=true`: target organizationのvisibility policyとtarget Project admin/owner権限を確認する。
+- `repository=... capabilities=...`: 全source repository candidateをmappingへ残し、Issues/PullRequests read、Issues write、Contents write、same-owner、browser accessをtarget token/browser planへ反映する。
+
+`fixture preparation=existing`で延期していたtarget/GEI token phaseはこの出力後に開始する。必要role/access/policyが未確認ならPAT入力へ進まず、target accountやmappingを確定してからだけStep 7へ進む。
 
 `read-only` はここで完了報告を行い、終了する。target resource の準備、mapping の編集、import、verify は案内しない。
 

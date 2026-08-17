@@ -21,6 +21,20 @@ public class ProjectImporterLogicTests
         => Assert.Equal(expected, ProjectImporter.ShouldUpdateVisibility(currentPublic, desiredPublic));
 
     [Fact]
+    public void Existing_project_update_requires_viewer_update_permission()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ProjectImporter.ValidateProjectUpdatePermission(
+                viewerCanUpdate: false,
+                projectNumber: 42));
+
+        Assert.Contains("cannot update target Project #42", exception.Message, StringComparison.Ordinal);
+        ProjectImporter.ValidateProjectUpdatePermission(
+            viewerCanUpdate: true,
+            projectNumber: 42);
+    }
+
+    [Fact]
     public async Task Conflict_skip_returns_skipped_without_sending_mutations()
     {
         const string response =
