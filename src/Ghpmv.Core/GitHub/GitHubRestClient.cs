@@ -77,7 +77,10 @@ public sealed class GitHubRestClient : IDisposable
         string path,
         CancellationToken cancellationToken = default)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, path);
+        using var request = new HttpRequestMessage(HttpMethod.Post, path)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        };
         request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2026-03-10");
         using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);

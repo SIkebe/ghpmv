@@ -87,7 +87,7 @@ public sealed class GitHubRestClientTests
         Assert.Equal("issue_fields=write", result.AcceptedPermissions);
         Assert.Contains("data cannot be null", result.Body, StringComparison.Ordinal);
         Assert.Equal(HttpMethod.Post, handler.Method);
-        Assert.Equal(0, handler.ContentLength);
+        Assert.Equal(2, handler.ContentLength);
         Assert.Equal("2026-03-10", handler.ApiVersion);
     }
 

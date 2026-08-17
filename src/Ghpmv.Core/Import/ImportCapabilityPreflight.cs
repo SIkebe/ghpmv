@@ -34,8 +34,14 @@ public static class ImportCapabilityPreflight
                 || !accepted
                 || !missingInput)
             {
+                var diagnosticBody = (response.Body.Length <= 300
+                        ? response.Body
+                        : response.Body[..300])
+                    .Replace('\r', ' ')
+                    .Replace('\n', ' ');
                 throw new InvalidOperationException(
-                    $"Importing organization Issue Fields requires an administrator-owned token with Issue Fields write permission for organization '{targetOrganization}' (preflight returned HTTP {(int)response.StatusCode}).");
+                    $"Importing organization Issue Fields requires an administrator-owned token with Issue Fields write permission for organization '{targetOrganization}' "
+                    + $"(preflight returned HTTP {(int)response.StatusCode}, accepted permissions '{response.AcceptedPermissions ?? "<none>"}', body '{diagnosticBody}').");
             }
         }
 
