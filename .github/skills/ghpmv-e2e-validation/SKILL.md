@@ -178,7 +178,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | in-flight command | terminal instance、command ID、目的または hash、期待 sentinel |
 | required token inventory | 選択経路で必要な env var、host、owner、type、role、scope / permission、作成 URL status |
 | source host type / web URL / API URL | `github.com`, `https://github.com`, `https://api.github.com/graphql` |
-| target host type / web URL / API URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com` |
+| target host type / web URL / API / uploads URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com`, `https://uploads.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 
 ## Step 1: 確認範囲を決める
@@ -207,7 +207,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
 
-GEI 経路は source host が GitHub.com の場合だけ選択可能とする。repository preparation mode を先に `GEI` と記録した後で source host が GHEC with data residency と確定した場合は、その組み合わせを unsupported と説明し、`repository preparation mode` を未確定へ戻して `fixture-seed` を選び直す。現行 `gh gei migrate-repo` の `--target-api-url` は data-residency target 用であり、data-residency source endpoint の指定には使えない。source host を GitHub.com として偽って続行してはならない。
+GEI は GitHub.com source と GHEC with data residency source の両方を扱う。data-residency sourceでは`gh gei migrate-repo --github-source-api-url <source-api-url>`、data-residency targetでは`--target-api-url <target-api-url> --target-uploads-url <target-uploads-url>`を使う。source / target endpointを取り違えたり、source hostをGitHub.comとして偽って続行してはならない。
 
 `GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
 
@@ -225,7 +225,7 @@ GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用す
 
 1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
 2. `api-only` / `browser-e2e` では target host type も同じ二択で確認する。
-3. data residency を選んだ側ごとに、placeholder ではない tenant web URL (`https://TENANT.ghe.com`) を自由入力の質問カードで確認する。対応する API URL (`https://api.TENANT.ghe.com`) を導出して別の確認カードで提示し、確定する。
+3. data residency を選んだ側ごとに、placeholder ではない tenant web URL (`https://TENANT.ghe.com`) を自由入力の質問カードで確認する。対応する API URL (`https://api.TENANT.ghe.com`) を導出して別の確認カードで提示し、確定する。target側ではuploads URL (`https://uploads.TENANT.ghe.com`) も導出して別の確認カードで確定する。
 4. `browser-e2e` では source / target の browser account が同一か別かを host とは別の質問で確認する。
 
 GitHub.com は web URL `https://github.com`、API URL `https://api.github.com/graphql` として記録する。特に **GitHub.com source → GHEC with data residency target** を `github.com-to-ghec-dr` として一級シナリオにする。この topology では source command は既定の GitHub.com endpoint を使い、target command と target browser profile だけに tenant endpoint を指定する。host が異なる場合は login 文字列が似ていても `source` / `target` browser profile と token を必ず分ける。
@@ -266,7 +266,15 @@ gh extension install github/gh-gei
 gh gei migrate-repo --help
 ```
 
-既存 extension は自動 upgrade しない。help に `--github-source-org`、`--source-repo`、`--github-target-org`、`--target-repo`、`--target-repo-visibility` があり、data residency target では `--target-api-url` も使用可能であることを agent が出力から確認する。install 失敗、help 失敗、必須 option 不足のいずれかがあれば、Browser login、PAT 入力、fixture 作成へ進まず停止する。
+通常は既存 extension を自動 upgrade しない。help に `--github-source-org`、`--source-repo`、`--github-target-org`、`--target-repo`、`--target-repo-visibility` があることをagentが出力から確認する。data-residency sourceでは`--github-source-api-url`、data-residency targetでは`--target-api-url`と`--target-uploads-url`も必須とする。
+
+選択topologyに必要なoptionだけがhelpにない場合は、実resource作成やPAT入力より前に次を一度実行し、再度helpを確認する。
+
+```powershell
+gh extension upgrade github/gh-gei
+```
+
+install / upgrade失敗、help失敗、upgrade後も必須option不足のいずれかがあれば、Browser login、PAT入力、fixture作成へ進まず停止する。
 
 `baseline-full` だけが続けて deterministic tests と CLI smoke を実行する。
 
@@ -448,11 +456,12 @@ source / destination の role status が `migrator-pending` の間は、次の s
 
 role status が `owner` または `migrator-active` になった後、secure input より前の token plan に次の作成ページを表示する。source は GitHub.com 固定である。destination が data residency の場合だけ確認済み tenant host を使う。
 
-- GEI source: `https://github.com/settings/tokens/new`
+- GEI source on GitHub.com: `https://github.com/settings/tokens/new`
+- GEI source with data residency: `https://TENANT.ghe.com/settings/tokens/new`
 - GEI destination on GitHub.com: `https://github.com/settings/tokens/new`
 - GEI destination with data residency: `https://TENANT.ghe.com/settings/tokens/new`
 
-各 URL の直前または token plan の同じ行に、該当 role に対応する scope、SSO authorization、organization access が必要であることを示す。四件の required token がすべて ready になるまで、GEI source / destination のいずれかを後回しにしたまま Step 5 以降へ進まない。
+各data-residency URLの`TENANT`は確認済みの実subdomainへ置き換える。各 URL の直前または token plan の同じ行に、該当 role に対応する scope、SSO authorization、organization access が必要であることを示す。四件の required token がすべて ready になるまで、GEI source / destination のいずれかを後回しにしたまま Step 5 以降へ進まない。
 
 `read-only`:
 
@@ -687,24 +696,41 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 
 ### GEI
 
-この経路へ入る前に source host が GitHub.com であることを再確認する。GHEC with data residency source では実行しない。
+この経路へ入る前にsource / target hostと記録済みAPI URLを再確認する。data-residency sourceでは`--github-source-api-url`、data-residency targetでは`--target-api-url`と`--target-uploads-url`を必ず含める。
 
 `docs/MANUAL_TEST_PLAN.md` の §6 で role と ruleset を確認する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
 
-`gh gei migrate-repo --help` で extension の現在の引数を確認した後、target host に対応する次の command を実行する。GitHub.com target:
+`gh gei migrate-repo --help` で extension の現在の引数を確認した後、選択topologyに応じて次を設定する。
+
+- GitHub.com source: `$sourceApiUrl = $null`
+- data-residency source: `$sourceApiUrl = '<source-api-url>'`
+- GitHub.com target: `$targetApiUrl = $null`, `$targetUploadsUrl = $null`
+- data-residency target: `$targetApiUrl = '<target-api-url>'`, `$targetUploadsUrl = '<target-uploads-url>'`
 
 ```powershell
+$sourceApiUrl = <resolved-source-api-url-or-$null>
+$targetApiUrl = <resolved-target-api-url-or-$null>
+$targetUploadsUrl = <resolved-target-uploads-url-or-$null>
 $previousGeiSourcePat = [Environment]::GetEnvironmentVariable("GH_SOURCE_PAT", [EnvironmentVariableTarget]::Process)
 $previousGeiTargetPat = [Environment]::GetEnvironmentVariable("GH_PAT", [EnvironmentVariableTarget]::Process)
 try {
     [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $env:GHPMV_GEI_SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
     [Environment]::SetEnvironmentVariable("GH_PAT", $env:GHPMV_GEI_TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    gh gei migrate-repo `
-      --github-source-org <source-org> `
-      --source-repo <source-repo> `
-      --github-target-org <target-org> `
-      --target-repo <target-repo> `
-      --target-repo-visibility private
+    $geiArguments = @(
+        'migrate-repo',
+        '--github-source-org', '<source-org>',
+        '--source-repo', '<source-repo>',
+        '--github-target-org', '<target-org>',
+        '--target-repo', '<target-repo>',
+        '--target-repo-visibility', 'private'
+    )
+    if ($null -ne $sourceApiUrl) {
+        $geiArguments += @('--github-source-api-url', $sourceApiUrl)
+    }
+    if ($null -ne $targetApiUrl) {
+        $geiArguments += @('--target-api-url', $targetApiUrl, '--target-uploads-url', $targetUploadsUrl)
+    }
+    & gh gei @geiArguments
 }
 finally {
     [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $previousGeiSourcePat, [EnvironmentVariableTarget]::Process)
@@ -712,29 +738,7 @@ finally {
 }
 ```
 
-data residency target:
-
-```powershell
-$previousGeiSourcePat = [Environment]::GetEnvironmentVariable("GH_SOURCE_PAT", [EnvironmentVariableTarget]::Process)
-$previousGeiTargetPat = [Environment]::GetEnvironmentVariable("GH_PAT", [EnvironmentVariableTarget]::Process)
-try {
-    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $env:GHPMV_GEI_SOURCE_TOKEN, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GH_PAT", $env:GHPMV_GEI_TARGET_TOKEN, [EnvironmentVariableTarget]::Process)
-    gh gei migrate-repo `
-      --github-source-org <source-org> `
-      --source-repo <source-repo> `
-      --github-target-org <target-org> `
-      --target-repo <target-repo> `
-      --target-repo-visibility private `
-      --target-api-url <target-api-url>
-}
-finally {
-    [Environment]::SetEnvironmentVariable("GH_SOURCE_PAT", $previousGeiSourcePat, [EnvironmentVariableTarget]::Process)
-    [Environment]::SetEnvironmentVariable("GH_PAT", $previousGeiTargetPat, [EnvironmentVariableTarget]::Process)
-}
-```
-
-選択した command の placeholder を記録済みの実値へ置き換え、command ごとの一意な ID を付けた wrapper で同じ terminal session に送信し、exit code と migration completion を監視する。PAT option は追加せず、`GH_SOURCE_PAT` と `GH_PAT` の process environment 経由だけで渡す。GitHub の [Migrating repositories from GitHub.com to GitHub Enterprise Cloud](https://docs.github.com/en/migrations/using-github-enterprise-importer/migrating-between-github-products/migrating-repositories-from-githubcom-to-github-enterprise-cloud) と data residency の手順に従い、destination organization / enterprise がその tenant に向いていること、tenant 固有の IP allow list を確認する。`github.com-to-ghec-dr` では source endpoint は GitHub.com のまま、target endpoint だけを `https://api.TENANT.ghe.com` にする。
+placeholderとresolved URL変数を記録済み実値へ置き換え、commandごとの一意なIDを付けたwrapperで同じterminal sessionに送信し、exit codeとmigration completionを監視する。PAT optionは追加せず、`GH_SOURCE_PAT`と`GH_PAT`のprocess environment経由だけで渡す。GitHubの[`gh-gei` data-residency source usage](https://github.com/github/gh-gei#github-to-github-usage-githubcom---githubcom)とdata-residency target手順に従い、source / destination organizationとtenant endpoint、tenant固有のIP allow listを確認する。
 
 target repository full name を記録する。まずexport済みsnapshotから、移行対象repositoryのsource Issue / PR numberを同じterminalで列挙する。
 

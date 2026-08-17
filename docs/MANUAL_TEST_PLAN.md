@@ -410,6 +410,8 @@ gh gei migrate-repo `
   --target-repo-visibility private
 ```
 
+GHEC with data residency source では `--github-source-api-url https://api.TENANT.ghe.com` を追加します。data residency target では `--target-api-url https://api.TENANT.ghe.com` と `--target-uploads-url https://uploads.TENANT.ghe.com` を追加します。installed extension の help に必要な option がない場合は、実 resource 作成前に `gh extension upgrade github/gh-gei` を実行して再確認します。
+
 実行環境や GEI extension version によっては `--queue-only` / `--wait` / migration log download 系のオプションを併用してください。downloadable migration log は完了後 24 時間だけ取得できます。また、target repository で Issues が無効な場合は `Migration Log` Issue が作成されません。詳細は [Accessing your migration logs for GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer/completing-your-migration-with-github-enterprise-importer/accessing-your-migration-logs-for-github-enterprise-importer) を参照してください。
 
 ### 6.3 GEI 結果確認
