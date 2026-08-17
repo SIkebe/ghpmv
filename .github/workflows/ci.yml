@@ -188,8 +188,8 @@ jobs:
       - name: Test deterministic suites
         if: ${{ needs.changes.outputs.dotnet == 'true' }}
         run: |
-          dotnet test tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj -c Release --no-build --logger trx
-          dotnet test tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj -c Release --no-build --filter "Category!=E2E" --logger trx
+          dotnet test tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj -c Release --no-build --results-directory tests/Ghpmv.Core.Tests/TestResults --report-xunit-trx
+          dotnet test tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj -c Release --no-build --filter "Category!=E2E" --results-directory tests/Ghpmv.Browser.Tests/TestResults --report-xunit-trx
       - name: Upload test result logs
         if: ${{ failure() && needs.changes.outputs.dotnet == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
