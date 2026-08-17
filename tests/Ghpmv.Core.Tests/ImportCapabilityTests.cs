@@ -188,6 +188,35 @@ public class ImportCapabilityTests
     }
 
     [Fact]
+    public async Task Preflight_accepts_classic_pat_validation_without_permission_header()
+    {
+        using var handler = new QueueHandler(
+            new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+            {
+                Content = new StringContent(
+                    """{"message":"Invalid request. Invalid input: object is missing required keys: name, data_type."}""",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
+        using var rest = new GitHubRestClient("token", baseUri: null, handler);
+        var plan = new ImportCapabilityPlan(
+            RequiresOrganizationAdministrator: true,
+            RequiresProjectAdministrator: false,
+            RequiresMembersRead: false,
+            RequiresVisibilityManagement: false,
+            []);
+
+        await ImportCapabilityPreflight.ValidateAsync(
+            plan,
+            "target",
+            new Dictionary<string, string>(),
+            rest,
+            TestContext.Current.CancellationToken);
+
+        Assert.Single(handler.Paths);
+    }
+
+    [Fact]
     public async Task Preflight_rejects_non_admin_before_repository_access()
     {
         using var handler = new QueueHandler(

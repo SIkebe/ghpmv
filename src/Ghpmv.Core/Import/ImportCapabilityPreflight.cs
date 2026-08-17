@@ -22,13 +22,15 @@ public static class ImportCapabilityPreflight
             var response = await rest.PostValidationProbeAsync(
                 $"orgs/{targetOrganization}/issue-fields",
                 cancellationToken).ConfigureAwait(false);
-            var accepted = response.AcceptedPermissions?.Contains(
-                "issue_fields=write",
-                StringComparison.OrdinalIgnoreCase) is true;
+            var accepted = response.AcceptedPermissions is null
+                || response.AcceptedPermissions.Contains(
+                    "issue_fields=write",
+                    StringComparison.OrdinalIgnoreCase);
             var missingInput = response.Body.Contains(
                     "Invalid input: data cannot be null",
                     StringComparison.OrdinalIgnoreCase)
                 || response.Body.Contains("missing_field", StringComparison.OrdinalIgnoreCase)
+                || response.Body.Contains("missing required keys", StringComparison.OrdinalIgnoreCase)
                 || response.Body.Contains("Validation Failed", StringComparison.OrdinalIgnoreCase);
             if (response.StatusCode != System.Net.HttpStatusCode.UnprocessableEntity
                 || !accepted
