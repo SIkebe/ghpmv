@@ -398,6 +398,23 @@ public class E2eTestSettingsTests
                 TargetTokenEnvironmentVariable = "GHPMV_GEI_SOURCE_TOKEN",
             },
         };
+        var geiSourceOverlapsTargetGhpmvToken = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://example.ghe.com",
+                UploadsBaseUrl = "https://uploads.example.ghe.com",
+                BrowserProfile = "target",
+                BrowserStateEnvironmentVariable = "TARGET_STATE",
+                TokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+            Gei = new E2eGeiSettings
+            {
+                SourceTokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+        };
         var missingDataResidencyUploads = new E2eTestSettings
         {
             Target = new E2eEndpointSettings
@@ -440,8 +457,12 @@ public class E2eTestSettingsTests
             Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentProfile.Validate()).Message,
             StringComparison.Ordinal);
         Assert.Contains(
-            "GEI requires different source and target token environment variables",
+            "token environment variables must be disjoint",
             Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentGeiToken.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "token environment variables must be disjoint",
+            Assert.Throws<InvalidDataException>(() => geiSourceOverlapsTargetGhpmvToken.Validate()).Message,
             StringComparison.Ordinal);
         Assert.Contains(
             "requires target.uploadsBaseUrl",

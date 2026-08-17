@@ -194,6 +194,8 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 
 自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
 
+`source.apiBaseUrl` / `target.apiBaseUrl`はghpmv用GraphQL endpointで、`https://api.TENANT.ghe.com/graphql`またはtenant API originのどちらも受け付ける。GEIの`--github-source-api-url` / `--target-api-url`へ渡す値は別に導出し、末尾のoptional `/graphql`とtrailing slashを除いた`https://api.TENANT.ghe.com` originを使う。GraphQL endpointをそのままGEI argumentへ再利用しない。
+
 settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`、repository short nameは`^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$`、user loginは`^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?$`で検証する。これらを含むsettings由来の文字列をPowerShell commandへ渡す場合は、profileだけでなくOrganization、repository、login、URL、title、path、mapping値をすべてsingle-quoted argumentにする。値のpatternがsingle quoteを許可する項目では、既存の規則どおり`'`を`''`へ置換してから囲む。検証済みであってもunquoted substitutionは行わない。
 
 このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。

@@ -61,11 +61,11 @@
         "targetRepositoryVisibility": { "enum": ["private", "internal", "public"] },
         "sourceTokenEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
-          "description": "Must differ from targetTokenEnvironmentVariable for cross-deployment GEI."
+          "description": "May match the source ghpmv token variable, but must not match either target-side token variable for cross-deployment GEI."
         },
         "targetTokenEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
-          "description": "Must differ from sourceTokenEnvironmentVariable for cross-deployment GEI."
+          "description": "May match the target ghpmv token variable, but must not match either source-side token variable for cross-deployment GEI."
         },
         "sourceTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "targetTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },

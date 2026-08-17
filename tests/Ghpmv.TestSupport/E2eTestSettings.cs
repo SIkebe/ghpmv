@@ -152,14 +152,26 @@ public sealed partial record E2eTestSettings
                     $"{sourceName}: cross-deployment source and target require different browser-state environment variables.");
             }
 
-            if (Execution.RepositoryPreparationMode == "gei"
-                && string.Equals(
-                    Gei.SourceTokenEnvironmentVariable,
-                    Gei.TargetTokenEnvironmentVariable,
-                    StringComparison.OrdinalIgnoreCase))
+            if (Execution.RepositoryPreparationMode == "gei")
             {
-                throw new InvalidDataException(
-                    $"{sourceName}: cross-deployment GEI requires different source and target token environment variables.");
+                var sourceTokenNames = new[]
+                {
+                    Source.TokenEnvironmentVariable,
+                    Gei.SourceTokenEnvironmentVariable,
+                };
+                var targetTokenNames = new[]
+                {
+                    Target.TokenEnvironmentVariable,
+                    Gei.TargetTokenEnvironmentVariable,
+                };
+                var crossSideOverlap = sourceTokenNames
+                    .Intersect(targetTokenNames, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                if (crossSideOverlap is not null)
+                {
+                    throw new InvalidDataException(
+                        $"{sourceName}: cross-deployment source and target token environment variables must be disjoint; '{crossSideOverlap}' is assigned to both sides.");
+                }
             }
         }
 
