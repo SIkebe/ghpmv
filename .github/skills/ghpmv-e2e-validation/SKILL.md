@@ -221,6 +221,8 @@ GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用す
 
 `fixture preparation=create`ではsource ghpmv token/browser accountがsource organization administratorかを、`api-only` / `browser-e2e`ではtarget ghpmv token/browser accountがtarget organization administratorかを一人ずつ確認する。未適用または不明ならPAT作成・入力、Browser login、permission preflightへ進まない。administrator accountへ切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
 
+標準fixture経路では、source organizationでprivate repository作成がpolicy上許可されProjectsが有効であること、target organizationでもProjectsが有効であることを一問ずつ確認する。未確認ならPAT入力へ進まない。既存Project経路ではsource resourceを作成しないためrepository creation policyを質問せず、export後のsnapshotに応じてtarget側のIssue Field、collaborator、visibility、linked repository権限だけを要求する。
+
 `read-only`、`api-only`、`browser-e2e` では、host / account 値を次の順で一問ずつ確認する。
 
 1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
