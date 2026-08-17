@@ -112,6 +112,12 @@ public sealed partial record E2eTestSettings
                 throw new InvalidDataException(
                     $"{sourceName}: cross-deployment source and target require different browser-state environment variables.");
             }
+
+            if (string.Equals(Source.BrowserProfile, Target.BrowserProfile, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"{sourceName}: cross-deployment source and target require different browser profiles.");
+            }
         }
 
         ValidateFixture(Fixtures.Integration, "fixtures.integration", sourceName);

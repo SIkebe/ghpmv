@@ -237,6 +237,19 @@ public class E2eTestSettingsTests
                 TokenEnvironmentVariable = "SOURCE_TOKEN",
             },
         };
+        var sharedCrossDeploymentProfile = new E2eTestSettings
+        {
+            Target = new E2eEndpointSettings
+            {
+                Organization = "target-org",
+                ApiBaseUrl = "https://api.example.ghe.com/graphql",
+                WebBaseUrl = "https://example.ghe.com",
+                UploadsBaseUrl = "https://uploads.example.ghe.com",
+                BrowserProfile = "source",
+                BrowserStateEnvironmentVariable = "TARGET_STATE",
+                TokenEnvironmentVariable = "TARGET_TOKEN",
+            },
+        };
         var nonDefaultApiPort = new E2eTestSettings
         {
             Source = new E2eEndpointSettings
@@ -261,6 +274,10 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "apiBaseUrl must use api.github.com or api.<tenant>.ghe.com",
             Assert.Throws<InvalidDataException>(() => nonGitHubApiHost.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "require different browser profiles",
+            Assert.Throws<InvalidDataException>(() => sharedCrossDeploymentProfile.Validate()).Message,
             StringComparison.Ordinal);
         Assert.Contains(
             "apiBaseUrl must be a GitHub API origin",
