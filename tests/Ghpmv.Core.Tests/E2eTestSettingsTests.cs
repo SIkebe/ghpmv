@@ -99,6 +99,7 @@ public class E2eTestSettingsTests
             Source = new E2eEndpointSettings
             {
                 Organization = "source-org",
+                BrowserProfile = "source",
                 TokenEnvironmentVariable = "github_pat_11AA22BB33CC44DD55EE66FF77GG88HH99II00JJ",
             },
         };
