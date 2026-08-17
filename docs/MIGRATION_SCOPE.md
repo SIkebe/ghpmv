@@ -17,7 +17,8 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Project description / README / public / closed state | ✅ | Migrated through the GraphQL API. |
 | Linked repositories | ✅ | Exported and re-linked during import when the target repository can be resolved through `--repo-mapping`. |
 | Project collaborators | ✅ with browser automation / API import-only | GitHub exposes a write API but no read API for project collaborators. With `--enable-browser-automation`, `ghpmv` exports explicitly listed project collaborators from Settings → Manage access and imports them through the API. Inherited/base-role access is outside `ghpmv`'s scope and is expected to come from GEI, organization/team/repository settings, or enterprise policy. |
-| Project templates | ❌ | Template status is not part of v1. Use `--project-number` with a pre-created template project as a workaround. |
+| Project status updates | ✅ | Body, status, start/target dates, and history order are migrated. Because GitHub cannot preserve the original author or creation time, `ghpmv` prepends them to the recreated body. |
+| Project templates | ❌ | Template status itself is not part of schema v1 (#47). When importing status updates into an existing template target, `ghpmv` temporarily unmarks it and restores its original template state only after all import writers finish. |
 
 ## Fields and field values
 
@@ -84,7 +85,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 | Area | Supported? | Notes |
 |---|---:|---|
 | `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
-| Resume after interruption | ✅ | Item import writes `import-log.json` so reruns do not duplicate already-created items. |
+| Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. An ambiguous Status Update create that did not persist its target ID keeps durable pending state and requires manual reconciliation instead of claiming a body/status/date match. |
 | Mapping CSV templates | ✅ | `export` writes repository, organization, and user mapping templates without overwriting existing files. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
 | Update check opt-out | ✅ | Use `--no-update-check` or `GHPMV_NO_UPDATE_CHECK`. No telemetry is sent. |
@@ -109,7 +110,6 @@ Pass the same repository, user, and organization mappings to `ghpmv verify`. If 
 | Migrating repositories, issues, pull requests or their metadata | This is outside the Projects API. | Use GitHub Enterprise Importer first, then map the resulting repositories. `ghpmv` expects Issue / PR numbers to be preserved for Project item relinking. |
 | Original author and creation timestamp for draft issues | GitHub always attributes newly-created draft issues to the importing user. | `ghpmv` prepends a note with the original metadata. |
 | Item history / field history | GitHub has no API to recreate historical field changes. | Only the current state is migrated. |
-| Project status updates | Not implemented in v1, although GitHub exposes read and create APIs. | Recreate updates manually. |
 | Exporting inherited/base-role project access | GitHub separates explicit project collaborators from inherited access. | Handle inherited access through GEI and the target organization/team/repository/enterprise policy model. |
 | View tab drag-and-drop order | UI-only and fragile; not part of v1. | Reorder tabs manually if the order matters. |
 | Insights charts | No public API; UI is more complex than Views/Workflows. | Future v2 candidate. |

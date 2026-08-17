@@ -38,6 +38,18 @@ public sealed record ImportLog
     /// <summary>Issue/PR additions persisted before sending so an ambiguous result can be reconciled safely.</summary>
     public Dictionary<string, PendingContentOperation> PendingContents { get; init; } = new(StringComparer.Ordinal);
 
+    /// <summary>Source status-update sequence index → target status-update node id.</summary>
+    public Dictionary<string, string> StatusUpdates { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>Status-update creates persisted before sending so ambiguous results fail closed until manually reconciled.</summary>
+    public Dictionary<string, PendingStatusUpdateOperation> PendingStatusUpdates { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// True after an existing template target is unmarked and until the final re-mark is
+    /// confirmed. Persisted so a new process can finish restoration after a hard stop.
+    /// </summary>
+    public bool TemplateRestorationRequired { get; set; }
+
     [JsonIgnore]
     public bool HasIncompleteItems => ItemStates.Values.Any(state =>
         !state.FieldValuesApplied || !state.PositionApplied || !state.ArchiveApplied);
@@ -56,8 +68,14 @@ public sealed record ImportLog
         var stream = File.OpenRead(path);
         await using (stream.ConfigureAwait(false))
         {
-            var log = await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
+            var deserialized = await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
                 ?? throw new JsonException($"{FileName} contained null.");
+            var log = deserialized with
+            {
+                StatusUpdates = deserialized.StatusUpdates ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                PendingStatusUpdates = deserialized.PendingStatusUpdates
+                    ?? new Dictionary<string, PendingStatusUpdateOperation>(StringComparer.Ordinal),
+            };
             if (log.SchemaVersion != CurrentSchemaVersion)
             {
                 throw new InvalidDataException(
@@ -97,7 +115,17 @@ public sealed record ImportLog
                     || string.IsNullOrWhiteSpace(pair.Value.OperationId)
                     || string.IsNullOrWhiteSpace(pair.Value.ContentId)
                     || pair.Value.ExistingItemIds is null
-                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace)))
+                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
+                || log.StatusUpdates.Any(pair =>
+                    !int.TryParse(pair.Key, out var index)
+                    || index < 0
+                    || string.IsNullOrWhiteSpace(pair.Value))
+                || log.PendingStatusUpdates.Any(pair =>
+                    !int.TryParse(pair.Key, out var index)
+                    || index < 0
+                    || pair.Value is null
+                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                    || string.IsNullOrWhiteSpace(pair.Value.ProjectId)))
             {
                 throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
             }
@@ -116,6 +144,12 @@ public sealed record ImportLog
             {
                 throw new InvalidDataException(
                     $"{FileName} contains overlapping pending item operations and cannot be resumed safely.");
+            }
+            if (log.StatusUpdates.Values.Distinct(StringComparer.Ordinal).Count() != log.StatusUpdates.Count
+                || log.PendingStatusUpdates.Keys.Any(log.StatusUpdates.ContainsKey))
+            {
+                throw new InvalidDataException(
+                    $"{FileName} contains inconsistent status update mappings and cannot be resumed safely.");
             }
 
             return log;
@@ -216,6 +250,13 @@ public sealed record PendingContentOperation
     public required string ContentId { get; init; }
 
     public required string[] ExistingItemIds { get; init; }
+}
+
+public sealed record PendingStatusUpdateOperation
+{
+    public required string OperationId { get; init; }
+
+    public required string ProjectId { get; init; }
 }
 
 /// <summary>System.Text.Json source-generation context for <see cref="ImportLog"/>.</summary>

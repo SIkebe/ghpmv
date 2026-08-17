@@ -27,7 +27,7 @@ public sealed record VerifyDifference
 {
     public required VerifySeverity Severity { get; init; }
 
-    /// <summary>What the difference concerns: Project, Field, View, Workflow or Item.</summary>
+    /// <summary>What the difference concerns, such as Project, Field, Item or StatusUpdate.</summary>
     public required string Category { get; init; }
 
     public required string Message { get; init; }

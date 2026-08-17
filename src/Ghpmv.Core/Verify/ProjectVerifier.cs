@@ -23,6 +23,7 @@ public sealed class ProjectVerifier
     private const string ViewCategory = "View";
     private const string WorkflowCategory = "Workflow";
     private const string ItemCategory = "Item";
+    private const string StatusUpdateCategory = "StatusUpdate";
     private const string CollaboratorCategory = "Collaborator";
     private const string LinkedRepositoryCategory = "LinkedRepository";
 
@@ -129,21 +130,28 @@ public sealed class ProjectVerifier
             source.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
             target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
             differences);
+        CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
         CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
         CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
+        var categories = new List<VerifyCategoryResult>
+        {
+            CategoryResult(ProjectCategory, differences, notVerified),
+            CategoryResult(FieldCategory, differences, notVerified),
+            CategoryResult(ItemCategory, differences, notVerified),
+            CategoryResult(ViewCategory, differences, notVerified),
+            CategoryResult(WorkflowCategory, differences, notVerified),
+            CategoryResult(CollaboratorCategory, differences, notVerified),
+            CategoryResult(LinkedRepositoryCategory, differences, notVerified),
+        };
+        if (source.StatusUpdates is not null)
+        {
+            categories.Add(CategoryResult(StatusUpdateCategory, differences, notVerified));
+        }
+
         return new VerifyReport
         {
             Differences = differences,
-            Categories =
-            [
-                CategoryResult(ProjectCategory, differences, notVerified),
-                CategoryResult(FieldCategory, differences, notVerified),
-                CategoryResult(ItemCategory, differences, notVerified),
-                CategoryResult(ViewCategory, differences, notVerified),
-                CategoryResult(WorkflowCategory, differences, notVerified),
-                CategoryResult(CollaboratorCategory, differences, notVerified),
-                CategoryResult(LinkedRepositoryCategory, differences, notVerified),
-            ],
+            Categories = categories,
         };
     }
 
@@ -866,6 +874,57 @@ public sealed class ProjectVerifier
                         $"item order mismatch at position {i}: source has {sourceKey}, target has {targetKey}"));
                     break;
                 }
+            }
+        }
+    }
+
+    private static void CompareStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot>? source,
+        IReadOnlyList<StatusUpdateSnapshot>? target,
+        List<VerifyDifference> differences)
+    {
+        // Null is the schema-v1 compatibility sentinel: older snapshots did not capture
+        // this collection and retain the pre-status-update verification behavior.
+        if (source is null)
+        {
+            return;
+        }
+
+        target ??= [];
+        if (source.Count != target.Count)
+        {
+            AddError(differences, StatusUpdateCategory, string.Create(
+                CultureInfo.InvariantCulture,
+                $"status update count mismatch (source {source.Count}, target {target.Count})"));
+        }
+
+        for (var index = 0; index < Math.Min(source.Count, target.Count); index++)
+        {
+            var expected = source[index];
+            var actual = target[index];
+            var position = string.Create(CultureInfo.InvariantCulture, $"status update sequence {index}");
+            if (!TextEquals(expected.Status, actual.Status))
+            {
+                AddError(differences, StatusUpdateCategory,
+                    $"{position}: status mismatch (source {expected.Status ?? "none"}, target {actual.Status ?? "none"})");
+            }
+
+            if (!TextEquals(expected.StartDate, actual.StartDate))
+            {
+                AddError(differences, StatusUpdateCategory, $"{position}: start date mismatch");
+            }
+
+            if (!TextEquals(expected.TargetDate, actual.TargetDate))
+            {
+                AddError(differences, StatusUpdateCategory, $"{position}: target date mismatch");
+            }
+
+            var expectedBody = NormalizeBody(StatusUpdateImporter.BuildImportedBody(expected));
+            var actualBody = NormalizeBody(actual.Body);
+            if (!string.Equals(expectedBody, actualBody, StringComparison.Ordinal))
+            {
+                AddError(differences, StatusUpdateCategory,
+                    $"{position}: body mismatch (including original creator/time attribution)");
             }
         }
     }

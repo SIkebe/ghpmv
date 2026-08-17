@@ -623,6 +623,292 @@ public class ItemImporterLogicTests
         }
     }
 
+    [Fact]
+    public async Task ImportLog_round_trips_status_update_mappings_and_pending_operations()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-").FullName;
+        try
+        {
+            var log = new ImportLog
+            {
+                ProjectId = "PVT_status",
+                SourceSnapshotFingerprint = "status-fingerprint",
+            };
+            log.StatusUpdates["0"] = "SU_1";
+            log.StatusUpdates["2"] = "SU_3";
+            log.PendingStatusUpdates["1"] = new PendingStatusUpdateOperation
+            {
+                OperationId = "operation-status-1",
+                ProjectId = "PVT_status",
+            };
+            await log.SaveAsync(directory, cancellationToken);
+
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+
+            Assert.NotNull(loaded);
+            Assert.Equal(2, ImportLog.CurrentSchemaVersion);
+            Assert.Equal(ImportLog.CurrentSchemaVersion, loaded.SchemaVersion);
+            Assert.Equal("PVT_status", loaded.ProjectId);
+            Assert.Equal(2, loaded.StatusUpdates.Count);
+            Assert.Equal("SU_1", loaded.StatusUpdates["0"]);
+            Assert.Equal("SU_3", loaded.StatusUpdates["2"]);
+            var pending = Assert.Single(loaded.PendingStatusUpdates);
+            Assert.Equal("1", pending.Key);
+            Assert.Equal("operation-status-1", pending.Value.OperationId);
+            Assert.Equal("PVT_status", pending.Value.ProjectId);
+
+            // The item sections stay independent of the status-update sections.
+            Assert.Empty(loaded.Items);
+            Assert.Empty(loaded.PendingDrafts);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_without_status_update_sections_loads_with_empty_maps()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-legacy-").FullName;
+        try
+        {
+            // A schema-2 log written before status updates existed must still resume:
+            // CurrentSchemaVersion stays 2, so an older ghpmv's log is still in-contract
+            // and its absent statusUpdates/pendingStatusUpdates sections mean "none yet".
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                """{"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{},"itemStates":{},"pendingDrafts":{},"pendingContents":{}}""",
+                cancellationToken);
+
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+
+            Assert.NotNull(loaded);
+            Assert.Empty(loaded.StatusUpdates);
+            Assert.Empty(loaded.PendingStatusUpdates);
+            Assert.Equal("PVT_target", loaded.ProjectId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Builds a complete schema-2 <c>import-log.json</c> body. Every section is emitted
+    /// because <see cref="ImportLog.LoadAsync"/> rejects a log whose collections are
+    /// absent, so only the status-update sections under test vary.
+    /// </summary>
+    private static string StatusUpdateLogJson(string statusUpdates, string pendingStatusUpdates)
+        => $$"""
+            {"schemaVersion":2,"projectId":"PVT_target","sourceSnapshotFingerprint":"fingerprint","items":{},"itemStates":{},"pendingDrafts":{},"pendingContents":{},"statusUpdates":{{statusUpdates}},"pendingStatusUpdates":{{pendingStatusUpdates}}}
+            """;
+
+    [Fact]
+    public async Task ImportLog_rejects_duplicate_status_update_target_ids()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-dup-").FullName;
+        try
+        {
+            // Two snapshot indices pointing at one target update means an import created
+            // fewer updates than the log claims: resuming would silently skip work.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson("""{"0":"SU_same","1":"SU_same"}""", "{}"),
+                cancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            Assert.Equal(
+                "import-log.json contains inconsistent status update mappings and cannot be resumed safely.",
+                exception.Message);
+
+            // The identical log with distinct target ids loads, isolating the duplicate.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson("""{"0":"SU_one","1":"SU_two"}""", "{}"),
+                cancellationToken);
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal(2, loaded!.StatusUpdates.Count);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_keys_present_in_both_status_update_maps()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-overlap-").FullName;
+        try
+        {
+            // Index 0 cannot be both completed and pending.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson(
+                    """{"0":"SU_done"}""",
+                    """{"0":{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":[]}}"""),
+                cancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            Assert.Equal(
+                "import-log.json contains inconsistent status update mappings and cannot be resumed safely.",
+                exception.Message);
+
+            // Distinct keys for the same two records are a legitimate resume state.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson(
+                    """{"0":"SU_done"}""",
+                    """{"1":{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":[]}}"""),
+                cancellationToken);
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("SU_done", Assert.Single(loaded!.StatusUpdates).Value);
+            Assert.Equal("1", Assert.Single(loaded.PendingStatusUpdates).Key);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_non_integer_or_negative_status_update_keys()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-key-").FullName;
+        try
+        {
+            var path = Path.Combine(directory, ImportLog.FileName);
+
+            // Keys are snapshot sequence indices, so they must parse as non-negative ints.
+            await File.WriteAllTextAsync(
+                path,
+                StatusUpdateLogJson("""{"a":"SU_1"}""", "{}"),
+                cancellationToken);
+            var nonInteger = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("malformed item state", nonInteger.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                path,
+                StatusUpdateLogJson("""{"-1":"SU_1"}""", "{}"),
+                cancellationToken);
+            var negative = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("malformed item state", negative.Message, StringComparison.Ordinal);
+
+            await File.WriteAllTextAsync(
+                path,
+                StatusUpdateLogJson(
+                    "{}",
+                    """{"x":{"operationId":"op","projectId":"PVT_target","existingStatusUpdateIds":[]}}"""),
+                cancellationToken);
+            var pendingKey = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+            Assert.Contains("malformed item state", pendingKey.Message, StringComparison.Ordinal);
+
+            // The same log with a well-formed non-negative key loads, proving the key is
+            // the only thing the payloads above got wrong.
+            await File.WriteAllTextAsync(
+                path,
+                StatusUpdateLogJson("""{"0":"SU_1"}""", "{}"),
+                cancellationToken);
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("SU_1", Assert.Single(loaded!.StatusUpdates).Value);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_blank_status_update_target_ids()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-blank-").FullName;
+        try
+        {
+            // A blank node id cannot be reconciled against the target history.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson("""{"0":"  "}""", "{}"),
+                cancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => ImportLog.LoadAsync(directory, cancellationToken));
+
+            Assert.Contains("malformed item state", exception.Message, StringComparison.Ordinal);
+
+            // The same log with a real node id loads, isolating the blank value.
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, ImportLog.FileName),
+                StatusUpdateLogJson("""{"0":"SU_real"}""", "{}"),
+                cancellationToken);
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("SU_real", Assert.Single(loaded!.StatusUpdates).Value);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ImportLog_rejects_pending_status_update_with_missing_operation_or_project_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-status-pending-").FullName;
+        try
+        {
+            var path = Path.Combine(directory, ImportLog.FileName);
+
+            // Both fields identify the operation that must be reconciled manually.
+            var invalidPayloads = new[]
+            {
+                """{"operationId":"  ","projectId":"PVT_target"}""",
+                """{"operationId":"op-0","projectId":""}""",
+            };
+
+            foreach (var payload in invalidPayloads)
+            {
+                await File.WriteAllTextAsync(
+                    path,
+                    StatusUpdateLogJson("{}", """{"0":""" + payload + "}"),
+                    cancellationToken);
+
+                var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                    () => ImportLog.LoadAsync(directory, cancellationToken));
+                Assert.Contains("malformed item state", exception.Message, StringComparison.Ordinal);
+            }
+
+            // The same shape with every field populated loads successfully.
+            await File.WriteAllTextAsync(
+                path,
+                StatusUpdateLogJson(
+                    "{}",
+                    """{"0":{"operationId":"op-0","projectId":"PVT_target","existingStatusUpdateIds":["legacy-baseline-is-ignored"]}}"""),
+                cancellationToken);
+            var loaded = await ImportLog.LoadAsync(directory, cancellationToken);
+            var pending = Assert.Single(loaded!.PendingStatusUpdates).Value;
+            Assert.Equal("op-0", pending.OperationId);
+            Assert.Equal("PVT_target", pending.ProjectId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);

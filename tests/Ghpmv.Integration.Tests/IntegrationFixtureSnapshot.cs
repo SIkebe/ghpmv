@@ -101,6 +101,62 @@ internal static class IntegrationFixtureSnapshot
         };
     }
 
+    internal static IReadOnlyList<StatusUpdateSnapshot> SelectExpectedStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot> actual,
+        IReadOnlyList<StatusUpdateSnapshot> expected)
+    {
+        ArgumentNullException.ThrowIfNull(actual);
+        ArgumentNullException.ThrowIfNull(expected);
+
+        var positions = new List<int>(expected.Count);
+        foreach (var (actualUpdate, actualIndex) in actual.Select((update, index) => (update, index)))
+        {
+            var expectedIndex = expected
+                .Select((expectedUpdate, index) => (expectedUpdate, index))
+                .Where(entry => StatusUpdateMatches(entry.expectedUpdate, actualUpdate))
+                .Select(entry => entry.index)
+                .Cast<int?>()
+                .SingleOrDefault();
+            if (expectedIndex is null)
+            {
+                continue;
+            }
+
+            if (expectedIndex.Value < positions.Count)
+            {
+                // The stable shared fixture contains a known legacy duplicate from
+                // before setup became idempotent. Select one canonical occurrence.
+                continue;
+            }
+            if (expectedIndex.Value > positions.Count)
+            {
+                throw new InvalidOperationException(
+                    "Expected fixture status updates were not in reverse chronological order.");
+            }
+
+            positions.Add(actualIndex);
+        }
+
+        if (positions.Count != expected.Count)
+        {
+            throw new InvalidOperationException(
+                $"Expected fixture status update '{expected[positions.Count].Body}' was not found.");
+        }
+
+        return positions.Select(position => actual[position]).ToArray();
+    }
+
+    private static bool StatusUpdateMatches(
+        StatusUpdateSnapshot expected,
+        StatusUpdateSnapshot actual)
+        => string.Equals(NormalizeBody(expected.Body), NormalizeBody(actual.Body), StringComparison.Ordinal)
+            && string.Equals(expected.Status, actual.Status, StringComparison.Ordinal)
+            && string.Equals(expected.StartDate, actual.StartDate, StringComparison.Ordinal)
+            && string.Equals(expected.TargetDate, actual.TargetDate, StringComparison.Ordinal);
+
+    private static string NormalizeBody(string body)
+        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
+
     private static ItemSnapshot Draft(ProjectSnapshot snapshot, string title)
         => snapshot.Items.Single(item =>
             item.Type == "DRAFT_ISSUE"

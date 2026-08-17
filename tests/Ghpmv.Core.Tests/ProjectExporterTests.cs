@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using Ghpmv.Core.Export;
@@ -20,6 +21,7 @@ public class ProjectExporterTests
                   "fields":{"nodes":[{"name":"Legacy field"}]}}]
                 """),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [
@@ -73,6 +75,7 @@ public class ProjectExporterTests
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
             """,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [
@@ -124,9 +127,9 @@ public class ProjectExporterTests
             item.FieldValues.Single(value => value is { FieldName: "Notes", IsIssueField: false }).Text);
         var teamsValue = item.FieldValues.Single(value => value is { FieldName: "Teams", IsIssueField: true });
         Assert.Equal(["Platform", "SDK"], teamsValue.MultiSelectOptionNames);
-        Assert.Equal(3, handler.RequestBodies.Count);
-        Assert.Contains("isIssueField", handler.RequestBodies[2], StringComparison.Ordinal);
-        Assert.Contains("issueField", handler.RequestBodies[2], StringComparison.Ordinal);
+        Assert.Equal(4, handler.RequestBodies.Count);
+        Assert.Contains("isIssueField", handler.RequestBodies[3], StringComparison.Ordinal);
+        Assert.Contains("issueField", handler.RequestBodies[3], StringComparison.Ordinal);
         Assert.DoesNotContain(
             handler.RequestBodies,
             body => body.Contains("organization.issueFields", StringComparison.Ordinal));
@@ -138,6 +141,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [{"__typename":"ProjectV2Field","id":"PVTF_first","name":"First","dataType":"TEXT",
@@ -158,8 +162,8 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(["First", "Second"], snapshot.Fields.Select(field => field.Name));
-        Assert.Equal(4, handler.RequestBodies.Count);
-        Assert.Contains("\"after\":\"field-cursor\"", handler.RequestBodies[3], StringComparison.Ordinal);
+        Assert.Equal(5, handler.RequestBodies.Count);
+        Assert.Contains("\"after\":\"field-cursor\"", handler.RequestBodies[4], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -168,6 +172,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [{
@@ -197,6 +202,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [{
@@ -222,6 +228,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [{
@@ -261,6 +268,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             FieldsResponse($"[{field},{field}]"));
         using var client = CreateClient(handler);
 
@@ -280,6 +288,7 @@ public class ProjectExporterTests
         using var handler = new StubHandler(
             MetadataResponse("[]"),
             EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
             """
             {"data":{"organization":{"projectV2":{"fields":null}}},"errors":[
               {"message":"Something went wrong while executing your query on the preview API."}
@@ -310,7 +319,7 @@ public class ProjectExporterTests
 
         Assert.Contains("No snapshot was written", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("--enable-browser-automation", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(6, handler.RequestBodies.Count);
+        Assert.Equal(7, handler.RequestBodies.Count);
     }
 
     [Fact]
@@ -332,6 +341,7 @@ public class ProjectExporterTests
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}}
             """,
+            EmptyStatusUpdatesResponse,
             FieldsResponse(
                 """
                 [
@@ -365,12 +375,198 @@ public class ProjectExporterTests
         Assert.Equal(["Platform", "SDK"], value.MultiSelectOptionNames);
     }
 
+    [Fact]
+    public async Task Export_captures_status_updates_in_reverse_chronological_order()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            StatusUpdatesResponse(
+                """
+                [
+                  {"body":"Newest update","status":"COMPLETE","startDate":"2026-01-01","targetDate":"2026-04-15",
+                   "creator":{"login":"octocat"},"createdAt":"2026-01-05T09:00:00Z","updatedAt":"2026-01-06T10:30:00Z"},
+                  {"body":"Middle update","status":"AT_RISK","startDate":"2025-12-01","targetDate":"2026-03-01",
+                   "creator":{"login":"hubot"},"createdAt":"2026-01-03T08:00:00Z","updatedAt":"2026-01-03T08:00:00Z"},
+                  {"body":"Oldest update","status":"INACTIVE","startDate":"2025-11-01","targetDate":"2026-02-01",
+                   "creator":{"login":"monalisa"},"createdAt":"2026-01-01T07:00:00Z","updatedAt":"2026-01-02T07:00:00Z"}
+                ]
+                """),
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(snapshot.StatusUpdates);
+        Assert.Equal(
+            ["Newest update", "Middle update", "Oldest update"],
+            snapshot.StatusUpdates.Select(update => update.Body));
+        Assert.Equal(
+            ["COMPLETE", "AT_RISK", "INACTIVE"],
+            snapshot.StatusUpdates.Select(update => update.Status));
+        Assert.Equal(
+            ["octocat", "hubot", "monalisa"],
+            snapshot.StatusUpdates.Select(update => update.Creator));
+        var newest = snapshot.StatusUpdates[0];
+        Assert.Equal("2026-01-01", newest.StartDate);
+        Assert.Equal("2026-04-15", newest.TargetDate);
+        Assert.Equal("2026-01-05T09:00:00Z", newest.CreatedAt);
+        Assert.Equal("2026-01-06T10:30:00Z", newest.UpdatedAt);
+
+        // Reverse chronological order is the API's doing, not a client-side sort: the
+        // query must ask for it explicitly or resume ordering silently changes.
+        var statusUpdateRequest = Assert.Single(
+            handler.RequestBodies,
+            body => body.Contains("statusUpdates(first: $first", StringComparison.Ordinal));
+        Assert.Contains(
+            "orderBy: { field: CREATED_AT, direction: DESC }",
+            statusUpdateRequest,
+            StringComparison.Ordinal);
+        Assert.True(
+            snapshot.StatusUpdates
+                .Select(update => DateTimeOffset.Parse(update.CreatedAt, CultureInfo.InvariantCulture))
+                .SequenceEqual(
+                    snapshot.StatusUpdates
+                        .Select(update => DateTimeOffset.Parse(update.CreatedAt, CultureInfo.InvariantCulture))
+                        .OrderByDescending(createdAt => createdAt)),
+            "Exported status updates must stay newest-first.");
+    }
+
+    [Fact]
+    public async Task Export_paginates_status_updates()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            StatusUpdatesResponse(
+                """
+                [{"body":"Page one","status":"ON_TRACK","startDate":null,"targetDate":null,
+                  "creator":{"login":"octocat"},"createdAt":"2026-01-05T09:00:00Z","updatedAt":"2026-01-05T09:00:00Z"}]
+                """,
+                hasNextPage: true,
+                endCursor: "c1"),
+            StatusUpdatesResponse(
+                """
+                [{"body":"Page two","status":"OFF_TRACK","startDate":null,"targetDate":null,
+                  "creator":{"login":"hubot"},"createdAt":"2026-01-04T09:00:00Z","updatedAt":"2026-01-04T09:00:00Z"}]
+                """),
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(snapshot.StatusUpdates);
+        Assert.Equal(["Page one", "Page two"], snapshot.StatusUpdates.Select(update => update.Body));
+        Assert.Equal(["ON_TRACK", "OFF_TRACK"], snapshot.StatusUpdates.Select(update => update.Status));
+        Assert.Equal(5, handler.RequestBodies.Count);
+        Assert.Contains("\"after\":\"c1\"", handler.RequestBodies[3], StringComparison.Ordinal);
+        Assert.Contains("\"first\":50", handler.RequestBodies[3], StringComparison.Ordinal);
+        Assert.Contains("\"after\":null", handler.RequestBodies[2], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_leaves_optional_status_update_dates_and_creator_null()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            StatusUpdatesResponse(
+                """
+                [{"body":"No metadata","status":null,"startDate":null,"targetDate":null,
+                  "createdAt":"2026-01-05T09:00:00Z","updatedAt":"2026-01-05T09:00:00Z"}]
+                """),
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        var update = Assert.Single(snapshot.StatusUpdates!);
+        Assert.Null(update.Status);
+        Assert.Null(update.StartDate);
+        Assert.Null(update.TargetDate);
+        Assert.Null(update.Creator);
+        Assert.Equal("No metadata", update.Body);
+        Assert.Equal("2026-01-05T09:00:00Z", update.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Export_sets_an_empty_status_update_list_when_the_project_has_none()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        // Null means "this snapshot predates status update capture"; the API path must
+        // never produce that, otherwise verify would silently skip the category.
+        Assert.NotNull(snapshot.StatusUpdates);
+        Assert.Empty(snapshot.StatusUpdates);
+    }
+
+    [Fact]
+    public async Task Export_requests_status_updates_after_items_and_before_fields()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]"),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        var items = handler.RequestBodies.FindIndex(
+            body => body.Contains("items(first: $first", StringComparison.Ordinal));
+        var statusUpdates = handler.RequestBodies.FindIndex(
+            body => body.Contains("statusUpdates(first: $first", StringComparison.Ordinal));
+        var fields = handler.RequestBodies.FindIndex(
+            body => body.Contains("fields(first: $first", StringComparison.Ordinal));
+
+        Assert.Equal(1, items);
+        Assert.Equal(2, statusUpdates);
+        Assert.Equal(3, fields);
+    }
+
     private const string EmptyItemsResponse =
         """
         {"data":{"organization":{"projectV2":{"items":{
           "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
         }}}}}
         """;
+
+    private const string EmptyStatusUpdatesResponse =
+        """
+        {"data":{"organization":{"projectV2":{"statusUpdates":{
+          "nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}}}
+        """;
+
+    private static string StatusUpdatesResponse(
+        string nodes,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
+        "{\"data\":{\"organization\":{\"projectV2\":{\"statusUpdates\":{\"nodes\":" + nodes +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
     private static string MetadataResponse(string views) =>
         "{\"data\":{\"organization\":{\"projectV2\":{" +

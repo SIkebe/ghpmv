@@ -1,4 +1,5 @@
 using Ghpmv.Core.Export;
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 
@@ -267,4 +268,77 @@ public class ProjectExporterTests
     private static FieldValueSnapshot? ValueOf(ItemSnapshot item, string fieldName)
         => item.FieldValues.FirstOrDefault(v => v.FieldName == fieldName);
 
+    [Fact]
+    public async Task Export_captures_fixture_status_updates_in_reverse_chronological_order()
+    {
+        var snapshot = await ExportFixtureAsync();
+
+        var updates = snapshot.StatusUpdates;
+        Assert.NotNull(updates);
+        var expected = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            IntegrationTestSettings.FixtureRepositoryFullName,
+            "fixture-user",
+            pullRequestNumber: 1).StatusUpdates;
+        Assert.NotNull(expected);
+        Assert.Equal(5, expected.Count);
+
+        // This assertion intentionally selects a canonical ordered subsequence because
+        // the long-lived shared fixture contains a known legacy duplicate. Deterministic
+        // reconciliation and isolated round-trip tests prove current runs stay unique.
+        var fixtureUpdates = IntegrationFixtureSnapshot.SelectExpectedStatusUpdates(updates, expected);
+
+        // Reverse chronological: the fixture is created oldest-first, so the newest
+        // (COMPLETE) is exported first and the oldest (INACTIVE) last.
+        Assert.Equal(
+            ["COMPLETE", "OFF_TRACK", "AT_RISK", "ON_TRACK", "INACTIVE"],
+            fixtureUpdates.Select(update => update.Status));
+
+        // Documented fixture dates, newest-first. Both optional dates are null on at
+        // least one update, and both are populated on at least one other.
+        (string? StartDate, string? TargetDate)[] expectedDates =
+        [
+            ("2026-01-01", "2026-04-15"),
+            (null, "2026-04-15"),
+            ("2026-01-01", null),
+            ("2026-01-01", "2026-03-31"),
+            (null, null),
+        ];
+        Assert.Equal(expectedDates, fixtureUpdates.Select(update => (update.StartDate, update.TargetDate)));
+
+        // The fixture writes its own history (AddAttributionNote = false), so bodies —
+        // including Markdown and multi-line content — survive verbatim.
+        string[] expectedBodies =
+        [
+            "Fixture migration is complete.",
+            "The fixture is temporarily off track.",
+            "A fixture risk was identified.",
+            "Implementation is on track.\n\n- API\n- Browser",
+            "Fixture kickoff with **Markdown**.",
+        ];
+        Assert.Equal(expectedBodies, fixtureUpdates.Select(update => NormalizeBody(update.Body)));
+
+        // createdAt is assigned by GitHub, so only its ordering is contractual.
+        var createdAt = updates
+            .Select(update => DateTimeOffset.Parse(
+                update.CreatedAt,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind))
+            .ToArray();
+        for (var index = 1; index < createdAt.Length; index++)
+        {
+            Assert.True(
+                createdAt[index - 1] >= createdAt[index],
+                $"status updates are not in descending createdAt order at sequence {index}: "
+                    + string.Join(", ", updates.Select(update => update.CreatedAt)));
+        }
+
+        Assert.All(updates, update =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(update.Creator));
+            Assert.False(string.IsNullOrWhiteSpace(update.UpdatedAt));
+        });
+    }
+
+    private static string NormalizeBody(string body) => body.Replace("\r\n", "\n", StringComparison.Ordinal);
 }

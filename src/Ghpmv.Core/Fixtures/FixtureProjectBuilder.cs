@@ -49,7 +49,7 @@ public sealed class FixtureProjectBuilder
             || projectLog.PendingIssueFieldLinks.Count > 0;
         var shouldImportItems = ShouldImportItems(
             existing is not null,
-            itemLog is not null,
+            HasItemWork(itemLog),
             projectImportWasPending);
 
         if (itemLog is not null
@@ -59,81 +59,385 @@ public sealed class FixtureProjectBuilder
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
         }
 
-        var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
-        var repositoryFullName = $"{organization}/{repositoryName}";
-        var pullRequestNumber = itemLog is null
-            ? await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false)
-            : await FindOpenFixturePullRequestNumberAsync(repositoryFullName, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
-
-        var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
-        if (itemLog is not null)
+        ImportLog? templateLog = itemLog;
+        async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
         {
-            var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
-            if (!string.Equals(
-                    itemLog.SourceSnapshotFingerprint,
-                    snapshotFingerprint,
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidOperationException(
-                    $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
-            }
+            var latestLog = await ImportLog.LoadAsync(operationDirectory, ct).ConfigureAwait(false)
+                ?? templateLog
+                ?? throw new InvalidOperationException(
+                    $"{ImportLog.FileName} was unavailable while persisting template restoration state.");
+            latestLog.TemplateRestorationRequired = required;
+            await latestLog.SaveAsync(operationDirectory, ct).ConfigureAwait(false);
+            templateLog = latestLog;
         }
 
-        var projectImporter = new ProjectImporter(_graphQl)
+        ProjectTemplateWriteSession? templateWriteSession = null;
+        if (itemLog is { TemplateRestorationRequired: true })
         {
-            OnProgress = OnProgress,
-            OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
-            OperationLogDirectory = operationDirectory,
-            PendingItemProjectId = itemLog?.ProjectId,
-            RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                _graphQl,
+                itemLog.ProjectId,
+                restorationWasPending: true,
+                PersistTemplateRestorationAsync,
+                OnProgress,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var viewerLogin = await _graphQl.GetViewerLoginAsync(cancellationToken).ConfigureAwait(false);
+            var repositoryFullName = $"{organization}/{repositoryName}";
+            var pullRequestNumber = itemLog is null
+                ? await EnsureRepositoryAsync(organization, repositoryName, cancellationToken).ConfigureAwait(false)
+                : await FindOpenFixturePullRequestNumberAsync(repositoryFullName, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException(
+                        $"The fixture pull request in '{repositoryFullName}' was not found; refusing to mutate fixtures for an existing import log.");
+
+            var snapshot = CreateSnapshot(title, repositoryFullName, viewerLogin, pullRequestNumber);
+            var importStatusUpdates = true;
+            IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
+                new Dictionary<int, string>();
+            if (itemLog is not null)
             {
-                [repositoryFullName] = repositoryFullName,
-            },
-        };
-        var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
+                var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
+                if (!string.Equals(itemLog.SourceSnapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal))
+                {
+                    itemLog = UpgradeLegacyFixtureLog(itemLog, snapshot);
+                    if (itemLog is null)
+                    {
+                        throw new InvalidOperationException(
+                            $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
+                    }
 
-        await EnsureMultiSelectIssueFieldValueAsync(
-            repositoryFullName,
-            project,
-            cancellationToken).ConfigureAwait(false);
+                    await itemLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                    templateLog = itemLog;
+                }
+            }
 
-        if (shouldImportItems)
-        {
-            var itemImporter = new ItemImporter(_graphQl)
+            if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
+            {
+                var existingStatusUpdates = await FetchStatusUpdatesAsync(
+                    existing.Id,
+                    cancellationToken).ConfigureAwait(false);
+                var reconciliation = ReconcileFixtureStatusUpdates(
+                    expectedStatusUpdates,
+                    existingStatusUpdates,
+                    itemLog);
+                matchedFixtureStatusUpdates = reconciliation.CanonicalMatches;
+                importStatusUpdates = reconciliation.ImportRequired;
+                if (reconciliation.LogChanged)
+                {
+                    await itemLog!.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                    templateLog = itemLog;
+                }
+
+                if (!importStatusUpdates)
+                {
+                    OnProgress?.Invoke(
+                        "Fixture project already contains the expected status update history; leaving it and any unrelated history unchanged.");
+                }
+                else
+                {
+                    OnProgress?.Invoke(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Fixture project contains {matchedFixtureStatusUpdates.Count}/{expectedStatusUpdates.Count} expected status updates; seeding only the missing fixture history and leaving unrelated history unchanged."));
+                }
+            }
+
+            var projectImporter = new ProjectImporter(_graphQl)
             {
                 OnProgress = OnProgress,
+                OnConflict = existing is null ? ConflictAction.Fail : ConflictAction.Update,
+                OperationLogDirectory = operationDirectory,
+                PendingItemProjectId = itemLog?.ProjectId,
                 RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     [repositoryFullName] = repositoryFullName,
                 },
-                UserMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [viewerLogin] = viewerLogin,
-                },
             };
-            var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
-            foreach (var warning in itemResult.Warnings)
+            var project = await projectImporter.ImportAsync(snapshot, organization, cancellationToken).ConfigureAwait(false);
+
+            await EnsureMultiSelectIssueFieldValueAsync(
+                repositoryFullName,
+                project,
+                cancellationToken).ConfigureAwait(false);
+
+            if (shouldImportItems)
             {
-                OnProgress?.Invoke("warning: " + warning);
+                var itemImporter = new ItemImporter(_graphQl)
+                {
+                    OnProgress = OnProgress,
+                    RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [repositoryFullName] = repositoryFullName,
+                    },
+                    UserMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [viewerLogin] = viewerLogin,
+                    },
+                };
+                var itemResult = await itemImporter.ImportAsync(snapshot, project, operationDirectory, cancellationToken).ConfigureAwait(false);
+                foreach (var warning in itemResult.Warnings)
+                {
+                    OnProgress?.Invoke("warning: " + warning);
+                }
+            }
+            else
+            {
+                await EnsureExistingSelectValuesAsync(snapshot, project, cancellationToken).ConfigureAwait(false);
+                OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                    $"Fixture project already existed; synchronized fields without duplicating items: {project.Url}"));
+            }
+
+            if (importStatusUpdates && snapshot.StatusUpdates is { Count: > 0 })
+            {
+                templateLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false)
+                    ?? new ImportLog
+                    {
+                        ProjectId = project.ProjectId,
+                        SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+                    };
+                if (ReconcileFixtureStatusLog(templateLog, matchedFixtureStatusUpdates))
+                {
+                    await templateLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+                }
+
+                if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
+                {
+                    templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                        _graphQl,
+                        project.ProjectId,
+                        templateLog.TemplateRestorationRequired,
+                        PersistTemplateRestorationAsync,
+                        OnProgress,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                var statusUpdateImporter = new StatusUpdateImporter(_graphQl)
+                {
+                    OnProgress = OnProgress,
+                    AddAttributionNote = false,
+                };
+                await statusUpdateImporter.ImportAsync(
+                    snapshot,
+                    project,
+                    operationDirectory,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
+        }
+        finally
+        {
+            if (templateWriteSession is not null)
+            {
+                await templateWriteSession.RestoreAsync(CancellationToken.None).ConfigureAwait(false);
             }
         }
-        else
-        {
-            await EnsureExistingSelectValuesAsync(snapshot, project, cancellationToken).ConfigureAwait(false);
-            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                $"Fixture project already existed; synchronized fields without duplicating items: {project.Url}"));
-        }
-
-        return new FixtureProjectSetupResult(project.ProjectNumber, project.Url, Created: existing is null);
     }
 
     internal static bool ShouldImportItems(
         bool projectAlreadyExists,
-        bool hasItemLog,
+        bool hasItemWork,
         bool projectImportWasPending)
-        => !projectAlreadyExists || hasItemLog || projectImportWasPending;
+        => !projectAlreadyExists || hasItemWork || projectImportWasPending;
+
+    internal static bool HasItemWork(ImportLog? log)
+        => log is { Items.Count: > 0 }
+            or { ItemStates.Count: > 0 }
+            or { PendingDrafts.Count: > 0 }
+            or { PendingContents.Count: > 0 };
+
+    internal static ImportLog? UpgradeLegacyFixtureLog(ImportLog log, ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (log.StatusUpdates.Count > 0
+            || log.PendingStatusUpdates.Count > 0
+            || !string.Equals(
+                log.SourceSnapshotFingerprint,
+                ImportLog.ComputeSnapshotFingerprint(snapshot with { StatusUpdates = null }),
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return log with
+        {
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+        };
+    }
+
+    internal static IReadOnlyDictionary<int, string> MatchFixtureStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        IReadOnlyList<FixtureStatusUpdate> actual)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(actual);
+
+        for (var left = 0; left < expected.Count; left++)
+        {
+            for (var right = left + 1; right < expected.Count; right++)
+            {
+                if (FixtureStatusUpdateMatches(expected[left], expected[right]))
+                {
+                    throw new InvalidOperationException(
+                        "The standard fixture defines duplicate status updates and cannot be seeded safely.");
+                }
+            }
+        }
+
+        var fixtureEntries = new List<(int ExpectedIndex, string TargetId)>();
+        int? nextExpectedIndex = null;
+        foreach (var candidate in actual)
+        {
+            var expectedIndex = expected
+                .Select((update, index) => (update, index))
+                .Where(entry => FixtureStatusUpdateMatches(entry.update, candidate.Update))
+                .Select(entry => entry.index)
+                .Cast<int?>()
+                .SingleOrDefault();
+            if (expectedIndex is null)
+            {
+                continue;
+            }
+
+            if (fixtureEntries.Any(entry => entry.ExpectedIndex == expectedIndex.Value))
+            {
+                // A shared fixture may contain a legacy duplicate. Keep one canonical
+                // occurrence without claiming or deleting the duplicate node.
+                continue;
+            }
+
+            nextExpectedIndex ??= expectedIndex.Value;
+            if (expectedIndex.Value != nextExpectedIndex.Value)
+            {
+                throw UnsafeFixtureHistory(
+                    $"found snapshot sequence {expectedIndex} where sequence {nextExpectedIndex} was required");
+            }
+
+            fixtureEntries.Add((expectedIndex.Value, candidate.Id));
+            nextExpectedIndex++;
+        }
+
+        if (fixtureEntries.Count > 0 && nextExpectedIndex != expected.Count)
+        {
+            throw UnsafeFixtureHistory(
+                $"snapshot sequence {nextExpectedIndex} is missing from the created prefix");
+        }
+
+        return fixtureEntries.ToDictionary(
+            entry => entry.ExpectedIndex,
+            entry => entry.TargetId);
+    }
+
+    internal static FixtureStatusReconciliation ReconcileFixtureStatusUpdates(
+        IReadOnlyList<StatusUpdateSnapshot> expected,
+        IReadOnlyList<FixtureStatusUpdate> actual,
+        ImportLog? log)
+    {
+        var canonicalMatches = MatchFixtureStatusUpdates(expected, actual);
+        var logChanged = log is not null && ReconcileFixtureStatusLog(log, canonicalMatches);
+        return new FixtureStatusReconciliation(
+            canonicalMatches,
+            ImportRequired: canonicalMatches.Count != expected.Count
+                || log is { PendingStatusUpdates.Count: > 0 },
+            logChanged);
+    }
+
+    internal static bool ReconcileFixtureStatusLog(
+        ImportLog log,
+        IReadOnlyDictionary<int, string> canonicalMatches)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(canonicalMatches);
+
+        var reconciled = canonicalMatches
+            .Where(match => !log.PendingStatusUpdates.ContainsKey(
+                match.Key.ToString(CultureInfo.InvariantCulture)))
+            .ToDictionary(
+                match => match.Key.ToString(CultureInfo.InvariantCulture),
+                match => match.Value,
+                StringComparer.Ordinal);
+        if (log.StatusUpdates.Count == reconciled.Count
+            && log.StatusUpdates.All(match =>
+                reconciled.TryGetValue(match.Key, out var targetId)
+                && string.Equals(match.Value, targetId, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        log.StatusUpdates.Clear();
+        foreach (var match in reconciled)
+        {
+            log.StatusUpdates[match.Key] = match.Value;
+        }
+
+        return true;
+    }
+
+    private static InvalidOperationException UnsafeFixtureHistory(string detail)
+        => new(
+            "The existing fixture project's standard status updates are not an append-safe "
+            + $"contiguous history ({detail}). No status updates were changed. Use a new fixture "
+            + "title or reconcile the fixture history manually.");
+
+    private static bool FixtureStatusUpdateMatches(
+        StatusUpdateSnapshot expected,
+        StatusUpdateSnapshot actual)
+        => string.Equals(NormalizeBody(expected.Body), NormalizeBody(actual.Body), StringComparison.Ordinal)
+            && string.Equals(expected.Status, actual.Status, StringComparison.Ordinal)
+            && string.Equals(expected.StartDate, actual.StartDate, StringComparison.Ordinal)
+            && string.Equals(expected.TargetDate, actual.TargetDate, StringComparison.Ordinal);
+
+    private static string NormalizeBody(string body)
+        => body.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    private async Task<List<FixtureStatusUpdate>> FetchStatusUpdatesAsync(
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var updates = new List<FixtureStatusUpdate>();
+        await foreach (var node in _graphQl.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $first: Int!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  statusUpdates(first: $first, after: $after, orderBy: { field: CREATED_AT, direction: DESC }) {
+                    nodes { id body status startDate targetDate createdAt updatedAt }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId, first = 100 },
+            "node.statusUpdates",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            updates.Add(new FixtureStatusUpdate(
+                node.GetProperty("id").GetString()
+                    ?? throw new JsonException("Project status update contained an empty id."),
+                new StatusUpdateSnapshot
+                {
+                    Body = node.GetProperty("body").GetString() ?? string.Empty,
+                    Status = GetOptionalString(node, "status"),
+                    StartDate = GetOptionalString(node, "startDate"),
+                    TargetDate = GetOptionalString(node, "targetDate"),
+                    CreatedAt = node.GetProperty("createdAt").GetString() ?? string.Empty,
+                    UpdatedAt = node.GetProperty("updatedAt").GetString() ?? string.Empty,
+                }));
+        }
+
+        return updates;
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName)
+        => element.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
     private async Task<int> EnsureRepositoryAsync(string organization, string repositoryName, CancellationToken cancellationToken)
     {
@@ -392,6 +696,59 @@ public sealed class FixtureProjectBuilder
                 new ItemSnapshot { Type = "PULL_REQUEST", Position = 4, IsArchived = false, Repository = repositoryFullName, Number = pullRequestNumber, FieldValues = [Status("In Progress"), ProjectMultiSelect("Frontend", "Operations")] },
                 Draft(5, "Fixture archived draft", true, [], Status("Done")),
                 Draft(6, "Fixture assigned draft", false, [viewerLogin], Status("Todo")),
+            ],
+            StatusUpdates =
+            [
+                new StatusUpdateSnapshot
+                {
+                    Body = "Fixture migration is complete.",
+                    Status = "COMPLETE",
+                    StartDate = "2026-01-01",
+                    TargetDate = "2026-04-15",
+                    Creator = viewerLogin,
+                    CreatedAt = "2026-01-05T09:00:00Z",
+                    UpdatedAt = "2026-01-05T09:00:00Z",
+                },
+                new StatusUpdateSnapshot
+                {
+                    Body = "The fixture is temporarily off track.",
+                    Status = "OFF_TRACK",
+                    StartDate = null,
+                    TargetDate = "2026-04-15",
+                    Creator = viewerLogin,
+                    CreatedAt = "2026-01-04T09:00:00Z",
+                    UpdatedAt = "2026-01-04T09:00:00Z",
+                },
+                new StatusUpdateSnapshot
+                {
+                    Body = "A fixture risk was identified.",
+                    Status = "AT_RISK",
+                    StartDate = "2026-01-01",
+                    TargetDate = null,
+                    Creator = viewerLogin,
+                    CreatedAt = "2026-01-03T09:00:00Z",
+                    UpdatedAt = "2026-01-03T09:00:00Z",
+                },
+                new StatusUpdateSnapshot
+                {
+                    Body = "Implementation is on track.\n\n- API\n- Browser",
+                    Status = "ON_TRACK",
+                    StartDate = "2026-01-01",
+                    TargetDate = "2026-03-31",
+                    Creator = viewerLogin,
+                    CreatedAt = "2026-01-02T09:00:00Z",
+                    UpdatedAt = "2026-01-02T10:00:00Z",
+                },
+                new StatusUpdateSnapshot
+                {
+                    Body = "Fixture kickoff with **Markdown**.",
+                    Status = "INACTIVE",
+                    StartDate = null,
+                    TargetDate = null,
+                    Creator = viewerLogin,
+                    CreatedAt = "2026-01-01T09:00:00Z",
+                    UpdatedAt = "2026-01-01T09:00:00Z",
+                },
             ],
             LinkedRepositories = [repositoryFullName],
         };
@@ -695,6 +1052,13 @@ public sealed class FixtureProjectBuilder
     }
 
     private sealed record ProjectRef(string Id, int Number, string Url);
+
+    internal sealed record FixtureStatusUpdate(string Id, StatusUpdateSnapshot Update);
+
+    internal sealed record FixtureStatusReconciliation(
+        IReadOnlyDictionary<int, string> CanonicalMatches,
+        bool ImportRequired,
+        bool LogChanged);
 }
 
 public sealed record FixtureProjectSetupResult(int ProjectNumber, string Url, bool Created);
