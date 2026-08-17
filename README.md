@@ -286,7 +286,7 @@ The most important constraints are that `ghpmv` does not migrate repositories or
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
-`TeamLinkRoundTripTests` creates and deletes disposable Teams in both `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG`. A credentialed integration run therefore requires a token whose owner can create and delete Teams in both organizations (normally an organization owner, or a member allowed to create Teams with sufficient Team administration rights), in addition to the Project permissions described above.
+`TeamLinkRoundTripTests` creates and deletes disposable Teams in both `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG`. A credentialed integration run therefore requires a token whose owner can create and delete Teams in both organizations (normally an organization owner, or a member allowed to create Teams with sufficient Team administration rights), in addition to the Project permissions described above. The REST Team endpoints require `admin:org` on a classic PAT or **Organization permissions -> Members: Read and write** on a fine-grained PAT. Because the suite uses one `GHPMV_TEST_TOKEN` for both organizations, the normal cross-organization setup uses a classic PAT whose owner and scope cover both; a fine-grained PAT can only be used when its resource-owner scope covers every organization the test modifies.
 
 ### Fixture credentials (maintainers only)
 

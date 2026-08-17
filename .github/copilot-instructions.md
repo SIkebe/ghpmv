@@ -22,7 +22,7 @@ Run one test by fully qualified name:
 dotnet test tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj -c Release --filter "FullyQualifiedName~Ghpmv.Core.Tests.ProjectImporterLogicTests.Conflict_skip_returns_skipped_without_sending_mutations"
 ```
 
-`tests/Ghpmv.Integration.Tests` calls the real GitHub API. Tests skip when `GHPMV_TEST_TOKEN` is absent; when it is set, the token owner must be allowed to create and delete user-owned Projects and to create/delete disposable Teams in both `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG`. Fixture settings come from `GHPMV_TEST_ORG`, `GHPMV_TEST_TARGET_ORG`, `GHPMV_TEST_PROJECT_NUMBER`, `GHPMV_TEST_FIXTURE_REPO`, and `GHPMV_TEST_TARGET_FIXTURE_REPO`.
+`tests/Ghpmv.Integration.Tests` calls the real GitHub API. Tests skip when `GHPMV_TEST_TOKEN` is absent; when it is set, the token owner must be allowed to create and delete user-owned Projects and to create/delete disposable Teams in both `GHPMV_TEST_ORG` and `GHPMV_TEST_TARGET_ORG`. Team creation/deletion also requires `admin:org` on a classic PAT or **Members: Read and write** on a fine-grained PAT; the usual cross-organization setup needs one classic PAT covering both organizations. Fixture settings come from `GHPMV_TEST_ORG`, `GHPMV_TEST_TARGET_ORG`, `GHPMV_TEST_PROJECT_NUMBER`, `GHPMV_TEST_FIXTURE_REPO`, and `GHPMV_TEST_TARGET_FIXTURE_REPO`.
 
 ```powershell
 dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release
