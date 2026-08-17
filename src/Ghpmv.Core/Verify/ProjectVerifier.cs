@@ -267,6 +267,24 @@ public sealed class ProjectVerifier
         ProjectSnapshot source,
         IReadOnlyDictionary<string, string> teamMapping)
     {
+        var collaboratorMapping = (source.LinkedTeams ?? [])
+            .Select(team =>
+            {
+                if (!teamMapping.TryGetValue(team.Identity, out var mapped)
+                    || !TeamLinkMapping.TryParseIdentity(mapped, out _, out var targetSlug))
+                {
+                    return (SourceSlug: team.Slug, TargetSlug: (string?)null);
+                }
+
+                return (SourceSlug: team.Slug, TargetSlug: (string?)targetSlug);
+            })
+            .Where(mapping => mapping.TargetSlug is not null)
+            .GroupBy(mapping => mapping.SourceSlug, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.First().TargetSlug!,
+                StringComparer.OrdinalIgnoreCase);
+
         return source with
         {
             LinkedTeams = source.LinkedTeams?.Select(team =>
@@ -279,6 +297,11 @@ public sealed class ProjectVerifier
 
                 return team with { Organization = organization, Slug = slug };
             }).ToList(),
+            Collaborators = source.Collaborators?.Select(collaborator =>
+                string.Equals(collaborator.Type, "TEAM", StringComparison.OrdinalIgnoreCase)
+                && collaboratorMapping.TryGetValue(collaborator.Login, out var mappedSlug)
+                    ? collaborator with { Login = mappedSlug }
+                    : collaborator).ToList(),
         };
     }
 

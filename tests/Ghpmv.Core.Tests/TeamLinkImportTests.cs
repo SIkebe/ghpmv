@@ -49,6 +49,48 @@ public class TeamLinkImportTests
     }
 
     [Fact]
+    public async Task Import_reuses_mapped_linked_team_for_explicit_collaborator()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
+        try
+        {
+            using var handler = new TeamImportHandler();
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client)
+            {
+                TeamMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/platform"] = "target/engineering",
+                },
+                OperationLogDirectory = directory,
+            };
+            var snapshot = Snapshot(
+                new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" }) with
+            {
+                Collaborators =
+                [
+                    new CollaboratorSnapshot { Type = "TEAM", Login = "platform", Role = "WRITER" },
+                ],
+            };
+
+            await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, handler.TeamResolutionCount);
+            var request = Assert.Single(handler.RequestBodies, body =>
+                body.Contains("updateProjectV2Collaborators", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(request);
+            var collaborator = Assert.Single(
+                document.RootElement.GetProperty("variables").GetProperty("collaborators").EnumerateArray());
+            Assert.Equal("T_target", collaborator.GetProperty("teamId").GetString());
+            Assert.Equal("WRITER", collaborator.GetProperty("role").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Unresolved_team_fails_before_new_project_mutation()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
@@ -317,6 +359,10 @@ public class TeamLinkImportTests
                 LinkMutationCount++;
                 _linked = true;
                 response = """{"data":{"linkProjectV2ToTeam":{"team":{"id":"T_target"}}}}""";
+            }
+            else if (query.Contains("updateProjectV2Collaborators", StringComparison.Ordinal))
+            {
+                response = """{"data":{"updateProjectV2Collaborators":{"collaborators":{"nodes":[{"__typename":"Team"}]}}}}""";
             }
             else
             {

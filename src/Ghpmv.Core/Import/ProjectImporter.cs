@@ -1035,7 +1035,12 @@ public sealed class ProjectImporter
         }
 
         await ApplyLinkedTeamsAsync(project.Id, linkedTeams, cancellationToken).ConfigureAwait(false);
-        await ApplyCollaboratorsAsync(project.Id, ownerLogin, snapshot.Collaborators, cancellationToken).ConfigureAwait(false);
+        await ApplyCollaboratorsAsync(
+            project.Id,
+            ownerLogin,
+            snapshot.Collaborators,
+            linkedTeams,
+            cancellationToken).ConfigureAwait(false);
         await ApplyLinkedRepositoriesAsync(project.Id, snapshot.LinkedRepositories, cancellationToken).ConfigureAwait(false);
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
@@ -1361,7 +1366,12 @@ public sealed class ProjectImporter
     /// collaborators (the API has no read field), so this only runs for hand-authored
     /// snapshots.
     /// </summary>
-    private async Task ApplyCollaboratorsAsync(string projectId, string ownerLogin, IReadOnlyList<CollaboratorSnapshot>? collaborators, CancellationToken cancellationToken)
+    private async Task ApplyCollaboratorsAsync(
+        string projectId,
+        string ownerLogin,
+        IReadOnlyList<CollaboratorSnapshot>? collaborators,
+        IReadOnlyList<ResolvedTeamLink> linkedTeams,
+        CancellationToken cancellationToken)
     {
         if (collaborators is not { Count: > 0 })
         {
@@ -1391,10 +1401,14 @@ public sealed class ProjectImporter
                     continue;
                 }
 
-                var teamId = await ResolveTeamIdAsync(ownerLogin, collaborator.Login, cancellationToken).ConfigureAwait(false);
+                var linkedTeam = linkedTeams.FirstOrDefault(team =>
+                    string.Equals(team.SourceSlug, collaborator.Login, StringComparison.OrdinalIgnoreCase));
+                var targetSlug = linkedTeam?.TargetSlug ?? collaborator.Login;
+                var teamId = linkedTeam?.Id
+                    ?? await ResolveTeamIdAsync(ownerLogin, targetSlug, cancellationToken).ConfigureAwait(false);
                 if (teamId is null)
                 {
-                    Warn($"collaborator team '{collaborator.Login}' was not found in organization '{ownerLogin}'; skipping.");
+                    Warn($"collaborator team '{targetSlug}' was not found in organization '{ownerLogin}'; skipping.");
                     continue;
                 }
 
@@ -1499,7 +1513,9 @@ public sealed class ProjectImporter
                 resolved.Add(new ResolvedTeamLink(
                     team.GetProperty("id").GetString()
                         ?? throw new GitHubGraphQLException($"Target Team '{resolution.TargetIdentity}' returned no id."),
-                    resolution.TargetIdentity!));
+                    resolution.TargetIdentity!,
+                    resolution.Source.Slug,
+                    resolution.TargetSlug!));
             }
             catch (GitHubGraphQLException exception) when (IsPermissionFailure(exception))
             {
@@ -2396,7 +2412,11 @@ public sealed class ProjectImporter
         bool ViewerCanUpdate,
         bool ViewerCanManageAccess);
 
-    private sealed record ResolvedTeamLink(string Id, string Identity);
+    private sealed record ResolvedTeamLink(
+        string Id,
+        string Identity,
+        string SourceSlug,
+        string TargetSlug);
 
     private sealed record TargetField(string Id, string Name, string DataType, string TypeName);
 

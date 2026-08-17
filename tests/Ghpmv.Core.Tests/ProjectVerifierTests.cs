@@ -1117,6 +1117,41 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Team_mapping_normalizes_matching_explicit_team_collaborator()
+    {
+        var source = BuildSnapshot() with
+        {
+            Collaborators = [new CollaboratorSnapshot { Type = "TEAM", Login = "platform", Role = "WRITER" }],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source-org", Slug = "platform", Name = "Platform" },
+            ],
+        };
+        var target = BuildSnapshot() with
+        {
+            Collaborators = [new CollaboratorSnapshot { Type = "TEAM", Login = "engineering", Role = "WRITER" }],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "target-org", Slug = "engineering", Name = "Engineering" },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org/platform"] = "target-org/engineering",
+            });
+
+        Assert.Empty(report.Differences);
+        Assert.True(report.IsMatch);
+    }
+
+    [Fact]
     public void Team_links_are_not_verified_for_legacy_null_capture()
     {
         var report = ProjectVerifier.Compare(
