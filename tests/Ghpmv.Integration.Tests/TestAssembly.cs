@@ -1,1 +1,1 @@
-[assembly: Xunit.v3.Parallelization(Mode = Xunit.v3.ParallelMode.None)]
+[assembly: Xunit.v3.Parallelization(Mode = Xunit.Sdk.ParallelMode.None)]
