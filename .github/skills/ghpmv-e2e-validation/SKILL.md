@@ -483,7 +483,7 @@ try {
     $preflightText = $preflightResponse | Out-String
     Write-Output $preflightResponse
     $preflightPermissionPattern = 'X-Accepted-GitHub-Permissions:\s*[^\r\n]*' + [regex]::Escape($preflightRequiredPermission)
-    $preflightMissingFieldPattern = '(?is)("code"\s*:\s*"missing_field"|must not be blank|can(?:not|''t) be blank|Validation Failed)'
+    $preflightMissingFieldPattern = '(?is)("code"\s*:\s*"missing_field"|must not be blank|can(?:not|''t) be blank|Invalid input:\s*data cannot be null|Validation Failed)'
     $preflightExpected422 = $preflightNativeExitCode -ne 0 -and $preflightText -match '(HTTP(?:/\S+)?\s+422\b|\(HTTP 422\))' -and $preflightText -match $preflightPermissionPattern -and $preflightText -match $preflightMissingFieldPattern
     $preflightExitCode = if ($preflightExpected422) { 0 } elseif ($preflightNativeExitCode -ne 0) { $preflightNativeExitCode } else { 1 }
     Write-Output "GHPMV_PREFLIGHT_DONE:<preflight-id>:$preflightExitCode"
@@ -500,7 +500,7 @@ finally {
 
 `repos` と `issue-fields` を一つの wrapper にまとめず、それぞれ異なる `<preflight-id>` で送り、今回の ID と完全一致する `GHPMV_PREFLIGHT_DONE:<preflight-id>:0` を確認する。wrapper は endpoint から `administration=write` または `issue_fields=write` を選ぶため、permission 名を別途手入力しない。target preflight では `$env:SOURCE_TOKEN` を `$env:TARGET_TOKEN` に置き換える。GitHub CLI は `github.com` と `*.ghe.com` の両方に `GH_TOKEN` を使うため、data residency 側も token variable は変えない。
 
-semantic success は、native command が non-zero、HTTP status が 422、`X-Accepted-GitHub-Permissions` header に endpoint ごとの必須 permission があること、本文が必須 field 不足を示すことのすべてを満たす場合だけとする。本文の文言は API version により `Validation Failed`、`missing_field`、`must not be blank` などに変わり得るため、`Validation Failed` の固定文字列だけを要求しない。transport error、403、422 以外、permission header 不一致、または必須 field 不足を示さない 422 は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。`GH_TOKEN` が cached credentials より優先され、`--hostname` が接続先 tenant を選ぶ。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
+semantic success は、native command が non-zero、HTTP status が 422、`X-Accepted-GitHub-Permissions` header に endpoint ごとの必須 permission があること、本文が必須 field または必須 request body の不足を示すことのすべてを満たす場合だけとする。本文の文言は API version と endpoint により `Validation Failed`、`missing_field`、`must not be blank`、`Invalid input: data cannot be null` などに変わり得るため、`Validation Failed` の固定文字列だけを要求しない。transport error、403、422 以外、permission header 不一致、または必須入力不足を示さない 422 は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。`GH_TOKEN` が cached credentials より優先され、`--hostname` が接続先 tenant を選ぶ。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
 
 どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が上記の permission header 付き missing-field 422 なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) を確認する。token owner の organization role、member の repository creation policy、organization の PAT restriction も別に確認する。原因を一つに断定しない。再作成しても 403 の場合は `setup --fixture` を実行せず、次のどちらかを選んでもらう。
 
