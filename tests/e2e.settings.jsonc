@@ -1,0 +1,129 @@
+{
+  "$schema": "./e2e.settings.schema.json",
+
+  // 設定ファイルの互換性を判定する番号です。現行形式では 1 のまま変更しません。
+  "schemaVersion": 1,
+
+  // export 元となる GitHub 環境です。GitHub.com と GHEC with data residency の両方を表現できます。
+  "source": {
+    // Project と fixture repository を所有する Organization の login です。表示名ではありません。
+    "organization": "gpm-source",
+
+    // ghpmv が GraphQL API に接続するときの URL です。
+    // GitHub.com は下記のまま、data residency は https://api.TENANT.ghe.com/graphql に変更します。
+    "apiBaseUrl": "https://api.github.com/graphql",
+
+    // Playwright が Project の Web UI を開くときの URL です。
+    // data residency では https://TENANT.ghe.com に変更します。
+    "webBaseUrl": "https://github.com",
+
+    // source 側では通常使用しません。将来 uploads endpoint が必要な構成だけ URL を設定します。
+    "uploadsBaseUrl": null,
+
+    // `ghpmv login --profile source` で保存する browser profile 名です。
+    "browserProfile": "source",
+
+    // source browser の storage-state file path を保持する環境変数名です。
+    // file path や cookie 自体はこの設定ファイルへ書きません。
+    "browserStateEnvironmentVariable": "GHPMV_SOURCE_BROWSER_STATE",
+
+    // fixture 作成と export に使用する PAT を保持する環境変数名です。
+    // PAT の値そのものは絶対にこの設定ファイルへ書きません。
+    "tokenEnvironmentVariable": "GHPMV_SOURCE_TOKEN"
+  },
+
+  // import、verify、および一時 Project 作成先となる GitHub 環境です。
+  "target": {
+    "organization": "gpm-target",
+    "apiBaseUrl": "https://api.github.com/graphql",
+    "webBaseUrl": "https://github.com",
+
+    // data residency target で GEI を使う場合は https://uploads.TENANT.ghe.com を設定します。
+    // GitHub.com target では null のままにします。
+    "uploadsBaseUrl": null,
+    "browserProfile": "target",
+    "browserStateEnvironmentVariable": "GHPMV_TARGET_BROWSER_STATE",
+    "tokenEnvironmentVariable": "GHPMV_TARGET_TOKEN"
+  },
+
+  // 既存の自動テストが参照する共有 fixture です。
+  // Integration と Browser では必要な fixture 内容が異なるため、Project 番号と repository を分けています。
+  "fixtures": {
+    "integration": {
+      // API integration tests が export 元として使う Project V2 の番号です。
+      "projectNumber": 89,
+
+      // integration fixture の Issue と Pull Request が存在する source repository の short name です。
+      "sourceRepository": "fixture-repo2",
+
+      // import 後の Issue / Pull Request を再リンクする target repository の short name です。
+      "targetRepository": "fixture-repo"
+    },
+    "browser": {
+      // View、Workflow、Collaborator を設定済みの browser E2E 用 Project V2 番号です。
+      "projectNumber": 3,
+      "sourceRepository": "fixture-repo",
+      "targetRepository": "fixture-repo"
+    }
+  },
+
+  // Browser login と user-mappings.csv に関係する GitHub user login です。
+  // GHEC EMU では target login に enterprise shortcode suffix を含む実際の login を指定します。
+  "users": {
+    // source browser profile と source PAT を所有する user login です。未設定なら対話時に確認します。
+    "sourceBrowserLogin": "",
+
+    // target browser profile と target PAT を所有する user login です。未設定なら対話時に確認します。
+    "targetBrowserLogin": "",
+
+    // Collaborator export/import E2E で source Project に追加して検証する user login です。
+    "collaboratorLogin": "ravel-maurice-uo_sde",
+
+    // source と target で login が異なる user の対応表です。
+    // Draft assignee、explicit collaborator、EMU mannequin の mapping に同じ対応を使用します。
+    "mappings": [
+      // 例:
+      // { "sourceLogin": "octocat", "targetLogin": "octocat_contoso" }
+    ]
+  },
+
+  // GitHub Enterprise Importer で repository、Issue、Pull Request を先に移行する場合の設定です。
+  "gei": {
+    // GEI が読み取る source repository の short name です。
+    "sourceRepository": "fixture-repo",
+
+    // GEI が target Organization に新規作成する repository の short name です。
+    "targetRepository": "fixture-repo-gei-target",
+
+    // GEI の --target-repo-visibility に渡す値です。private、internal、public のいずれかです。
+    "targetRepositoryVisibility": "private",
+
+    // GEI source/destination 用 classic PAT を保持する環境変数名です。PAT 値は書きません。
+    "sourceTokenEnvironmentVariable": "GHPMV_GEI_SOURCE_TOKEN",
+    "targetTokenEnvironmentVariable": "GHPMV_GEI_TARGET_TOKEN",
+
+    // GEI token を所有する user login です。ghpmv/browser用userと異なる場合があるため別に記録します。
+    "sourceTokenOwnerLogin": "",
+    "targetTokenOwnerLogin": "",
+
+    // owner、migrator-active、migrator-pending のいずれかです。
+    // migrator-pending は role 付与前なので、GEI 実行可能とは扱いません。
+    "sourceRole": "owner",
+    "targetRole": "owner"
+  },
+
+  // E2E の resource 準備方法です。安全確認や削除同意を省略する設定ではありません。
+  "execution": {
+    // existing は共有 source fixture を使い、create は実行ごとに新しい source fixture を作ります。
+    "fixturePreparation": "existing",
+
+    // gei は GEI で repository を移行し、fixture-seed は ghpmv fixture で target repository を作ります。
+    "repositoryPreparationMode": "gei",
+
+    // true の場合、毎回 source fixture を作り直さず、設定済み Project を検証して再利用します。
+    "reuseSourceFixture": true,
+
+    // true の場合、import先Projectはテストごとに一意な名前で作り、テスト間の状態汚染を防ぎます。
+    "createTemporaryTargetProject": true
+  }
+}

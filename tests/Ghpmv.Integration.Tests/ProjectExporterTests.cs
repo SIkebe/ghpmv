@@ -30,7 +30,7 @@ public class ProjectExporterTests
     private static async Task<ProjectSnapshot> ExportFixtureAsync()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var snapshot = await new ProjectExporter(client).ExportAsync(
             Org,
             FixtureProjectNumber,
@@ -42,7 +42,7 @@ public class ProjectExporterTests
     public async Task Listed_project_export_writes_a_numbered_snapshot_directory()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var exporter = new ProjectExporter(client);
 
         var entries = await exporter.ListProjectsAsync(Org, includeClosed: false, cancellationToken);

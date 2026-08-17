@@ -44,7 +44,7 @@ public class VerifyTests
     public async Task Verify_matches_after_import_then_detects_deleted_field_and_changed_status()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
         source = source with
         {
@@ -288,7 +288,7 @@ public class VerifyTests
     public async Task Status_update_category_matches_after_import_and_mismatches_after_drift()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
 
         // Guard against silent null==null passes: the fixture must actually carry history.

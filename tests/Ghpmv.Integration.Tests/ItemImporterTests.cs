@@ -48,7 +48,7 @@ public class ItemImporterTests
     public async Task Round_trip_imports_drafts_with_values_and_order_and_resume_skips_existing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var source = await IntegrationFixtureSnapshot.CreateKnownAsync(client, cancellationToken);
         source = source with
         {
@@ -173,7 +173,7 @@ public class ItemImporterTests
     public async Task Issue_items_are_relinked_through_repository_mapping_and_unmapped_repos_are_skipped()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var exporter = new ProjectExporter(client);
 
         // The fixture project has no Issue item, so stage one in a temporary source project.

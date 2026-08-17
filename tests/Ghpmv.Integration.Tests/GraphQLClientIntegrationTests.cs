@@ -26,7 +26,7 @@ public class GraphQLClientIntegrationTests
     [Fact]
     public async Task Fixture_project_export_is_complete_or_fails_closed()
     {
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         try
         {
@@ -57,7 +57,7 @@ public class GraphQLClientIntegrationTests
     [Fact]
     public async Task QueryPaginatedAsync_enumerates_120_items_across_real_pages()
     {
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var cancellationToken = TestContext.Current.CancellationToken;
 
         var orgData = await client.QueryAsync(
@@ -138,7 +138,7 @@ public class GraphQLClientIntegrationTests
     {
         _ = Token; // Skip when no real-API access is configured.
 
-        using var client = new GitHubGraphQLClient("invalid-token");
+        using var client = IntegrationTestSettings.CreateClient("invalid-token");
         var retries = 0;
         client.OnRetry = _ => retries++;
 

@@ -9,6 +9,9 @@
 # Local manual migration test artifacts
 .manual-test/
 
+# Local E2E settings may contain organization, repository, and user names.
+tests/e2e.settings.local.jsonc
+
 # User-specific files
 *.rsuser
 *.suo

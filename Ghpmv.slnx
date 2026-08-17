@@ -7,5 +7,6 @@
     <Project Path="tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj" />
     <Project Path="tests/Ghpmv.Core.Tests/Ghpmv.Core.Tests.csproj" />
     <Project Path="tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj" />
+    <Project Path="tests/Ghpmv.TestSupport/Ghpmv.TestSupport.csproj" />
   </Folder>
 </Solution>

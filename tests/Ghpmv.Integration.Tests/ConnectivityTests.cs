@@ -22,7 +22,7 @@ public class ConnectivityTests
     [Fact]
     public async Task Viewer_query_returns_authenticated_login()
     {
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var login = await client.GetViewerLoginAsync(TestContext.Current.CancellationToken);
 
@@ -33,7 +33,7 @@ public class ConnectivityTests
     public async Task Source_org_is_reachable()
     {
         var org = IntegrationTestSettings.SourceOrg;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var data = await client.QueryAsync(
             "query($login: String!) { organization(login: $login) { login } }",

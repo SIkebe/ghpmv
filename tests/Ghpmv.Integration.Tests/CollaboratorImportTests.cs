@@ -37,7 +37,7 @@ public class CollaboratorImportTests
     public async Task Import_applies_collaborators_and_linked_repositories_and_warns_on_unresolvable_entries()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var viewerData = await client.QueryAsync("query { viewer { login } }", null, cancellationToken);
         var viewerLogin = viewerData.GetProperty("viewer").GetProperty("login").GetString()!;

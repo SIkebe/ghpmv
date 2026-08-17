@@ -38,7 +38,7 @@ public class ProjectImporterTests
     public async Task Full_round_trip_recreates_all_custom_fields_and_status_options()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         // Use the known fixture contract because the public field connection cannot
         // enumerate projects linked to a multi-select Issue Field.
@@ -116,7 +116,7 @@ public class ProjectImporterTests
     public async Task Import_with_conflict_fail_throws_when_title_exists()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var title = NewTestTitle();
         var snapshot = MinimalSnapshot(title);
 
@@ -141,7 +141,7 @@ public class ProjectImporterTests
     public async Task Import_with_conflict_skip_returns_existing_without_duplicating()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var title = NewTestTitle();
         var snapshot = MinimalSnapshot(title);
 
@@ -174,7 +174,7 @@ public class ProjectImporterTests
     public async Task Import_into_existing_project_by_number_merges_fields_and_items()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         // Create an empty target project directly through the API.
         var title = NewTestTitle();
@@ -264,7 +264,7 @@ public class ProjectImporterTests
     public async Task Import_into_missing_project_number_throws()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var importer = new ProjectImporter(client)
         {
@@ -279,7 +279,7 @@ public class ProjectImporterTests
     public async Task Import_with_overridden_title_creates_project_with_new_title()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         // Same rewrite the CLI applies for --project-title.
         var overriddenTitle = NewTestTitle();
@@ -388,7 +388,7 @@ public class ProjectImporterTests
     public async Task Status_updates_round_trip_into_a_temporary_project_with_every_status_and_date_shape()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var sourceTitle = "ghpmv-status-source-" + Guid.NewGuid().ToString("N");
         var targetTitle = "ghpmv-status-target-" + Guid.NewGuid().ToString("N");

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SIkebe/ghpmv/tests/e2e.settings.schema.json",
+  "title": "ghpmv E2E settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "target", "fixtures", "users", "gei", "execution"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "source": { "$ref": "#/$defs/endpoint" },
+    "target": { "$ref": "#/$defs/endpoint" },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integration", "browser"],
+      "properties": {
+        "integration": { "$ref": "#/$defs/fixture" },
+        "browser": { "$ref": "#/$defs/fixture" }
+      }
+    },
+    "users": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceBrowserLogin", "targetBrowserLogin", "collaboratorLogin", "mappings"],
+      "properties": {
+        "sourceBrowserLogin": { "type": "string" },
+        "targetBrowserLogin": { "type": "string" },
+        "collaboratorLogin": { "type": "string", "minLength": 1 },
+        "mappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sourceLogin", "targetLogin"],
+            "properties": {
+              "sourceLogin": { "type": "string", "minLength": 1 },
+              "targetLogin": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "gei": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRepository",
+        "targetRepository",
+        "targetRepositoryVisibility",
+        "sourceTokenEnvironmentVariable",
+        "targetTokenEnvironmentVariable",
+        "sourceTokenOwnerLogin",
+        "targetTokenOwnerLogin",
+        "sourceRole",
+        "targetRole"
+      ],
+      "properties": {
+        "sourceRepository": { "type": "string", "minLength": 1 },
+        "targetRepository": { "type": "string", "minLength": 1 },
+        "targetRepositoryVisibility": { "enum": ["private", "internal", "public"] },
+        "sourceTokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
+        "targetTokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
+        "sourceTokenOwnerLogin": { "type": "string" },
+        "targetTokenOwnerLogin": { "type": "string" },
+        "sourceRole": { "$ref": "#/$defs/geiRole" },
+        "targetRole": { "$ref": "#/$defs/geiRole" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixturePreparation",
+        "repositoryPreparationMode",
+        "reuseSourceFixture",
+        "createTemporaryTargetProject"
+      ],
+      "properties": {
+        "fixturePreparation": { "enum": ["existing", "create"] },
+        "repositoryPreparationMode": { "enum": ["gei", "fixture-seed"] },
+        "reuseSourceFixture": { "type": "boolean" },
+        "createTemporaryTargetProject": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "organization",
+        "apiBaseUrl",
+        "webBaseUrl",
+        "uploadsBaseUrl",
+        "browserProfile",
+        "browserStateEnvironmentVariable",
+        "tokenEnvironmentVariable"
+      ],
+      "properties": {
+        "organization": { "type": "string", "minLength": 1 },
+        "apiBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "webBaseUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "uploadsBaseUrl": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "format": "uri", "pattern": "^https://" }
+          ]
+        },
+        "browserProfile": { "type": "string", "minLength": 1 },
+        "browserStateEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" },
+        "tokenEnvironmentVariable": { "$ref": "#/$defs/environmentVariable" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectNumber", "sourceRepository", "targetRepository"],
+      "properties": {
+        "projectNumber": { "type": "integer", "minimum": 1 },
+        "sourceRepository": { "type": "string", "minLength": 1 },
+        "targetRepository": { "type": "string", "minLength": 1 }
+      }
+    },
+    "environmentVariable": {
+      "type": "string",
+      "pattern": "^(?!(?:ghp|gho|ghu|ghs|ghr|github_pat)_)[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "geiRole": {
+      "enum": ["owner", "migrator-active", "migrator-pending"]
+    }
+  }
+}
