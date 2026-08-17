@@ -194,6 +194,7 @@ public sealed partial record E2eTestSettings
         var webUri = ValidateAbsoluteHttpsUrl(endpoint.WebBaseUrl, $"{propertyName}.webBaseUrl", sourceName);
         if ((apiUri.AbsolutePath.Length > 1
                 && !string.Equals(apiUri.AbsolutePath.TrimEnd('/'), "/graphql", StringComparison.OrdinalIgnoreCase))
+            || !apiUri.IsDefaultPort
             || !string.IsNullOrEmpty(apiUri.Query)
             || !string.IsNullOrEmpty(apiUri.Fragment)
             || !string.IsNullOrEmpty(apiUri.UserInfo))
@@ -655,6 +656,7 @@ public static class E2eTestEnvironment
     PropertyNameCaseInsensitive = true,
     ReadCommentHandling = JsonCommentHandling.Skip,
     AllowTrailingCommas = true,
+    RespectNullableAnnotations = true,
     UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
 [JsonSerializable(typeof(E2eTestSettings))]
 internal sealed partial class E2eTestSettingsJsonContext : JsonSerializerContext;

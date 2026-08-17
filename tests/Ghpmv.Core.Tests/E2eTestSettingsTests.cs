@@ -1,4 +1,5 @@
 using Ghpmv.TestSupport;
+using System.Text.Json;
 
 namespace Ghpmv.Core.Tests;
 
@@ -113,6 +114,28 @@ public class E2eTestSettingsTests
 
             Assert.Contains("missing required property 'source'", exception.Message, StringComparison.Ordinal);
         }
+
+        [Fact]
+        public void Load_rejects_json_null_for_non_nullable_settings()
+        {
+            var json = JsonSerializer.Serialize(
+                new E2eTestSettings(),
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase });
+            json = json.Replace(
+                "\"sourceBrowserLogin\":\"\"",
+                "\"sourceBrowserLogin\":null",
+                StringComparison.Ordinal);
+            var path = WriteSettings(json);
+
+            try
+            {
+                Assert.Throws<JsonException>(() => E2eTestSettings.Load(path));
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
         finally
         {
             File.Delete(path);
@@ -213,6 +236,18 @@ public class E2eTestSettingsTests
                 TokenEnvironmentVariable = "SOURCE_TOKEN",
             },
         };
+        var nonDefaultApiPort = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                ApiBaseUrl = "https://api.github.com:8443/graphql",
+                WebBaseUrl = "https://github.com:8443",
+                BrowserProfile = "source",
+                BrowserStateEnvironmentVariable = "SOURCE_STATE",
+                TokenEnvironmentVariable = "SOURCE_TOKEN",
+            },
+        };
 
         Assert.Contains(
             "target.webBaseUrl must be the origin https://example.ghe.com",
@@ -225,6 +260,10 @@ public class E2eTestSettingsTests
         Assert.Contains(
             "apiBaseUrl must use api.github.com or api.<tenant>.ghe.com",
             Assert.Throws<InvalidDataException>(() => nonGitHubApiHost.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "apiBaseUrl must be a GitHub API origin",
+            Assert.Throws<InvalidDataException>(() => nonDefaultApiPort.Validate()).Message,
             StringComparison.Ordinal);
     }
 
