@@ -170,7 +170,7 @@ PowerShell で `.env` を読み込む例:
 ```powershell
 Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Object {
     $name, $value = $_ -split '=', 2
-    [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    Set-Item -LiteralPath "Env:$name" -Value $value
 }
 ```
 
@@ -316,7 +316,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile source
 ```
 
-既に同名 Project が存在する場合、`--fixture --fixture-ui` の組み合わせでは Workflows の重複作成を避けるため UI 適用は自動で skip されます。既存 Project に fixture を強制的に適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
+`--fixture --fixture-ui` の再実行では、別の操作で作成された同名 Project は Workflows の重複作成を避けるため UI 適用を自動で skip します。この操作が所有する Project は、前回の UI 適用が未完了なら再開し、完了済みなら skip します。既存 Project に fixture を強制的に再適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
 
 > **再実行時の注意:** `setup --fixture-ui` の View import は既存 View を名前で再利用するため、`Fixture Board` / `Fixture Roadmap` は重複しません。Workflows は built-in entries を再設定できますが、複製した Auto-add workflow は重複し得るため、完全にクリーンな検証には新しい fixture Project を使用してください。
 
@@ -410,6 +410,8 @@ gh gei migrate-repo `
   --target-repo-visibility private
 ```
 
+GHEC with data residency source では `--github-source-api-url https://api.TENANT.ghe.com` を追加します。data residency target では `--target-api-url https://api.TENANT.ghe.com` と `--target-uploads-url https://uploads.TENANT.ghe.com` を追加します。installed extension の help に必要な option がない場合は、実 resource 作成前に `gh extension upgrade github/gh-gei` を実行して再確認します。
+
 実行環境や GEI extension version によっては `--queue-only` / `--wait` / migration log download 系のオプションを併用してください。downloadable migration log は完了後 24 時間だけ取得できます。また、target repository で Issues が無効な場合は `Migration Log` Issue が作成されません。詳細は [Accessing your migration logs for GitHub Enterprise Importer](https://docs.github.com/en/migrations/using-github-enterprise-importer/completing-your-migration-with-github-enterprise-importer/accessing-your-migration-logs-for-github-enterprise-importer) を参照してください。
 
 ### 6.3 GEI 結果確認
@@ -467,6 +469,16 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 
 ### 7.2 Mapping CSV を補完
+
+target token / browser accountを確定する前にsnapshot-driven requirementsを確認します。
+
+```powershell
+dotnet run --project src/Ghpmv.Cli -c Release --no-build -- requirements `
+  --in $env:GHPMV_SNAPSHOT_DIR `
+  --enable-browser-automation
+```
+
+organization administrator、Project admin、Members read、visibility policy、repositoryごとのread/write/Contents/same-owner/browser access要件をtoken planとmappingへ反映します。`import`は同じ分析を再実行し、Issue Fields validation probeとmapped repository role/accessを最初のwriteより前に検証します。
 
 生成された `repository-mappings.csv` の **すべての空の target column** を GEI 移行後 repository、または 6.4 で作成した target fixture repository に合わせます。linked repository の完全名だけでなく、Workflow filter などから repository short name の候補行が生成されることがあります。両方の行を同じ target repository へ対応付けてください。
 

@@ -191,6 +191,107 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Successful_created_project_import_restores_requested_conflict_policy_on_retry()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-created-complete-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        try
+        {
+            using (var createServer = new GraphQlStubServer(
+                       EmptyProjectsResponse,
+                       OwnerResponse,
+                       CreateProjectResponse,
+                       UpdateCreatedProjectResponse,
+                       EmptyFieldsResponse))
+            {
+                var created = await RunCliAsync(directory, createServer);
+
+                Assert.Equal(0, created.ExitCode);
+                Assert.Contains("result=created project=42", created.Output, StringComparison.Ordinal);
+            }
+
+            var completedLog = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_created", completedLog.CreatedProjectId);
+            Assert.True(completedLog.ImportCompleted);
+            Assert.False(completedLog.HasUnresolvedWarnings);
+
+            using var retryServer = new GraphQlStubServer(CreatedProjectLookupResponse);
+            var retry = await RunCliAsync(directory, retryServer, "--on-conflict", "fail");
+
+            Assert.Equal(1, retry.ExitCode);
+            Assert.Contains("already exists", retry.Error, StringComparison.Ordinal);
+            Assert.Single(retryServer.RequestBodies);
+            Assert.DoesNotContain(
+                retryServer.RequestBodies,
+                request => request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, 0)]
+    [InlineData(0, 1)]
+    public void Import_completion_remains_incomplete_when_core_stages_warn(
+        int projectWarningCount,
+        int itemWarningCount)
+    {
+        var log = new ProjectImportLog
+        {
+            CreatedProjectId = "PVT_created",
+            ImportCompleted = false,
+            HasUnresolvedWarnings = false,
+        };
+
+        var changed = log.TryMarkImportCompleted(
+            browserAutomationEnabled: false,
+            projectWarningCount,
+            itemWarningCount,
+            viewWarningCount: 0,
+            workflowWarningCount: 0);
+
+        Assert.False(changed);
+        Assert.False(log.ImportCompleted);
+        Assert.True(log.HasUnresolvedWarnings);
+
+        changed = log.TryMarkImportCompleted(
+            browserAutomationEnabled: false,
+            projectWarningCount: 0,
+            itemWarningCount: 0,
+            viewWarningCount: 0,
+            workflowWarningCount: 0);
+
+        Assert.False(changed);
+        Assert.False(log.ImportCompleted);
+        Assert.True(log.HasUnresolvedWarnings);
+    }
+
+    [Fact]
+    public void Legacy_incomplete_import_without_warning_state_fails_closed()
+    {
+        var log = new ProjectImportLog
+        {
+            CreatedProjectId = "PVT_created",
+            ImportCompleted = false,
+        };
+
+        var changed = log.TryMarkImportCompleted(
+            browserAutomationEnabled: false,
+            projectWarningCount: 0,
+            itemWarningCount: 0,
+            viewWarningCount: 0,
+            workflowWarningCount: 0);
+
+        Assert.False(changed);
+        Assert.False(log.ImportCompleted);
+        Assert.Null(log.HasUnresolvedWarnings);
+    }
+
+    [Fact]
     public async Task Incomplete_item_log_forces_update_on_default_retry()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -726,6 +827,20 @@ public class CliImportTests
 
     private const string OwnerResponse =
         """{"data":{"organization":{"id":"O_target"}}}""";
+
+    private const string CreateProjectResponse =
+        """{"data":{"createProjectV2":{"projectV2":{"id":"PVT_created","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42","public":false}}}}""";
+
+    private const string CreatedProjectLookupResponse =
+        """
+        {"data":{"organization":{"projectsV2":{
+          "nodes":[{"id":"PVT_created","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42"}],
+          "pageInfo":{"hasNextPage":false,"endCursor":null}
+        }}}}
+        """;
+
+    private const string UpdateCreatedProjectResponse =
+        """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_created"}}}}""";
 
     private const string UpdateProjectResponse =
         """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""";

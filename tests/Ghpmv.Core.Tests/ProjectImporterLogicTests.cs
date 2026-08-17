@@ -21,6 +21,20 @@ public class ProjectImporterLogicTests
         => Assert.Equal(expected, ProjectImporter.ShouldUpdateVisibility(currentPublic, desiredPublic));
 
     [Fact]
+    public void Existing_project_update_requires_viewer_update_permission()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ProjectImporter.ValidateProjectUpdatePermission(
+                viewerCanUpdate: false,
+                projectNumber: 42));
+
+        Assert.Contains("cannot update target Project #42", exception.Message, StringComparison.Ordinal);
+        ProjectImporter.ValidateProjectUpdatePermission(
+            viewerCanUpdate: true,
+            projectNumber: 42);
+    }
+
+    [Fact]
     public async Task Conflict_skip_returns_skipped_without_sending_mutations()
     {
         const string response =
@@ -60,7 +74,7 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Conflict_update_runs_prewrite_hook_before_sending_mutations()
+    public async Task Conflict_update_authentication_failure_preserves_completed_state_and_sends_no_mutations()
     {
         const string response =
             """
@@ -69,32 +83,49 @@ public class ProjectImporterLogicTests
               "pageInfo":{"hasNextPage":false,"endCursor":null}
             }}}}
             """;
-        using var handler = new StubHandler(response);
-        using var client = new GitHubGraphQLClient(
-            "dummy-token",
-            new Uri("https://example.test/graphql"),
-            handler,
-            delayAsync: null);
-        var importer = new ProjectImporter(client)
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var operationLogDirectory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
         {
-            OnConflict = ConflictAction.Update,
-            BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
-            OperationLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-project-import-{Guid.NewGuid():N}"),
-        };
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_existing",
+                ImportCompleted = true,
+            }.SaveAsync(operationLogDirectory, cancellationToken);
+            using var handler = new StubHandler(response);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var importer = new ProjectImporter(client)
+            {
+                OnConflict = ConflictAction.Update,
+                BeforeWriteAsync = _ => throw new InvalidOperationException("authentication failed"),
+                OperationLogDirectory = operationLogDirectory,
+            };
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => importer.ImportAsync(
-                MinimalSnapshot("Roadmap"),
-                "target",
-                TestContext.Current.CancellationToken));
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportAsync(
+                    MinimalSnapshot("Roadmap"),
+                    "target",
+                    cancellationToken));
 
-        Assert.Equal("authentication failed", exception.Message);
-        var request = Assert.Single(handler.RequestBodies);
-        using var document = JsonDocument.Parse(request);
-        Assert.DoesNotContain(
-            "mutation",
-            document.RootElement.GetProperty("query").GetString()!,
-            StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("authentication failed", exception.Message);
+            var request = Assert.Single(handler.RequestBodies);
+            using var document = JsonDocument.Parse(request);
+            Assert.DoesNotContain(
+                "mutation",
+                document.RootElement.GetProperty("query").GetString()!,
+                StringComparison.OrdinalIgnoreCase);
+            var operationLog = await ProjectImportLog.LoadAsync(operationLogDirectory, cancellationToken);
+            Assert.Equal("PVT_existing", operationLog.CreatedProjectId);
+            Assert.True(operationLog.ImportCompleted);
+        }
+        finally
+        {
+            Directory.Delete(operationLogDirectory, recursive: true);
+        }
     }
 
     [Fact]
@@ -929,6 +960,161 @@ public class ProjectImporterLogicTests
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2Field", StringComparison.Ordinal)
                     || body.Contains("updateProjectV2Field", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("DATE", "TEXT", "exists with data type TEXT")]
+    [InlineData("ITERATION", "ITERATION", "iterations are not merged")]
+    public async Task Existing_field_gaps_are_collected_as_warnings(
+        string snapshotDataType,
+        string targetDataType,
+        string expectedWarning)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-warning-").FullName;
+        try
+        {
+            var typeName = targetDataType == "ITERATION"
+                ? "ProjectV2IterationField"
+                : "ProjectV2Field";
+            var fieldsResponse = JsonSerializer.Serialize(new
+            {
+                data = new
+                {
+                    node = new
+                    {
+                        fields = new
+                        {
+                            nodes = new[]
+                            {
+                                new
+                                {
+                                    __typename = typeName,
+                                    id = "PVTF_custom",
+                                    name = "Custom",
+                                    dataType = targetDataType,
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                fieldsResponse);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Project = MinimalSnapshot("Roadmap").Project with
+                {
+                    ShortDescription = null,
+                    Readme = null,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Custom",
+                        DataType = snapshotDataType,
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            var warning = Assert.Single(importer.Warnings);
+            Assert.Contains(expectedWarning, warning, StringComparison.Ordinal);
+        }
+
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Operation_owned_iteration_field_resumes_without_a_warning()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-owned-iteration-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_target",
+                ImportCompleted = false,
+                HasUnresolvedWarnings = false,
+                CreatedFields =
+                {
+                    ["Custom"] = "PVTF_custom",
+                },
+            }.SaveAsync(directory, TestContext.Current.CancellationToken);
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Roadmap","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                """
+                {"data":{"node":{"fields":{"nodes":[{
+                  "__typename":"ProjectV2IterationField","id":"PVTF_custom","name":"Custom","dataType":"ITERATION"
+                }]}}}}
+                """);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Project = MinimalSnapshot("Roadmap").Project with
+                {
+                    ShortDescription = null,
+                    Readme = null,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Custom",
+                        DataType = "ITERATION",
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+            };
+
+            await importer.ImportIntoAsync(
+                snapshot,
+                "target",
+                7,
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(importer.Warnings);
+            var log = await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken);
+            Assert.Equal("PVTF_custom", log.CreatedFields["Custom"]);
+            Assert.False(log.HasUnresolvedWarnings);
         }
         finally
         {

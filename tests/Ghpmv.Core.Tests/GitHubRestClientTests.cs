@@ -63,13 +63,50 @@ public sealed class GitHubRestClientTests
         Assert.Contains("forbidden", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Validation_probe_preserves_error_response_without_creating_a_resource()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.UnprocessableEntity)
+        {
+            Content = new StringContent(
+                """{"message":"Invalid request. Invalid input: data cannot be null."}""",
+                Encoding.UTF8,
+                "application/json"),
+        };
+        response.Headers.TryAddWithoutValidation(
+            "X-Accepted-GitHub-Permissions",
+            "issue_fields=write");
+        using var handler = new StubHandler(response);
+        using var client = new GitHubRestClient("dummy-token", baseUri: null, handler);
+
+        var result = await client.PostValidationProbeAsync(
+            "orgs/example/issue-fields",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, result.StatusCode);
+        Assert.Equal("issue_fields=write", result.AcceptedPermissions);
+        Assert.Contains("data cannot be null", result.Body, StringComparison.Ordinal);
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal(2, handler.ContentLength);
+        Assert.Equal("2026-03-10", handler.ApiVersion);
+    }
+
     private sealed class StubHandler(HttpResponseMessage response) : HttpMessageHandler
     {
         public Uri? RequestUri { get; private set; }
 
+        public HttpMethod? Method { get; private set; }
+
+        public long? ContentLength { get; private set; }
+
+        public string? ApiVersion { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             RequestUri = request.RequestUri;
+            Method = request.Method;
+            ContentLength = request.Content?.Headers.ContentLength ?? 0;
+            ApiVersion = request.Headers.GetValues("X-GitHub-Api-Version").Single();
             return Task.FromResult(response);
         }
 
