@@ -285,6 +285,14 @@ public sealed class FixtureProjectBuilder
                 cancellationToken).ConfigureAwait(false);
 
             var operationWarningCount = projectImporter.Warnings.Count;
+            if (operationWarningCount > 0)
+            {
+                await MarkOperationCompletedAsync(
+                    operationDirectory,
+                    operationWarningCount,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+
             if (shouldImportItems)
             {
                 var itemImporter = new ItemImporter(_graphQl)
@@ -306,6 +314,13 @@ public sealed class FixtureProjectBuilder
                 }
 
                 operationWarningCount += itemResult.Warnings.Count;
+                if (itemResult.Warnings.Count > 0)
+                {
+                    await MarkOperationCompletedAsync(
+                        operationDirectory,
+                        itemResult.Warnings.Count,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
             else
             {
@@ -576,6 +591,7 @@ public sealed class FixtureProjectBuilder
 
     internal static bool IsCompletedOperation(ProjectImportLog projectLog, ImportLog? itemLog)
         => projectLog.ImportCompleted is true
+            && projectLog.HasUnresolvedWarnings is not true
             && projectLog.PendingProject is null
             && projectLog.PendingProjectDeletionId is null
             && projectLog.PendingFields.Count == 0
@@ -592,26 +608,22 @@ public sealed class FixtureProjectBuilder
         int warningCount,
         CancellationToken cancellationToken)
     {
-        if (warningCount > 0)
-        {
-            return false;
-        }
-
         var projectLog = await ProjectImportLog.LoadAsync(
             operationDirectory,
             cancellationToken).ConfigureAwait(false);
-        if (!projectLog.TryMarkImportCompleted(
+        var previousWarningState = projectLog.HasUnresolvedWarnings;
+        var importMarkedComplete = projectLog.TryMarkImportCompleted(
                 browserAutomationEnabled: false,
-                projectWarningCount: 0,
+                projectWarningCount: warningCount,
                 itemWarningCount: 0,
                 viewWarningCount: 0,
-                workflowWarningCount: 0))
+                workflowWarningCount: 0);
+        if (importMarkedComplete || projectLog.HasUnresolvedWarnings != previousWarningState)
         {
-            return projectLog.ImportCompleted is true;
+            await projectLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         }
 
-        await projectLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-        return true;
+        return projectLog.ImportCompleted is true;
     }
 
     internal static async Task<bool> PersistLegacyProjectIdAsync(

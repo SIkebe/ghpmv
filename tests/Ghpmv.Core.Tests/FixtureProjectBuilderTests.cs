@@ -312,6 +312,7 @@ public class FixtureProjectBuilderTests
             {
                 CreatedProjectId = "PVT_1",
                 ImportCompleted = false,
+                HasUnresolvedWarnings = false,
             }.SaveAsync(directory, TestContext.Current.CancellationToken);
 
             var changed = await FixtureProjectBuilder.MarkOperationCompletedAsync(
@@ -340,6 +341,7 @@ public class FixtureProjectBuilderTests
             {
                 CreatedProjectId = "PVT_1",
                 ImportCompleted = false,
+                HasUnresolvedWarnings = false,
             }.SaveAsync(directory, TestContext.Current.CancellationToken);
 
             var changed = await FixtureProjectBuilder.MarkOperationCompletedAsync(
@@ -348,9 +350,23 @@ public class FixtureProjectBuilderTests
                 TestContext.Current.CancellationToken);
 
             Assert.False(changed);
-            Assert.False((await ProjectImportLog.LoadAsync(
+            var warningLog = await ProjectImportLog.LoadAsync(
                 directory,
-                TestContext.Current.CancellationToken)).ImportCompleted);
+                TestContext.Current.CancellationToken);
+            Assert.False(warningLog.ImportCompleted);
+            Assert.True(warningLog.HasUnresolvedWarnings);
+
+            changed = await FixtureProjectBuilder.MarkOperationCompletedAsync(
+                directory,
+                warningCount: 0,
+                TestContext.Current.CancellationToken);
+
+            Assert.False(changed);
+            var retriedLog = await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken);
+            Assert.False(retriedLog.ImportCompleted);
+            Assert.True(retriedLog.HasUnresolvedWarnings);
         }
         finally
         {

@@ -13,6 +13,9 @@ public sealed record ProjectImportLog
 
     public bool? ImportCompleted { get; set; }
 
+    /// <summary>Null for legacy unknown state, false for a clean operation, true after any durable migration gap.</summary>
+    public bool? HasUnresolvedWarnings { get; set; }
+
     public bool TryMarkImportCompleted(
         bool browserAutomationEnabled,
         int projectWarningCount,
@@ -21,10 +24,20 @@ public sealed record ProjectImportLog
         int workflowWarningCount)
     {
         if (CreatedProjectId is null
-            || ImportCompleted is not false
-            || projectWarningCount > 0
+            || ImportCompleted is not false)
+        {
+            return false;
+        }
+
+        if (projectWarningCount > 0
             || itemWarningCount > 0
             || (browserAutomationEnabled && (viewWarningCount > 0 || workflowWarningCount > 0)))
+        {
+            HasUnresolvedWarnings = true;
+            return false;
+        }
+
+        if (HasUnresolvedWarnings is not false)
         {
             return false;
         }

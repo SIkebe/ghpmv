@@ -215,6 +215,7 @@ public class CliImportTests
             var completedLog = await ProjectImportLog.LoadAsync(directory, cancellationToken);
             Assert.Equal("PVT_created", completedLog.CreatedProjectId);
             Assert.True(completedLog.ImportCompleted);
+            Assert.False(completedLog.HasUnresolvedWarnings);
 
             using var retryServer = new GraphQlStubServer(CreatedProjectLookupResponse);
             var retry = await RunCliAsync(directory, retryServer, "--on-conflict", "fail");
@@ -243,6 +244,7 @@ public class CliImportTests
         {
             CreatedProjectId = "PVT_created",
             ImportCompleted = false,
+            HasUnresolvedWarnings = false,
         };
 
         var changed = log.TryMarkImportCompleted(
@@ -254,6 +256,39 @@ public class CliImportTests
 
         Assert.False(changed);
         Assert.False(log.ImportCompleted);
+        Assert.True(log.HasUnresolvedWarnings);
+
+        changed = log.TryMarkImportCompleted(
+            browserAutomationEnabled: false,
+            projectWarningCount: 0,
+            itemWarningCount: 0,
+            viewWarningCount: 0,
+            workflowWarningCount: 0);
+
+        Assert.False(changed);
+        Assert.False(log.ImportCompleted);
+        Assert.True(log.HasUnresolvedWarnings);
+    }
+
+    [Fact]
+    public void Legacy_incomplete_import_without_warning_state_fails_closed()
+    {
+        var log = new ProjectImportLog
+        {
+            CreatedProjectId = "PVT_created",
+            ImportCompleted = false,
+        };
+
+        var changed = log.TryMarkImportCompleted(
+            browserAutomationEnabled: false,
+            projectWarningCount: 0,
+            itemWarningCount: 0,
+            viewWarningCount: 0,
+            workflowWarningCount: 0);
+
+        Assert.False(changed);
+        Assert.False(log.ImportCompleted);
+        Assert.Null(log.HasUnresolvedWarnings);
     }
 
     [Fact]

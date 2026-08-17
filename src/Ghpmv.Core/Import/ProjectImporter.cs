@@ -213,6 +213,7 @@ public sealed class ProjectImporter
         await DeleteProjectAndReconcileAsync(projectId, cancellationToken).ConfigureAwait(false);
         _operationLog.CreatedProjectId = null;
         _operationLog.ImportCompleted = null;
+        _operationLog.HasUnresolvedWarnings = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -351,6 +352,7 @@ public sealed class ProjectImporter
 
         _operationLog.CreatedProjectId = null;
         _operationLog.ImportCompleted = null;
+        _operationLog.HasUnresolvedWarnings = null;
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         return beforeWriteInvoked;
@@ -395,6 +397,11 @@ public sealed class ProjectImporter
                     matches,
                     cancellationToken).ConfigureAwait(false);
                 _operationLog.CreatedProjectId = existing.Id;
+            }
+
+            if (_operationLog.ImportCompleted is true)
+            {
+                _operationLog.HasUnresolvedWarnings = false;
             }
 
             _operationLog.ImportCompleted = false;
@@ -564,6 +571,11 @@ public sealed class ProjectImporter
             return;
         }
 
+        if (_operationLog.ImportCompleted is true)
+        {
+            _operationLog.HasUnresolvedWarnings = false;
+        }
+
         _operationLog.ImportCompleted = false;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -597,6 +609,7 @@ public sealed class ProjectImporter
         var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
         if (_operationLog is not null)
         {
+            _operationLog.HasUnresolvedWarnings = false;
             _operationLog.PendingProject = new PendingProjectOperation
             {
                 OperationId = operationId,

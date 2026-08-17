@@ -406,6 +406,33 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
         var projectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
+        async Task PersistUnresolvedWarningsAsync(
+            int projectWarningCount,
+            int itemWarningCount,
+            int viewWarningCount,
+            int workflowWarningCount)
+        {
+            if (projectWarningCount == 0
+                && itemWarningCount == 0
+                && (!enableBrowserAutomation || (viewWarningCount == 0 && workflowWarningCount == 0)))
+            {
+                return;
+            }
+
+            var warningLog = await ProjectImportLog.LoadAsync(inDirectory, CancellationToken.None);
+            var previousWarningState = warningLog.HasUnresolvedWarnings;
+            warningLog.TryMarkImportCompleted(
+                enableBrowserAutomation,
+                projectWarningCount,
+                itemWarningCount,
+                viewWarningCount,
+                workflowWarningCount);
+            if (warningLog.HasUnresolvedWarnings != previousWarningState)
+            {
+                await warningLog.SaveAsync(inDirectory, CancellationToken.None);
+            }
+        }
+
         ImportLog? templateLog = itemLog;
         async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
         {
@@ -473,6 +500,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var result = projectNumber is { } number
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
             : await importer.ImportAsync(snapshot, org, cancellationToken);
+        await PersistUnresolvedWarningsAsync(
+            importer.Warnings.Count,
+            itemWarningCount: 0,
+            viewWarningCount: result.ViewWarningCount,
+            workflowWarningCount: 0);
 
         if (result.Outcome == ProjectImportOutcome.Skipped)
         {
@@ -491,6 +523,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
         };
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+        await PersistUnresolvedWarningsAsync(
+            importer.Warnings.Count,
+            itemResult.Warnings.Count,
+            viewWarningCount: result.ViewWarningCount,
+            workflowWarningCount: 0);
         var statusUpdateResult = new StatusUpdateImportResult
         {
             Created = 0,
@@ -550,6 +587,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             }
 
             viewWarnings += viewImporter.Warnings.Count;
+            await PersistUnresolvedWarningsAsync(
+                importer.Warnings.Count,
+                itemResult.Warnings.Count,
+                viewWarnings,
+                workflowWarningCount: 0);
 
             var workflowImporter = new WorkflowUiImporter(session)
             {
@@ -566,6 +608,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
             workflowWarnings = workflowImporter.Warnings.Count;
             workflowsImported = workflowImporter.ImportedCount;
+            await PersistUnresolvedWarningsAsync(
+                importer.Warnings.Count,
+                itemResult.Warnings.Count,
+                viewWarnings,
+                workflowWarnings);
         }
 
         if (templateWriteSession is not null)
@@ -574,12 +621,15 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var completedProjectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
-        if (completedProjectLog.TryMarkImportCompleted(
+        var previousWarningState = completedProjectLog.HasUnresolvedWarnings;
+        var importMarkedComplete = completedProjectLog.TryMarkImportCompleted(
                 enableBrowserAutomation,
                 importer.Warnings.Count,
                 itemResult.Warnings.Count,
                 viewWarnings,
-                workflowWarnings))
+                workflowWarnings);
+        if (importMarkedComplete
+            || completedProjectLog.HasUnresolvedWarnings != previousWarningState)
         {
             await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
         }
