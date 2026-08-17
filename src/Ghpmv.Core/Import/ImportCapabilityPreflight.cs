@@ -39,6 +39,18 @@ public static class ImportCapabilityPreflight
             }
         }
 
+        if (plan.RequiresMembersRead)
+        {
+            var teams = await rest.GetAsync(
+                $"orgs/{targetOrganization}/teams?per_page=1",
+                cancellationToken).ConfigureAwait(false);
+            if (teams is not { ValueKind: JsonValueKind.Array })
+            {
+                throw new InvalidOperationException(
+                    $"Importing team collaborators requires Members read access in organization '{targetOrganization}'.");
+            }
+        }
+
         foreach (var requirement in plan.Repositories)
         {
             if (!repositoryMapping.TryGetValue(requirement.SourceRepository, out var targetRepository)
@@ -69,6 +81,21 @@ public static class ImportCapabilityPreflight
                 ?? throw new InvalidOperationException(
                     $"Mapped target repository '{targetRepository}' was not found or is not visible to the authenticated user.");
             ValidateRepositoryRole(requirement, targetRepository, repository);
+        }
+    }
+
+    public static void ValidateProjectCapabilities(
+        ImportCapabilityPlan plan,
+        int projectNumber,
+        bool viewerCanUpdate,
+        bool visibilityChangeRequired)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if ((plan.RequiresProjectAdministrator || (plan.RequiresVisibilityManagement && visibilityChangeRequired))
+            && !viewerCanUpdate)
+        {
+            throw new InvalidOperationException(
+                $"Target Project #{projectNumber} requires Project administrator or organization owner access for collaborators or visibility changes.");
         }
     }
 

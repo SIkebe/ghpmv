@@ -292,6 +292,52 @@ public class ImportCapabilityTests
         Assert.Contains("ContentsWrite", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Preflight_validates_members_read_for_team_collaborators()
+    {
+        using var handler = new QueueHandler(Json("[]"));
+        using var rest = new GitHubRestClient("token", baseUri: null, handler);
+        var plan = new ImportCapabilityPlan(
+            RequiresOrganizationAdministrator: false,
+            RequiresProjectAdministrator: true,
+            RequiresMembersRead: true,
+            RequiresVisibilityManagement: false,
+            []);
+
+        await ImportCapabilityPreflight.ValidateAsync(
+            plan,
+            "target",
+            new Dictionary<string, string>(),
+            rest,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["orgs/target/teams?per_page=1"], handler.Paths);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void Project_preflight_rejects_missing_admin_for_privileged_changes(
+        bool collaborators,
+        bool visibilityChange)
+    {
+        var plan = new ImportCapabilityPlan(
+            RequiresOrganizationAdministrator: false,
+            RequiresProjectAdministrator: collaborators,
+            RequiresMembersRead: false,
+            RequiresVisibilityManagement: visibilityChange,
+            []);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ImportCapabilityPreflight.ValidateProjectCapabilities(
+                plan,
+                projectNumber: 42,
+                viewerCanUpdate: false,
+                visibilityChangeRequired: visibilityChange));
+
+        Assert.Contains("Project #42", exception.Message, StringComparison.Ordinal);
+    }
+
     private static ProjectSnapshot MinimalSnapshot() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,

@@ -788,6 +788,11 @@ public sealed class ProjectImporter
         CancellationToken cancellationToken)
     {
         _warnings.Clear();
+        ImportCapabilityPreflight.ValidateProjectCapabilities(
+            ImportCapabilityAnalyzer.Analyze(snapshot, BrowserViewEnrichmentPlanned),
+            project.Number,
+            project.ViewerCanUpdate,
+            ShouldUpdateVisibility(project.Public, snapshot.Project.Public));
         OnProgress?.Invoke("Applying project metadata (description, README, visibility, closed state)...");
         await UpdateProjectMetadataAsync(project.Id, snapshot.Project, cancellationToken).ConfigureAwait(false);
         if (ShouldUpdateVisibility(project.Public, snapshot.Project.Public))
