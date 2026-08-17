@@ -573,6 +573,17 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             await templateWriteSession.RestoreAsync(cancellationToken);
         }
 
+        var completedProjectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
+        if (completedProjectLog.TryMarkImportCompleted(
+                enableBrowserAutomation,
+                importer.Warnings.Count,
+                itemResult.Warnings.Count,
+                viewWarnings,
+                workflowWarnings))
+        {
+            await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
+        }
+
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
