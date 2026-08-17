@@ -217,6 +217,10 @@ GEI 経路は source host が GitHub.com の場合だけ選択可能とする。
 
 3 を選んだ場合は 2 として扱わない。必要なロール設定を済ませるよう案内し、適用済みと確認できるまで GEI token の入力、migration command、Step 7 へ進まない。適用後に改めて role status を確認し、`migrator-active` へ更新する。
 
+GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用する。標準fixtureはsourceでorganization Issue Fieldを作成し、target importでも同じIssue Fieldを作成するため、GitHubの[Create issue field for an organization](https://docs.github.com/en/rest/orgs/issue-fields#create-issue-field-for-an-organization)仕様上、対応する`SOURCE_TOKEN` / `TARGET_TOKEN`のauthenticated userは各organizationのadministratorでなければならない。Migrator roleやclassic PATの`admin:org` scopeだけではadministrator roleを代替できない。
+
+`fixture preparation=create`ではsource ghpmv token/browser accountがsource organization administratorかを、`api-only` / `browser-e2e`ではtarget ghpmv token/browser accountがtarget organization administratorかを一人ずつ確認する。未適用または不明ならPAT作成・入力、Browser login、permission preflightへ進まない。administrator accountへ切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
+
 `read-only`、`api-only`、`browser-e2e` では、host / account 値を次の順で一問ずつ確認する。
 
 1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
@@ -314,7 +318,7 @@ secure input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GH
 
 **PAT の入力を求める前に、現在の経路に必要な権限を classic / fine-grained の両方で提示する。** `SOURCE_TOKEN` / `TARGET_TOKEN` の必要な全 token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
 
-token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、全 required PAT の準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
+token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。標準fixtureの`SOURCE_TOKEN` / `TARGET_TOKEN`のroleは`organization administrator`、GEI tokenのroleは別途確認したownerまたはmigrator statusを表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、全 required PAT の準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
 
 fine-grained PAT を選んだ token は URL status を `pending` にする。source / target organization login、host、fixture preparation、repository preparation mode が未確定なら、先に不足値を質問する。該当 token の完全な pre-filled URL を assistant 本文へ表示して検証し、status を `shown-and-validated` に更新するまで、次の操作を禁止する。
 
@@ -522,12 +526,14 @@ finally {
 
 semantic success は、native command が non-zero、HTTP status が 422、`X-Accepted-GitHub-Permissions` header に endpoint ごとの必須 permission があること、本文が必須 field または必須 request body の不足を示すことのすべてを満たす場合だけとする。本文の文言は API version と endpoint により `Validation Failed`、`missing_field`、`must not be blank`、`Invalid input: data cannot be null` などに変わり得るため、`Validation Failed` の固定文字列だけを要求しない。transport error、403、422 以外、permission header 不一致、または必須入力不足を示さない 422 は failure のままにする。data residency 側を確認するときは、両方の `gh api` command に `--hostname TENANT.ghe.com` を追加する。`GH_TOKEN` が cached credentials より優先され、`--hostname` が接続先 tenant を選ぶ。GitHub.com source → data residency target の source preflight には hostname を追加せず、target preflight だけに target tenant hostname を追加する。
 
-どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が上記の permission header 付き missing-field 422 なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) を確認する。token owner の organization role、member の repository creation policy、organization の PAT restriction も別に確認する。原因を一つに断定しない。再作成しても 403 の場合は `setup --fixture` を実行せず、次のどちらかを選んでもらう。
+どちらも必須 field を渡さないため repository や Issue Field は作成されない。両方が上記の permission header 付き missing-field 422 なら endpoint permission は認識されているため続行できる。repository endpoint が `403 Resource not accessible by personal access token` なら、設定画面で **Administration: Read and write**、**All repositories**、organization approval を再確認する。Issue Field endpoint または GraphQL の `organization.issueFields` が `FORBIDDEN` なら **Organization permissions → Issue Fields: Read and write** (`issue_fields=write`) と、token ownerがorganization administratorであることを確認する。Migrator roleやclassic PATの`admin:org` scopeだけではadministrator roleを代替しない。repository creation policy、organization の PAT restriction、SSOも別に確認し、原因を一つに断定しない。administrator roleとpermissionを満たしたtokenでも403になる場合は`setup --fixture`を実行せず停止する。
 
-1. classic PAT (`repo`, `project`, `admin:org`) に切り替える
-2. 空の private repository を先に作り、fine-grained PAT で残りの fixture を作成する
+repository endpointだけが403で、Issue Field administrator gateは通過している場合は次のどちらかを選んでもらう。
 
-fine-grained PAT の **Administration** または **All repositories** を付与できない場合だけ、空 repository を先に作成し、その repository を選択した token に Administration 以外の fixture 権限を付ける。
+1. 同じorganization administratorのclassic PAT (`repo`, `project`, `admin:org`) に切り替える
+2. 空の private repository を先に作り、同じadministratorのfine-grained PATで残りのfixtureを作成する
+
+fine-grained PAT の **Administration** または **All repositories** を付与できない場合だけ、空 repository を先に作成し、その repository を選択したtokenにAdministration以外のfixture権限を付ける。
 
 この fallback を選んだ場合は、選択した side の `empty-repository fallback` だけを `selected` と記録し、repository に commit / file / Issue がないことをユーザーに明示確認する。その side の fixture command に `--fixture-require-new --fixture-allow-existing-empty-repo` を指定する。CLI は新規 Project title を必須のまま維持し、既存 repository の contents と Issue が空であることを読み取り確認してからだけ fixture write を許可する。通常経路と、fallback を選んでいない反対 side には `--fixture-allow-existing-empty-repo` を付けない。
 
@@ -1003,7 +1009,7 @@ target が data residency の場合は `--target-base-url <target-api-url>` と 
 
 | エラー / 症状 | 対応 |
 |---|---|
-| fine-grained PAT preflight / `setup --fixture` で `Resource not accessible by personal access token` | repository endpoint なら **Administration: Read and write** と **All repositories**、Issue Field endpoint または GraphQL `organization.issueFields` なら Organization **Issue Fields: Read and write** (`issue_fields=write`) を確認する。organization approval、token owner の role、repository creation / PAT policy、SSO も確認し、原因を一つに断定しない。解決できなければ repository を先に作成するか classic PAT (`repo`, `project`, `admin:org`) へ切り替える。 |
+| fine-grained PAT preflight / `setup --fixture` で `Resource not accessible by personal access token` | repository endpoint なら **Administration: Read and write** と **All repositories** を確認する。Issue Field endpoint または GraphQL `organization.issueFields` なら Organization **Issue Fields: Read and write** (`issue_fields=write`) に加え、authenticated userがorganization administratorであることが必須。Migrator roleやclassic `admin:org` scopeだけでは代替できない。organization approval、repository creation / PAT policy、SSO も確認する。repository endpointだけが失敗する場合は、同じadministrator accountでrepositoryを先に作成するかclassic PATへ切り替える。 |
 | `INSUFFICIENT_SCOPES`, `id`, `read:org` | classic PAT に `read:org` を追加し、必要なら SSO を再承認する。 |
 | `The browser session is not signed in to 'github.com'` | 該当 profile で `login` を再実行し、API token と同じユーザーでログインする。 |
 | `The browser session is not signed in to '<tenant>.ghe.com'` または host mismatch | エラーを出した side の profile を `login --profile <source-or-target> --base-url https://TENANT.ghe.com` で作り直す。source tenant なら fixture setup に `--api-base-url https://api.TENANT.ghe.com`、export に `--base-url https://api.TENANT.ghe.com` を渡す。target tenant なら fixture setup に `--api-base-url https://api.TENANT.ghe.com`、Import / Verify に `--target-base-url https://api.TENANT.ghe.com` を渡す。browser automation を使う各 command には `--browser-base-url https://TENANT.ghe.com` も渡し、source / target profile と token を混用しない。 |
