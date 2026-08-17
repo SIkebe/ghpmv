@@ -78,6 +78,10 @@ public class BrowserRoundTripTests
         {
             await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
             await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+            var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+                targetClient,
+                targetSession,
+                cancellationToken);
             var exporter = new ProjectExporter(sourceClient);
             var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
             var collaboratorExporter = new CollaboratorUiExporter(sourceSession);
@@ -102,6 +106,7 @@ public class BrowserRoundTripTests
             var result = await new ProjectImporter(targetClient)
             {
                 OperationLogDirectory = CreateOperationLogDirectory(),
+                BeforeWriteAsync = validateTargetAuthentication,
                 OrganizationMapping = OrganizationMapping,
                 RepositoryMapping = RepositoryMapping,
                 UserMapping = userMapping,
@@ -182,6 +187,10 @@ public class BrowserRoundTripTests
         using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
         await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
         await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+            targetClient,
+            targetSession,
+            cancellationToken);
 
         // Export the fixture with UI settings and retarget it under a unique title.
         var exporter = new ProjectExporter(sourceClient);
@@ -215,6 +224,7 @@ public class BrowserRoundTripTests
         var importer = new ProjectImporter(targetClient)
         {
             OperationLogDirectory = CreateOperationLogDirectory(),
+            BeforeWriteAsync = validateTargetAuthentication,
             BrowserViewEnrichmentPlanned = true,
             OrganizationMapping = OrganizationMapping,
             RepositoryMapping = RepositoryMapping,
@@ -329,6 +339,10 @@ public class BrowserRoundTripTests
         using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
         await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
         await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+            targetClient,
+            targetSession,
+            cancellationToken);
 
         // Export the fixture with workflow UI settings and retarget it under a unique title.
         var exporter = new ProjectExporter(sourceClient);
@@ -358,6 +372,7 @@ public class BrowserRoundTripTests
         var importer = new ProjectImporter(targetClient)
         {
             OperationLogDirectory = CreateOperationLogDirectory(),
+            BeforeWriteAsync = validateTargetAuthentication,
             OrganizationMapping = OrganizationMapping,
             RepositoryMapping = RepositoryMapping,
             UserMapping = userMapping,
@@ -455,6 +470,15 @@ public class BrowserRoundTripTests
             Profile = endpoint.BrowserProfile,
             StatePath = statePath,
         });
+
+    private static async Task<Func<CancellationToken, Task>> CreateTargetAuthenticationGuardAsync(
+        GitHubGraphQLClient targetClient,
+        BrowserSession targetSession,
+        CancellationToken cancellationToken)
+    {
+        var apiLogin = await targetClient.GetViewerLoginAsync(cancellationToken);
+        return ct => targetSession.ValidateAuthenticationAsync(apiLogin, ct);
+    }
 
     private static async Task<string> ResolveUserIdAsync(
         GitHubGraphQLClient client,

@@ -139,6 +139,40 @@ public class E2eTestSettingsTests
         Assert.Contains("duplicate source login", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Validate_rejects_empty_live_resource_identifiers()
+    {
+        var emptyProfile = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                BrowserProfile = "",
+            },
+        };
+        var emptyGeiRepository = new E2eTestSettings
+        {
+            Gei = new E2eGeiSettings { SourceRepository = "" },
+        };
+        var emptyCollaborator = new E2eTestSettings
+        {
+            Users = new E2eUserSettings { CollaboratorLogin = "" },
+        };
+
+        Assert.Contains(
+            "source.browserProfile is required",
+            Assert.Throws<InvalidDataException>(() => emptyProfile.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "gei.sourceRepository and gei.targetRepository are required",
+            Assert.Throws<InvalidDataException>(() => emptyGeiRepository.Validate()).Message,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "users.collaboratorLogin is required",
+            Assert.Throws<InvalidDataException>(() => emptyCollaborator.Validate()).Message,
+            StringComparison.Ordinal);
+    }
+
     private static string WriteSettings(string content)
     {
         var path = Path.Combine(Path.GetTempPath(), $"ghpmv-e2e-settings-{Guid.NewGuid():N}.jsonc");

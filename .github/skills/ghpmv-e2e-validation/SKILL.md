@@ -183,7 +183,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 ## E2E settings の読み込み
 
-Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`で明示されたfile、`tests/e2e.settings.local.jsonc`、`tests/e2e.settings.jsonc`の順で、最初に存在するJSONCを読む。`//`コメントと末尾commaを許可する。設定値は次の用途に使い、同じ非secret値を再質問しない。
+Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている場合は、そのpathだけをauthoritativeなJSONCとして読む。明示pathが存在しない、読み取れない、またはvalidationに失敗した場合は、local/shared fileへfallbackせず、pathとエラーを示して修正されるまで停止する。`GHPMV_E2E_SETTINGS`が未設定の場合だけ、`tests/e2e.settings.local.jsonc`、`tests/e2e.settings.jsonc`の順で最初に存在するfileを読む。`//`コメントと末尾commaを許可する。設定値は次の用途に使い、同じ非secret値を再質問しない。
 
 - source / target Organization、API / Web / uploads URL、browser profile
 - Integration / Browser fixtureのProject番号とsource / target repository
@@ -192,7 +192,7 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`で明示されたfile�
 - GEI source / target repository、visibility、token owner login、role status
 - PATおよびbrowser stateを保持する**環境変数名**
 
-空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値は確定値として扱わず、その項目だけを通常どおり質問する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
+自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
 
 このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。
 

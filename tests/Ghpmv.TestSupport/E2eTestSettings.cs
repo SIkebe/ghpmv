@@ -95,6 +95,13 @@ public sealed partial record E2eTestSettings
         ValidateEndpoint(Target, "target", sourceName);
         ValidateFixture(Fixtures.Integration, "fixtures.integration", sourceName);
         ValidateFixture(Fixtures.Browser, "fixtures.browser", sourceName);
+        if (string.IsNullOrWhiteSpace(Gei.SourceRepository)
+            || string.IsNullOrWhiteSpace(Gei.TargetRepository))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: gei.sourceRepository and gei.targetRepository are required.");
+        }
+
         ValidateEnvironmentVariable(Gei.SourceTokenEnvironmentVariable, "gei.sourceTokenEnvironmentVariable", sourceName);
         ValidateEnvironmentVariable(Gei.TargetTokenEnvironmentVariable, "gei.targetTokenEnvironmentVariable", sourceName);
 
@@ -128,6 +135,11 @@ public sealed partial record E2eTestSettings
                 $"{sourceName}: execution.repositoryPreparationMode must be gei or fixture-seed.");
         }
 
+        if (string.IsNullOrWhiteSpace(Users.CollaboratorLogin))
+        {
+            throw new InvalidDataException($"{sourceName}: users.collaboratorLogin is required.");
+        }
+
         var sourceLogins = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var mapping in Users.Mappings)
         {
@@ -150,6 +162,11 @@ public sealed partial record E2eTestSettings
         if (string.IsNullOrWhiteSpace(endpoint.Organization))
         {
             throw new InvalidDataException($"{sourceName}: {propertyName}.organization is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(endpoint.BrowserProfile))
+        {
+            throw new InvalidDataException($"{sourceName}: {propertyName}.browserProfile is required.");
         }
 
         ValidateAbsoluteHttpsUrl(endpoint.ApiBaseUrl, $"{propertyName}.apiBaseUrl", sourceName);

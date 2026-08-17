@@ -61,7 +61,7 @@ dotnet artifacts/fdd/ghpmv.dll --version
 
 Organization、Project番号、repository、browser profile、GEI、user mappingなどの非secret値は、コメント付きの [`tests/e2e.settings.jsonc`](../tests/e2e.settings.jsonc) にまとめています。環境固有の値は、このファイルを `tests/e2e.settings.local.jsonc` にコピーして編集してください。local fileはgitignoreされます。別の場所に置く場合は、`GHPMV_E2E_SETTINGS`にそのfile pathを設定します。
 
-設定の優先順位は、既存の`GHPMV_TEST_*`環境変数、`tests/e2e.settings.local.jsonc`、共有`tests/e2e.settings.jsonc`の順です。PAT、browser cookie、storage-stateの内容はJSONCへ保存せず、JSONCに記載された環境変数名が参照するprocess environmentまたはfileで管理します。
+Organization、Project番号、repositoryなどのfixture値は、既存の`GHPMV_TEST_*`環境変数、`tests/e2e.settings.local.jsonc`、共有`tests/e2e.settings.jsonc`の順で解決します。Browser E2EのPATとstorage-state pathは、JSONCでsideごとに指定した環境変数を優先し、未設定の場合だけ互換用の`GHPMV_TEST_TOKEN`と`GHPMV_BROWSER_STATE`へfallbackします。PAT、browser cookie、storage-stateの内容はJSONCへ保存せず、JSONCにはそれらを保持する環境変数名だけを記載します。
 
 実API integration suiteは既存どおり単一の`GHPMV_TEST_TOKEN`を使用し、sourceとtargetが同じGitHub deploymentにある構成を対象にします。JSONCのsource/target API originが異なる場合は誤ったhostへ書き込まず、明示的に失敗します。GitHub.comからGHEC with data residencyなどdeploymentをまたぐ検証は、source/target別tokenとbrowser stateを使うbrowser/manual E2Eで行います。
 
