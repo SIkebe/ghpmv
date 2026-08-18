@@ -273,6 +273,7 @@ public sealed class ProjectExporter
         Readme = GetOptionalString(project, "readme"),
         Public = project.GetProperty("public").GetBoolean(),
         Closed = project.GetProperty("closed").GetBoolean(),
+        Template = project.GetProperty("template").GetBoolean(),
     };
 
     private static List<FieldSnapshot> ParseFields(IReadOnlyList<JsonElement> fieldNodes)
@@ -751,6 +752,7 @@ public sealed class ProjectExporter
               readme
               public
               closed
+              template
               views(first: 50) {
                 nodes {
                   number

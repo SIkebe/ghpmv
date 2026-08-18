@@ -4,29 +4,32 @@ using Ghpmv.Core.GitHub;
 namespace Ghpmv.Core.Import;
 
 /// <summary>
-/// Temporarily removes an existing target's template flag and restores it after all
-/// migration writers finish. This is the final-stage orchestration seam shared with #47.
+/// Temporarily removes an existing target's template flag for writers that GitHub blocks
+/// on templates, then either applies the snapshot's final state or restores the original.
 /// </summary>
 public sealed class ProjectTemplateWriteSession
 {
     private readonly GitHubGraphQLClient _client;
     private readonly string _projectId;
     private readonly Func<bool, CancellationToken, Task>? _persistRestorationStateAsync;
+    private bool _currentTemplate;
     private bool _restored;
 
     private ProjectTemplateWriteSession(
         GitHubGraphQLClient client,
         string projectId,
+        bool currentTemplate,
         bool restorationRequired,
         Func<bool, CancellationToken, Task>? persistRestorationStateAsync)
     {
         _client = client;
         _projectId = projectId;
+        _currentTemplate = currentTemplate;
         RestorationRequired = restorationRequired;
         _persistRestorationStateAsync = persistRestorationStateAsync;
     }
 
-    public bool RestorationRequired { get; }
+    public bool RestorationRequired { get; private set; }
 
     public Action<string>? OnProgress { get; init; }
 
@@ -72,31 +75,16 @@ public sealed class ProjectTemplateWriteSession
         ArgumentNullException.ThrowIfNull(client);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
 
-        var data = await client.QueryAsync(
-            """
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 { id template }
-              }
-            }
-            """,
-            new { projectId },
-            cancellationToken).ConfigureAwait(false);
-        var node = data.GetProperty("node");
-        if (node.ValueKind != JsonValueKind.Object)
-        {
-            throw new GitHubGraphQLException($"Target project '{projectId}' was not found while checking template state.");
-        }
-
-        var wasTemplate = node.GetProperty("template").GetBoolean();
+        var wasTemplate = await ReadTemplateStateAsync(client, projectId, cancellationToken).ConfigureAwait(false);
         if (restorationWasPending && wasTemplate)
         {
             await persistRestorationStateAsync!(false, cancellationToken).ConfigureAwait(false);
             return new ProjectTemplateWriteSession(
                 client,
                 projectId,
+                currentTemplate: true,
                 restorationRequired: false,
-                persistRestorationStateAsync)
+                persistRestorationStateAsync: persistRestorationStateAsync)
             {
                 OnProgress = onProgress,
             };
@@ -105,8 +93,9 @@ public sealed class ProjectTemplateWriteSession
         var session = new ProjectTemplateWriteSession(
             client,
             projectId,
-            restorationWasPending || wasTemplate,
-            persistRestorationStateAsync)
+            currentTemplate: wasTemplate,
+            restorationRequired: restorationWasPending || wasTemplate,
+            persistRestorationStateAsync: persistRestorationStateAsync)
         {
             OnProgress = onProgress,
         };
@@ -168,6 +157,60 @@ public sealed class ProjectTemplateWriteSession
         _restored = true;
     }
 
+    /// <summary>
+    /// Applies a captured template state as the final successful import stage. A null
+    /// snapshot value restores a temporarily unmarked legacy target without otherwise
+    /// changing its state.
+    /// </summary>
+    public async Task CompleteAsync(bool? desiredTemplate, CancellationToken cancellationToken = default)
+    {
+        if (desiredTemplate is null)
+        {
+            await RestoreAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (_currentTemplate != desiredTemplate.Value)
+        {
+            OnProgress?.Invoke(desiredTemplate.Value
+                ? "Marking the target project as a template as the final import stage..."
+                : "Unmarking the target project as a template as the final import stage...");
+            await SetTemplateAsync(desiredTemplate.Value, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (RestorationRequired && _persistRestorationStateAsync is not null)
+        {
+            await _persistRestorationStateAsync(false, cancellationToken).ConfigureAwait(false);
+        }
+
+        RestorationRequired = false;
+        _restored = true;
+    }
+
+    /// <summary>Applies a non-null template state when no temporary write session was needed.</summary>
+    public static async Task SetFinalStateAsync(
+        GitHubGraphQLClient client,
+        string projectId,
+        bool desiredTemplate,
+        Action<string>? onProgress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
+
+        var currentTemplate = await ReadTemplateStateAsync(client, projectId, cancellationToken).ConfigureAwait(false);
+        var session = new ProjectTemplateWriteSession(
+            client,
+            projectId,
+            currentTemplate,
+            restorationRequired: false,
+            persistRestorationStateAsync: null)
+        {
+            OnProgress = onProgress,
+        };
+        await session.CompleteAsync(desiredTemplate, cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task SetTemplateAsync(bool mark, CancellationToken cancellationToken)
     {
         var operationName = mark ? "markProjectV2AsTemplate" : "unmarkProjectV2AsTemplate";
@@ -194,5 +237,30 @@ public sealed class ProjectTemplateWriteSession
             target: _projectId,
             requiredResultPath: "projectV2.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
+        _currentTemplate = mark;
+    }
+
+    private static async Task<bool> ReadTemplateStateAsync(
+        GitHubGraphQLClient client,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var data = await client.QueryAsync(
+            """
+            query($projectId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 { id template }
+              }
+            }
+            """,
+            new { projectId },
+            cancellationToken).ConfigureAwait(false);
+        var node = data.GetProperty("node");
+        if (node.ValueKind != JsonValueKind.Object)
+        {
+            throw new GitHubGraphQLException($"Target project '{projectId}' was not found while checking template state.");
+        }
+
+        return node.GetProperty("template").GetBoolean();
     }
 }

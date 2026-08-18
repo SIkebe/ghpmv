@@ -123,6 +123,11 @@ public class VerifyTests
             };
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
                 client, TargetOrg, result.ProjectNumber, verificationSnapshot, cancellationToken);
+            await ProjectTemplateWriteSession.SetFinalStateAsync(
+                client,
+                result.ProjectId,
+                snapshot.Project.Template!.Value,
+                cancellationToken: cancellationToken);
 
             var postExportCalled = false;
             var verifier = new ProjectVerifier(client)

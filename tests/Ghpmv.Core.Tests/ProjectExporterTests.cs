@@ -11,6 +11,25 @@ namespace Ghpmv.Core.Tests;
 public class ProjectExporterTests
 {
     [Fact]
+    public async Task Export_captures_the_project_template_state()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse("[]", template: true),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(snapshot.Project.Template);
+        Assert.Contains("template", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_prefers_configured_visible_fields_from_view_configuration()
     {
         using var handler = new StubHandler(
@@ -621,9 +640,10 @@ public class ProjectExporterTests
         ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
         ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
-    private static string MetadataResponse(string views) =>
+    private static string MetadataResponse(string views, bool template = false) =>
         "{\"data\":{\"organization\":{\"projectV2\":{" +
         "\"title\":\"Roadmap\",\"shortDescription\":null,\"readme\":null,\"public\":false,\"closed\":false," +
+        "\"template\":" + template.ToString().ToLowerInvariant() + "," +
         "\"views\":{\"nodes\":" + views + "},\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
         "}}}}";
 

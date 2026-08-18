@@ -417,6 +417,7 @@ public class FixtureProjectBuilderTests
             pullRequestNumber: 2);
         var values = snapshot.Items.SelectMany(item => item.FieldValues).ToList();
 
+        Assert.True(snapshot.Project.Template);
         foreach (var property in typeof(FieldValueSnapshot).GetProperties()
                      .Where(property => property.Name != nameof(FieldValueSnapshot.FieldName)))
         {
@@ -650,6 +651,32 @@ public class FixtureProjectBuilderTests
         Assert.Equal("PVTI_existing", upgraded.ItemStates["draft:0"].TargetItemId);
         Assert.Empty(upgraded.StatusUpdates);
         Assert.Empty(upgraded.PendingStatusUpdates);
+    }
+
+    [Fact]
+    public void Legacy_fixture_log_rebinds_to_the_template_snapshot_with_completed_status_updates()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+        var legacySnapshot = snapshot with
+        {
+            Project = snapshot.Project with { Template = null },
+        };
+        var legacyLog = new ImportLog
+        {
+            ProjectId = "PVT_fixture",
+            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(legacySnapshot),
+        };
+        legacyLog.StatusUpdates["0"] = "PVTSU_existing";
+
+        var upgraded = FixtureProjectBuilder.UpgradeLegacyFixtureLog(legacyLog, snapshot);
+
+        Assert.NotNull(upgraded);
+        Assert.Equal(ImportLog.ComputeSnapshotFingerprint(snapshot), upgraded.SourceSnapshotFingerprint);
+        Assert.Equal("PVTSU_existing", upgraded.StatusUpdates["0"]);
     }
 
     [Fact]
