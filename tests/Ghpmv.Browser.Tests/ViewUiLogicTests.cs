@@ -238,6 +238,31 @@ public class ViewUiLogicTests
         Assert.Equal(2, warnings.Count);
     }
 
+    [Fact]
+    public async Task Tab_order_poll_retries_an_incomplete_connection_until_all_mapped_views_are_visible()
+    {
+        var reads = new Queue<IReadOnlyList<int>>(
+        [
+            [1],
+            [1, 8],
+        ]);
+        var delays = 0;
+
+        var result = await ViewUiImporter.PollTabOrderAsync(
+            _ => Task.FromResult(reads.Dequeue()),
+            order => order.Count == 2,
+            _ =>
+            {
+                delays++;
+                return Task.CompletedTask;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 8], result);
+        Assert.Empty(reads);
+        Assert.Equal(1, delays);
+    }
+
     // ----- verifier: Ui comparison (M6) -----
 
     [Fact]

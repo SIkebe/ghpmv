@@ -202,16 +202,14 @@ public sealed class ViewUiImporter
         }
 
         var desiredNumbers = desired.Select(number => number!.Value).ToList();
-        var targetTabs = await FetchTargetTabsAsync(
+        var importedNumbers = desiredNumbers.ToHashSet();
+        var currentNumbers = await ReadImportedTabOrderUntilCompleteAsync(
             ownerLogin,
             ownerType,
             projectNumber,
+            importedNumbers,
+            desiredNumbers.Count,
             cancellationToken).ConfigureAwait(false);
-        var importedNumbers = desiredNumbers.ToHashSet();
-        var currentNumbers = targetTabs
-            .Where(tab => importedNumbers.Contains(tab.Number))
-            .Select(tab => tab.Number)
-            .ToList();
         if (currentNumbers.Count != desiredNumbers.Count)
         {
             _warnings.Add("view tab order could not be applied because the target View list is incomplete");
@@ -224,7 +222,9 @@ public sealed class ViewUiImporter
             return;
         }
 
-        var names = targetTabs.ToDictionary(tab => tab.Number, tab => tab.Name);
+        var names = snapshot.Views.ToDictionary(
+            view => viewNumbers[view.Number],
+            view => view.Name);
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
             $"Reordering View tabs with {moves.Count} drag operation(s)..."));
@@ -298,6 +298,21 @@ public sealed class ViewUiImporter
         return warnings;
     }
 
+    private Task<IReadOnlyList<int>> ReadImportedTabOrderUntilCompleteAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        HashSet<int> importedNumbers,
+        int expectedCount,
+        CancellationToken cancellationToken)
+        => PollImportedTabOrderAsync(
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            importedNumbers,
+            order => order.Count == expectedCount,
+            cancellationToken);
+
     private async Task<IReadOnlyList<int>> ReadImportedTabOrderAsync(
         string ownerLogin,
         ProjectOwnerType ownerType,
@@ -305,24 +320,54 @@ public sealed class ViewUiImporter
         HashSet<int> importedNumbers,
         IReadOnlyList<int> desiredNumbers,
         CancellationToken cancellationToken)
+        => await PollImportedTabOrderAsync(
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            importedNumbers,
+            order => order.SequenceEqual(desiredNumbers),
+            cancellationToken).ConfigureAwait(false);
+
+    private Task<IReadOnlyList<int>> PollImportedTabOrderAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        HashSet<int> importedNumbers,
+        Func<IReadOnlyList<int>, bool> completed,
+        CancellationToken cancellationToken)
+        => PollTabOrderAsync(
+            async token => (await FetchTargetTabsAsync(
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                token).ConfigureAwait(false))
+                .Where(tab => importedNumbers.Contains(tab.Number))
+                .Select(tab => tab.Number)
+                .ToList(),
+            completed,
+            token => Task.Delay(TimeSpan.FromMilliseconds(500), token),
+            cancellationToken);
+
+    internal static async Task<IReadOnlyList<int>> PollTabOrderAsync(
+        Func<CancellationToken, Task<IReadOnlyList<int>>> readAsync,
+        Func<IReadOnlyList<int>, bool> completed,
+        Func<CancellationToken, Task> delayAsync,
+        CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(readAsync);
+        ArgumentNullException.ThrowIfNull(completed);
+        ArgumentNullException.ThrowIfNull(delayAsync);
+
         IReadOnlyList<int> result = [];
         for (var attempt = 0; attempt < 4; attempt++)
         {
             if (attempt > 0)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+                await delayAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            result = (await FetchTargetTabsAsync(
-                ownerLogin,
-                ownerType,
-                projectNumber,
-                cancellationToken).ConfigureAwait(false))
-                .Where(tab => importedNumbers.Contains(tab.Number))
-                .Select(tab => tab.Number)
-                .ToList();
-            if (result.SequenceEqual(desiredNumbers))
+            result = await readAsync(cancellationToken).ConfigureAwait(false);
+            if (completed(result))
             {
                 break;
             }
