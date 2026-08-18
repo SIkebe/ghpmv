@@ -45,6 +45,39 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_captures_graphql_position_order_independently_of_view_number()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse(
+                """
+                [
+                  {"number":9,"name":"Roadmap","layout":"ROADMAP_LAYOUT","filter":null,
+                   "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                   "configuration":{"visibleFields":{"nodes":[]}}},
+                  {"number":2,"name":"Table","layout":"TABLE_LAYOUT","filter":null,
+                   "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                   "configuration":{"visibleFields":{"nodes":[]}}}
+                ]
+                """),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Roadmap", "Table"], snapshot.Views.Select(view => view.Name));
+        Assert.Equal([0, 1], snapshot.Views.Select(view => view.TabPosition));
+        Assert.Contains(
+            "views(first: 50, orderBy: { field: POSITION, direction: ASC })",
+            handler.RequestBodies[0],
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_reads_linked_issue_field_identity_and_definition_directly_from_project_fields()
     {
         using var handler = new StubHandler(

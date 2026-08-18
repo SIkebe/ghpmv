@@ -275,6 +275,88 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Views_are_imported_by_tab_position_instead_of_view_number()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-position-order-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                BrowserEnrichmentPlanned = true,
+            };
+            var firstTab = View(9, "Roadmap", "ROADMAP_LAYOUT", filter: null, visibleFields: [])
+                with { TabPosition = 0 };
+            var secondTab = View(2, "Table", "TABLE_LAYOUT", filter: null, visibleFields: [])
+                with { TabPosition = 1 };
+
+            await importer.ImportAsync(
+                [secondTab, firstTab],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            var updates = handler.RequestBodies
+                .Where(body => body.Contains("updateProjectV2View", StringComparison.Ordinal))
+                .Select(body => JsonDocument.Parse(body))
+                .ToList();
+            try
+            {
+                Assert.Equal(
+                    ["Roadmap", "Table"],
+                    updates.Select(document =>
+                        document.RootElement.GetProperty("variables").GetProperty("name").GetString()));
+            }
+            finally
+            {
+                foreach (var update in updates)
+                {
+                    update.Dispose();
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Api_only_import_warns_when_tab_order_cannot_be_repaired()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-position-warning-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
+            var firstTab = View(9, "Roadmap", "ROADMAP_LAYOUT", filter: null, visibleFields: [])
+                with { TabPosition = 0 };
+            var secondTab = View(2, "Table", "TABLE_LAYOUT", filter: null, visibleFields: [])
+                with { TabPosition = 1 };
+
+            await importer.ImportAsync(
+                [secondTab, firstTab],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains(importer.Warnings, warning =>
+                warning.Contains("tab order differs", StringComparison.Ordinal)
+                && warning.Contains("browser automation", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 

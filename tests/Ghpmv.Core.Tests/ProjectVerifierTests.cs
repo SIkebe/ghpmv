@@ -520,6 +520,48 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Graphql_view_position_order_is_compared_without_browser_automation()
+    {
+        var baseline = BuildSnapshot();
+        var table = baseline.Views[0] with { Number = 7, TabPosition = 0 };
+        var board = table with { Number = 3, TabPosition = 1, Name = "Board", Layout = "BOARD_LAYOUT" };
+        var source = baseline with { Views = [table, board] };
+        var target = baseline with
+        {
+            Views =
+            [
+                table with { TabPosition = 1 },
+                board with { TabPosition = 0 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal)
+            && difference.Message.Contains("Table, Board", StringComparison.Ordinal)
+            && difference.Message.Contains("Board, Table", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Legacy_view_positions_do_not_require_order_verification()
+    {
+        var baseline = BuildSnapshot();
+        var table = baseline.Views[0] with { Number = 7, TabPosition = null };
+        var board = table with { Number = 3, Name = "Board", Layout = "BOARD_LAYOUT" };
+        var source = baseline with { Views = [table, board] };
+        var target = baseline with { Views = [board, table] };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View"
+            && difference.Message.Contains("tab order", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();

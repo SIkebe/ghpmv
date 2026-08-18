@@ -216,9 +216,24 @@ public class BrowserRoundTripTests
         var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
         Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+        var sourceTabOrder = source.Views.OrderBy(view => view.TabPosition).Select(view => view.Name).ToList();
+        Assert.False(sourceTabOrder.SequenceEqual(
+            source.Views.OrderBy(view => view.Number).Select(view => view.Name),
+            StringComparer.Ordinal));
 
         var title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
+        var apiPositions = snapshot.Views
+            .OrderBy(view => view.Number)
+            .Select((view, position) => (view.Number, position))
+            .ToDictionary(pair => pair.Number, pair => pair.position);
+        var apiImportSnapshot = snapshot with
+        {
+            Views = snapshot.Views.Select(view => view with
+            {
+                TabPosition = apiPositions[view.Number],
+            }).ToList(),
+        };
         var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
 
         var importer = new ProjectImporter(targetClient)
@@ -230,10 +245,21 @@ public class BrowserRoundTripTests
             RepositoryMapping = RepositoryMapping,
             UserMapping = userMapping,
         };
-        var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
         try
         {
-            var viewImporter = new ViewUiImporter(targetSession);
+            var initialReport = await new ProjectVerifier(targetClient)
+            {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
+            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Contains(initialReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
+
+            var viewImporter = new ViewUiImporter(targetSession, targetClient);
             await viewImporter.EnrichAsync(
                 snapshot,
                 TargetOrg,
@@ -242,6 +268,16 @@ public class BrowserRoundTripTests
                 result.ViewNumbers,
                 cancellationToken);
             Assert.Empty(viewImporter.Warnings);
+
+            var apiOnlyReport = await new ProjectVerifier(targetClient)
+            {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
+            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.DoesNotContain(apiOnlyReport.Differences, difference =>
+                difference.Category == "View"
+                && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
 
             // Verify re-exports the target through GraphQL and its browser post-export hook.
             ProjectSnapshot? reExported = null;
@@ -264,8 +300,9 @@ public class BrowserRoundTripTests
             Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
 
             Assert.Equal(snapshot.Views.Count, target.Views.Count);
-            // Tab order re-creation is out of scope for v1 (PLAN §8.1) and target view
-            // numbers are re-assigned, so views are matched by name instead of position.
+            Assert.Equal(
+                snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name),
+                target.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
             foreach (var expected in snapshot.Views)
             {
                 var actual = Assert.Single(target.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));

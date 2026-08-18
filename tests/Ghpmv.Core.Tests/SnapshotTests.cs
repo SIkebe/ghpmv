@@ -70,6 +70,7 @@ public class SnapshotTests
             new ViewSnapshot
             {
                 Number = 1,
+                TabPosition = 0,
                 Name = "View 1",
                 Layout = "TABLE_LAYOUT",
                 Filter = "is:issue -status:Done",
@@ -261,6 +262,35 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void View_without_tab_position_remains_backward_compatible()
+    {
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [],
+              "views": [{
+                "number": 7,
+                "name": "Legacy",
+                "layout": "TABLE_LAYOUT",
+                "groupByFields": [],
+                "sortByFields": [],
+                "verticalGroupByFields": [],
+                "visibleFields": []
+              }],
+              "workflows": [],
+              "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.Null(Assert.Single(restored!.Views).TabPosition);
+        Assert.Equal(1, restored.SchemaVersion);
+    }
+
+    [Fact]
     public void Serialized_json_contains_schema_version()
     {
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
@@ -300,6 +330,7 @@ public class SnapshotTests
             var restored = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
             Assert.Equal(original.SchemaVersion, restored.SchemaVersion);
             Assert.Equal(original.Project, restored.Project);
+            Assert.Equal(0, Assert.Single(restored.Views).TabPosition);
             Assert.Equal(original.Items.Count, restored.Items.Count);
             Assert.NotNull(restored.StatusUpdates);
             Assert.Equal(original.StatusUpdates!.Count, restored.StatusUpdates.Count);

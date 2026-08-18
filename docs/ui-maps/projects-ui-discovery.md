@@ -7,6 +7,7 @@
 | 操作 | セレクター | 備考 |
 |---|---|---|
 | View タブ | `getByRole('tab', { name: <viewName> })` | tablist は `navigation "Select view"` 内 |
+| View タブ並べ替え | `[role=tab][href$='/views/{number}']` の source を target の左右端へ drag-and-drop | View number で前方一致名を避ける。overflow 時は両 locator を `ScrollIntoViewIfNeededAsync` してから操作 |
 | 新規 View 作成 | `getByRole('tab', { name: 'New view' })` → menu `New view` → `menuitem "Table"/"Board"/"Roadmap"` | 選択と同時に view 作成・遷移(保存不要) |
 | View リネーム | タブをダブルクリック → `getByRole('textbox', { name: 'Change view name' })` → fill → Enter | 即時保存 |
 | View 設定メニュー | フィルターバーの `button "View"`(exact)| `menu > group "Configuration"` に `menuitem "Group by: <val>" / "Markers: <val>" / "Sort by: <val>" / "Dates: <val>" / "Zoom level: <val>" / "Slice by: <val>"`。**ラベルと現在値が name に結合**されるため部分一致(`name: /^Group by:/` 等)で特定する |
@@ -24,11 +25,12 @@
 3. **Auto-add workflow は org にリポジトリが 1 つ以上ないと設定不可**("No repositories found")。import 側で前提チェックが必要
 4. Workflow 閲覧モードでも設定値(フィルター文字列・対象リポジトリ・Set value)が DOM に出る → **Edit を押さずに UI-export 可能**
 5. View 系の設定変更は SPA 内で「Unsaved changes」になり、明示保存が必要(タブ名変更は例外で即時保存)
-6. GraphQL read-back: views { number name layout } / workflows { number name enabled } は UI 操作直後に反映される(遅延なし)
+6. GraphQL read-back: `views(orderBy:{field:POSITION}) { number name layout }` / workflows { number name enabled } は UI 操作直後に反映される。tab D&D 後だけは importer が短時間 poll して最終順を確認する
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
+  - tab order=Fixture Roadmap → View 1 → Fixture Board
   - 1=View 1 (TABLE): filter=`status:Todo`, Sort by=Fixture Number (asc), Slice by=Fixture Select, visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]

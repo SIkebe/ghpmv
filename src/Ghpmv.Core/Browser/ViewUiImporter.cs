@@ -22,12 +22,20 @@ public sealed class ViewUiImporter
     private static readonly string[] RoadmapDateSuffixes = [" start", " end"];
 
     private readonly BrowserSession _session;
+    private readonly GitHubGraphQLClient? _client;
     private readonly List<string> _warnings = [];
 
     public ViewUiImporter(BrowserSession session)
     {
         ArgumentNullException.ThrowIfNull(session);
         _session = session;
+    }
+
+    public ViewUiImporter(BrowserSession session, GitHubGraphQLClient client)
+        : this(session)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        _client = client;
     }
 
     /// <summary>Invoked with a human-readable progress message per view.</summary>
@@ -150,7 +158,266 @@ public sealed class ViewUiImporter
                 _warnings.Add($"view '{view.Name}': browser-only settings could not be applied — {exception.Message}");
             }
         }
+
+        await ReorderTabsAsync(
+            page,
+            snapshot,
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            viewNumbers,
+            cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task ReorderTabsAsync(
+        IPage page,
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        IReadOnlyDictionary<int, int> viewNumbers,
+        CancellationToken cancellationToken)
+    {
+        if (snapshot.Views.Count < 2 || snapshot.Views.Any(view => view.TabPosition is null))
+        {
+            return;
+        }
+
+        if (_client is null)
+        {
+            _warnings.Add("view tab order was captured but no GraphQL client was provided to the browser importer");
+            return;
+        }
+
+        var desired = snapshot.Views
+            .OrderBy(view => view.TabPosition)
+            .Select(view => viewNumbers.TryGetValue(view.Number, out var targetNumber)
+                ? targetNumber
+                : (int?)null)
+            .ToList();
+        if (desired.Any(number => number is null))
+        {
+            _warnings.Add("view tab order could not be applied because one or more source views have no target mapping");
+            return;
+        }
+
+        var desiredNumbers = desired.Select(number => number!.Value).ToList();
+        var targetTabs = await FetchTargetTabsAsync(
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            cancellationToken).ConfigureAwait(false);
+        var importedNumbers = desiredNumbers.ToHashSet();
+        var currentNumbers = targetTabs
+            .Where(tab => importedNumbers.Contains(tab.Number))
+            .Select(tab => tab.Number)
+            .ToList();
+        if (currentNumbers.Count != desiredNumbers.Count)
+        {
+            _warnings.Add("view tab order could not be applied because the target View list is incomplete");
+            return;
+        }
+
+        var moves = BuildTabMovePlan(currentNumbers, desiredNumbers);
+        if (moves.Count == 0)
+        {
+            return;
+        }
+
+        var names = targetTabs.ToDictionary(tab => tab.Number, tab => tab.Name);
+        OnProgress?.Invoke(string.Create(
+            CultureInfo.InvariantCulture,
+            $"Reordering View tabs with {moves.Count} drag operation(s)..."));
+        foreach (var move in moves)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var source = Sel.DraggableViewTab(page, move.ViewNumber);
+                var anchor = Sel.DraggableViewTab(page, move.AnchorViewNumber);
+                await source.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
+                await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
+                var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
+                await source.DragToAsync(anchor, new()
+                {
+                    TargetPosition = new()
+                    {
+                        X = move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2),
+                        Y = anchorBox.Height / 2,
+                    },
+                }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+            {
+                _warnings.Add($"view tab '{names[move.ViewNumber]}' could not be reordered — {exception.Message}");
+            }
+        }
+
+        var actualNumbers = await ReadImportedTabOrderAsync(
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            importedNumbers,
+            desiredNumbers,
+            cancellationToken).ConfigureAwait(false);
+        if (!desiredNumbers.SequenceEqual(actualNumbers))
+        {
+            _warnings.Add(
+                $"view tab order could not be fully applied (expected [{FormatOrder(desiredNumbers, names)}], actual [{FormatOrder(actualNumbers, names)}])");
+        }
+    }
+
+    private async Task<IReadOnlyList<int>> ReadImportedTabOrderAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        HashSet<int> importedNumbers,
+        IReadOnlyList<int> desiredNumbers,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<int> result = [];
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
+
+            result = (await FetchTargetTabsAsync(
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                cancellationToken).ConfigureAwait(false))
+                .Where(tab => importedNumbers.Contains(tab.Number))
+                .Select(tab => tab.Number)
+                .ToList();
+            if (result.SequenceEqual(desiredNumbers))
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    private async Task<IReadOnlyList<TargetTab>> FetchTargetTabsAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var ownerField = ownerType == ProjectOwnerType.User ? "user" : "organization";
+        var query = TargetTabOrderQueryTemplate.Replace("__OWNER__", ownerField, StringComparison.Ordinal);
+        var data = await _client!.QueryAsync(
+            query,
+            new { login = ownerLogin, number = projectNumber },
+            cancellationToken).ConfigureAwait(false);
+        var project = data.GetProperty(ownerField).GetProperty("projectV2");
+        if (project.ValueKind == System.Text.Json.JsonValueKind.Null)
+        {
+            throw new GitHubGraphQLException(
+                $"Project #{projectNumber.ToString(CultureInfo.InvariantCulture)} was not found while reading View tab order.");
+        }
+
+        return project.GetProperty("views").GetProperty("nodes").EnumerateArray()
+            .Select(node => new TargetTab(
+                node.GetProperty("number").GetInt32(),
+                node.GetProperty("name").GetString() ?? string.Empty))
+            .ToList();
+    }
+
+    internal static IReadOnlyList<TabMove> BuildTabMovePlan(
+        IReadOnlyList<int> current,
+        IReadOnlyList<int> desired)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(desired);
+        if (current.Count != desired.Count
+            || current.Distinct().Count() != current.Count
+            || desired.Distinct().Count() != desired.Count
+            || !current.ToHashSet().SetEquals(desired))
+        {
+            throw new ArgumentException("Current and desired tab orders must contain the same unique View numbers.");
+        }
+
+        if (current.SequenceEqual(desired))
+        {
+            return [];
+        }
+
+        var desiredIndexes = desired
+            .Select((number, index) => (number, index))
+            .ToDictionary(pair => pair.number, pair => pair.index);
+        var sequence = current.Select(number => desiredIndexes[number]).ToArray();
+        var lengths = Enumerable.Repeat(1, sequence.Length).ToArray();
+        var previous = Enumerable.Repeat(-1, sequence.Length).ToArray();
+        var longestEnd = 0;
+        for (var index = 0; index < sequence.Length; index++)
+        {
+            for (var candidate = 0; candidate < index; candidate++)
+            {
+                if (sequence[candidate] < sequence[index]
+                    && lengths[candidate] + 1 > lengths[index])
+                {
+                    lengths[index] = lengths[candidate] + 1;
+                    previous[index] = candidate;
+                }
+            }
+
+            if (lengths[index] > lengths[longestEnd])
+            {
+                longestEnd = index;
+            }
+        }
+
+        var fixedTabs = new HashSet<int>();
+        for (var index = longestEnd; index >= 0; index = previous[index])
+        {
+            fixedTabs.Add(current[index]);
+            if (previous[index] < 0)
+            {
+                break;
+            }
+        }
+
+        var simulated = current.ToList();
+        var moves = new List<TabMove>(desired.Count - fixedTabs.Count);
+        for (var index = desired.Count - 1; index >= 0; index--)
+        {
+            var number = desired[index];
+            if (fixedTabs.Contains(number))
+            {
+                continue;
+            }
+
+            simulated.Remove(number);
+            if (index + 1 < desired.Count)
+            {
+                var anchor = desired[index + 1];
+                moves.Add(new TabMove(number, anchor, PlaceBefore: true));
+                simulated.Insert(simulated.IndexOf(anchor), number);
+            }
+            else
+            {
+                var anchor = simulated[^1];
+                moves.Add(new TabMove(number, anchor, PlaceBefore: false));
+                simulated.Add(number);
+            }
+        }
+
+        return moves;
+    }
+
+    private static string FormatOrder(IEnumerable<int> order, Dictionary<int, string> names)
+        => string.Join(", ", order.Select(number => names.TryGetValue(number, out var name)
+            ? name
+            : number.ToString(CultureInfo.InvariantCulture)));
+
+    internal sealed record TabMove(int ViewNumber, int AnchorViewNumber, bool PlaceBefore);
+
+    private sealed record TargetTab(int Number, string Name);
 
     // ----- settings -----
 
@@ -620,4 +887,17 @@ public sealed class ViewUiImporter
 
         return false;
     }
+
+    private const string TargetTabOrderQueryTemplate =
+        """
+        query($login: String!, $number: Int!) {
+          __OWNER__(login: $login) {
+            projectV2(number: $number) {
+              views(first: 50, orderBy: { field: POSITION, direction: ASC }) {
+                nodes { number name }
+              }
+            }
+          }
+        }
+        """;
 }

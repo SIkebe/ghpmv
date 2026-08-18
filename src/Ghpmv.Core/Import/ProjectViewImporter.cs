@@ -63,7 +63,7 @@ internal sealed class ProjectViewImporter
         var usedTargetIds = new HashSet<string>(StringComparer.Ordinal);
         var initiallyExistingTargetIds = targetViews.Select(view => view.Id).ToHashSet(StringComparer.Ordinal);
         var viewNumbers = new Dictionary<int, int>();
-        var orderedSourceViews = sourceViews.OrderBy(view => view.Number).ToArray();
+        var orderedSourceViews = OrderSourceViews(sourceViews).ToArray();
 
         for (var index = 0; index < orderedSourceViews.Length; index++)
         {
@@ -96,7 +96,44 @@ internal sealed class ProjectViewImporter
             }
         }
 
+        if (!BrowserEnrichmentPlanned)
+        {
+            await WarnAboutUnappliedTabOrderAsync(
+                orderedSourceViews,
+                projectId,
+                viewNumbers,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         return viewNumbers;
+    }
+
+    private static IOrderedEnumerable<ViewSnapshot> OrderSourceViews(IReadOnlyList<ViewSnapshot> sourceViews)
+        => sourceViews
+            .OrderBy(view => view.TabPosition ?? int.MaxValue)
+            .ThenBy(view => view.Number);
+
+    private async Task WarnAboutUnappliedTabOrderAsync(
+        IReadOnlyList<ViewSnapshot> orderedSourceViews,
+        string projectId,
+        Dictionary<int, int> viewNumbers,
+        CancellationToken cancellationToken)
+    {
+        if (orderedSourceViews.Any(view => view.TabPosition is null))
+        {
+            return;
+        }
+
+        var expected = orderedSourceViews.Select(view => viewNumbers[view.Number]).ToList();
+        var importedNumbers = expected.ToHashSet();
+        var actual = (await FetchViewsAsync(projectId, cancellationToken).ConfigureAwait(false))
+            .Where(view => importedNumbers.Contains(view.Number))
+            .Select(view => view.Number)
+            .ToList();
+        if (!expected.SequenceEqual(actual))
+        {
+            Warn("view tab order differs from the snapshot; public APIs cannot repair it, so rerun import with browser automation");
+        }
     }
 
     private void ValidatePendingOperations(IReadOnlyList<ViewSnapshot> sourceViews, string projectId)
@@ -436,7 +473,7 @@ internal sealed class ProjectViewImporter
         query($projectId: ID!, $first: Int!, $after: String) {
           node(id: $projectId) {
             ... on ProjectV2 {
-              views(first: $first, after: $after) {
+              views(first: $first, after: $after, orderBy: { field: POSITION, direction: ASC }) {
                 nodes { id number name layout }
                 pageInfo { hasNextPage endCursor }
               }

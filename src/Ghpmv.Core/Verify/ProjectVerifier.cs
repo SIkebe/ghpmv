@@ -651,6 +651,8 @@ public sealed class ProjectVerifier
         List<VerifyDifference> differences,
         HashSet<string> notVerified)
     {
+        CompareViewOrder(source, target, differences, notVerified);
+
         foreach (var name in Names(source.Select(v => v.Name), target.Select(v => v.Name)))
         {
             var s = source.Where(v => string.Equals(v.Name, name, StringComparison.Ordinal)).ToList();
@@ -720,6 +722,40 @@ public sealed class ProjectVerifier
                         $"views named '{name}': combined API and UI settings do not match");
                 }
             }
+        }
+    }
+
+    private static void CompareViewOrder(
+        IReadOnlyList<ViewSnapshot> source,
+        IReadOnlyList<ViewSnapshot> target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source.Count == 0 || source.Any(view => view.TabPosition is null))
+        {
+            return;
+        }
+
+        if (target.Any(view => view.TabPosition is null))
+        {
+            notVerified.Add(ViewCategory);
+            Add(differences, VerifySeverity.Warning, ViewCategory,
+                "view tab order was captured in the source but could not be read from the target");
+            return;
+        }
+
+        var sourceOrder = source
+            .OrderBy(view => view.TabPosition)
+            .Select(view => view.Name)
+            .ToList();
+        var targetOrder = target
+            .OrderBy(view => view.TabPosition)
+            .Select(view => view.Name)
+            .ToList();
+        if (!sourceOrder.SequenceEqual(targetOrder, StringComparer.Ordinal))
+        {
+            AddError(differences, ViewCategory,
+                $"view tab order mismatch (source [{string.Join(", ", sourceOrder)}], target [{string.Join(", ", targetOrder)}])");
         }
     }
 

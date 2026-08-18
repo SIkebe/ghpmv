@@ -199,6 +199,12 @@ public sealed record ViewSnapshot
 {
     public required int Number { get; init; }
 
+    /// <summary>
+    /// Zero-based tab position from the GraphQL View connection ordered by POSITION.
+    /// Null for schema-v1 snapshots written before tab-order support.
+    /// </summary>
+    public int? TabPosition { get; init; }
+
     public required string Name { get; init; }
 
     /// <summary>GraphQL <c>ProjectV2ViewLayout</c> (TABLE_LAYOUT, BOARD_LAYOUT, ROADMAP_LAYOUT).</summary>

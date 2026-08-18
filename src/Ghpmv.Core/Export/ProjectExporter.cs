@@ -415,6 +415,7 @@ public sealed class ProjectExporter
             views.Add(new ViewSnapshot
             {
                 Number = node.GetProperty("number").GetInt32(),
+                TabPosition = views.Count,
                 Name = node.GetProperty("name").GetString() ?? string.Empty,
                 Layout = node.GetProperty("layout").GetString() ?? string.Empty,
                 Filter = GetOptionalString(node, "filter"),
@@ -751,7 +752,7 @@ public sealed class ProjectExporter
               readme
               public
               closed
-              views(first: 50) {
+              views(first: 50, orderBy: { field: POSITION, direction: ASC }) {
                 nodes {
                   number
                   name
