@@ -198,7 +198,7 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 |---|---|---|
 | 通常の Project 移行 | `export` / `import` / `verify` | README の [Token permissions](../README.md#token-permissions) にある command 別の最小権限。 |
 | API-backed test fixture 作成 | `setup --fixture` | 下記の fine-grained PAT、または classic PAT。 |
-| 実 API integration suite | `dotnet test tests/Ghpmv.Integration.Tests` | 上記 fixture 権限に加え、token owner が source / target 両 organization で disposable Team と private repository を作成・削除できること。classic PAT は `admin:org` と `repo`、fine-grained PAT は **Organization permissions → Members: Read and write** と **Repository permissions → Administration: Read and write**（All repositories）が必要。suite は両 organization に1つの`GHPMV_TEST_TOKEN`を使うため、通常のcross-organization構成では両方を操作できるclassic PATを使う。 |
+| 実 API integration suite | `dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj` | 上記 fixture 権限に加え、token owner が source / target 両 organization で disposable Team と private repository を作成・削除できること。classic PAT は `admin:org` と `repo`、fine-grained PAT は **Organization permissions → Members: Read and write** と **Repository permissions → Administration: Read and write**（All repositories）が必要。suite は両 organization に1つの`GHPMV_TEST_TOKEN`を使うため、通常のcross-organization構成では両方を操作できるclassic PATを使う。 |
 | UI-only fixture 作成 | `setup --fixture-ui` | Project API を読める token と、同じユーザーで保存した browser profile。 |
 | GEI source | `gh gei migrate-repo --github-source-pat` | 下記の GEI source role / classic PAT scope。 |
 | GEI destination | `gh gei migrate-repo --github-target-pat` | 下記の GEI destination role / classic PAT scope。 |
