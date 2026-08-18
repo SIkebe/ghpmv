@@ -631,6 +631,43 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Positioned_duplicate_view_names_use_ui_settings_to_detect_a_swap()
+    {
+        var baseline = BuildSnapshot();
+        var status = baseline.Views[0] with
+        {
+            Number = 7,
+            TabPosition = 0,
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot { SliceBy = "Status" },
+        };
+        var assignees = status with
+        {
+            Number = 9,
+            TabPosition = 1,
+            Ui = new ViewUiSnapshot { SliceBy = "Assignees" },
+        };
+        var source = baseline with { Views = [status, assignees] };
+        var target = baseline with
+        {
+            Views =
+            [
+                assignees with { Number = 21, TabPosition = 0 },
+                status with { Number = 22, TabPosition = 1 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("views named 'Duplicate'", StringComparison.Ordinal)
+            && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal)
+            && difference.Message.Contains("combined API and UI settings", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();

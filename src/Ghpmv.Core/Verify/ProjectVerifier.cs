@@ -772,17 +772,25 @@ public sealed class ProjectVerifier
         {
             var sourceGroup = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
             var targetGroup = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
-            if (!MultisetEquals(sourceGroup, targetGroup, ViewApiEquals))
+            var compareUi = sourceGroup.All(view => view.Ui is not null)
+                && targetGroup.All(view => view.Ui is not null);
+            bool SameSemanticView(ViewSnapshot sourceView, ViewSnapshot targetView)
+                => ViewApiEquals(sourceView, targetView)
+                    && (!compareUi || ViewUiEquals(sourceView.Ui!, targetView.Ui!));
+
+            if (!MultisetEquals(sourceGroup, targetGroup, SameSemanticView))
             {
                 continue;
             }
 
             var sourcePositions = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
             var targetPositions = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
-            if (!sourcePositions.Zip(targetPositions).All(pair => ViewApiEquals(pair.First, pair.Second)))
+            if (!sourcePositions.Zip(targetPositions).All(pair => SameSemanticView(pair.First, pair.Second)))
             {
                 AddError(differences, ViewCategory,
-                    $"views named '{name}': tab order mismatch between API-visible settings");
+                    compareUi
+                        ? $"views named '{name}': tab order mismatch between combined API and UI settings"
+                        : $"views named '{name}': tab order mismatch between API-visible settings");
             }
         }
     }
