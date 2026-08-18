@@ -399,6 +399,8 @@ test flow:
 - default Burn up exclusion
 - order comparison
 - old snapshot の nullable Insights compatibility
+- identifier が chart filter だけに現れる場合の mapping template 出力、preflight analysis、transform
+  (`repo:`, `assignee:`, `author:`, `org:`)
 - historical points が comparison に入らないこと
 
 ## 11. Manual GEI + ghpmv E2E checklist
