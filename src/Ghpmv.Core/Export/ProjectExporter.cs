@@ -56,7 +56,11 @@ public sealed class ProjectExporter
         }
 
         var projectInfo = ParseProjectInfo(project);
-        var views = ParseViews(project.GetProperty("views"));
+        var views = await FetchViewsAsync(
+            project.GetProperty("views"),
+            ownerLogin,
+            projectNumber,
+            cancellationToken).ConfigureAwait(false);
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
         OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows. Fetching items and status updates...");
@@ -236,6 +240,27 @@ public sealed class ProjectExporter
         return nodes;
     }
 
+    private async Task<List<ViewSnapshot>> FetchViewsAsync(
+        JsonElement initialConnection,
+        string ownerLogin,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var views = ParseViews(initialConnection, startPosition: 0);
+        var connection = initialConnection;
+        while (TryGetNextPageCursor(connection, out var after))
+        {
+            var data = await _client.QueryAsync(
+                ViewsPageQuery,
+                new { login = ownerLogin, number = projectNumber, first = 50, after },
+                cancellationToken).ConfigureAwait(false);
+            connection = data.GetProperty(OwnerField).GetProperty("projectV2").GetProperty("views");
+            views.AddRange(ParseViews(connection, views.Count));
+        }
+
+        return views;
+    }
+
     private async Task<List<LinkedTeamSnapshot>> FetchLinkedTeamsAsync(
         string ownerLogin,
         int projectNumber,
@@ -407,7 +432,7 @@ public sealed class ProjectExporter
         return result;
     }
 
-    private static List<ViewSnapshot> ParseViews(JsonElement connection)
+    private static List<ViewSnapshot> ParseViews(JsonElement connection, int startPosition)
     {
         var views = new List<ViewSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
@@ -415,7 +440,7 @@ public sealed class ProjectExporter
             views.Add(new ViewSnapshot
             {
                 Number = node.GetProperty("number").GetInt32(),
-                TabPosition = views.Count,
+                TabPosition = startPosition + views.Count,
                 Name = node.GetProperty("name").GetString() ?? string.Empty,
                 Layout = node.GetProperty("layout").GetString() ?? string.Empty,
                 Filter = GetOptionalString(node, "filter"),
@@ -427,6 +452,20 @@ public sealed class ProjectExporter
         }
 
         return views;
+    }
+
+    private static bool TryGetNextPageCursor(JsonElement connection, out string after)
+    {
+        after = string.Empty;
+        if (!connection.TryGetProperty("pageInfo", out var pageInfo)
+            || !pageInfo.GetProperty("hasNextPage").GetBoolean())
+        {
+            return false;
+        }
+
+        after = pageInfo.GetProperty("endCursor").GetString()
+            ?? throw new GitHubGraphQLException("The View connection reported another page without an end cursor.");
+        return true;
     }
 
     private static List<string> ParseVisibleFields(JsonElement view)
@@ -708,6 +747,8 @@ public sealed class ProjectExporter
 
     private string FieldsQuery => FieldsQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
+    private string ViewsPageQuery => ViewsPageQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
+
     private string StatusUpdatesQuery => StatusUpdatesQueryTemplate.Replace("__OWNER__", OwnerField, StringComparison.Ordinal);
 
     private const string TeamsQuery =
@@ -765,12 +806,38 @@ public sealed class ProjectExporter
                     visibleFields(first: 50) { nodes { ... on ProjectV2FieldCommon { name } } }
                   }
                 }
+                pageInfo { hasNextPage endCursor }
               }
               workflows(first: 50) {
                 nodes { number name enabled }
               }
               repositories(first: 100) {
                 nodes { nameWithOwner }
+              }
+            }
+          }
+        }
+        """;
+
+    private const string ViewsPageQueryTemplate =
+        """
+        query($login: String!, $number: Int!, $first: Int!, $after: String) {
+          __OWNER__(login: $login) {
+            projectV2(number: $number) {
+              views(first: $first, after: $after, orderBy: { field: POSITION, direction: ASC }) {
+                nodes {
+                  number
+                  name
+                  layout
+                  filter
+                  groupByFields(first: 10) { nodes { ... on ProjectV2FieldCommon { name } } }
+                  verticalGroupByFields(first: 10) { nodes { ... on ProjectV2FieldCommon { name } } }
+                  sortByFields(first: 10) { nodes { direction field { ... on ProjectV2FieldCommon { name } } } }
+                  configuration {
+                    visibleFields(first: 50) { nodes { ... on ProjectV2FieldCommon { name } } }
+                  }
+                }
+                pageInfo { hasNextPage endCursor }
               }
             }
           }

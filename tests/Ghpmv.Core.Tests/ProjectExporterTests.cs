@@ -78,6 +78,40 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_paginates_position_ordered_views_without_resetting_tab_positions()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse(
+                """
+                [{"number":9,"name":"First","layout":"TABLE_LAYOUT","filter":null,
+                  "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                  "configuration":{"visibleFields":{"nodes":[]}}}]
+                """,
+                hasNextPage: true,
+                endCursor: "view-cursor"),
+            ViewsResponse(
+                """
+                [{"number":2,"name":"Second","layout":"BOARD_LAYOUT","filter":null,
+                  "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                  "configuration":{"visibleFields":{"nodes":[]}}}]
+                """),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["First", "Second"], snapshot.Views.Select(view => view.Name));
+        Assert.Equal([0, 1], snapshot.Views.Select(view => view.TabPosition));
+        Assert.Contains("\"after\":\"view-cursor\"", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("orderBy", handler.RequestBodies[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_reads_linked_issue_field_identity_and_definition_directly_from_project_fields()
     {
         using var handler = new StubHandler(
@@ -654,11 +688,25 @@ public class ProjectExporterTests
         ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
         ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
-    private static string MetadataResponse(string views) =>
+    private static string MetadataResponse(
+        string views,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
         "{\"data\":{\"organization\":{\"projectV2\":{" +
         "\"title\":\"Roadmap\",\"shortDescription\":null,\"readme\":null,\"public\":false,\"closed\":false," +
-        "\"views\":{\"nodes\":" + views + "},\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
+        "\"views\":{\"nodes\":" + views +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}," +
+        "\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
         "}}}}";
+
+    private static string ViewsResponse(
+        string views,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
+        "{\"data\":{\"organization\":{\"projectV2\":{\"views\":{\"nodes\":" + views +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
     private static string FieldsResponse(
         string fields,

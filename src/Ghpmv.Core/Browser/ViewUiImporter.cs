@@ -339,22 +339,19 @@ public sealed class ViewUiImporter
     {
         var ownerField = ownerType == ProjectOwnerType.User ? "user" : "organization";
         var query = TargetTabOrderQueryTemplate.Replace("__OWNER__", ownerField, StringComparison.Ordinal);
-        var data = await _client!.QueryAsync(
+        var tabs = new List<TargetTab>();
+        await foreach (var node in _client!.QueryPaginatedAsync(
             query,
-            new { login = ownerLogin, number = projectNumber },
-            cancellationToken).ConfigureAwait(false);
-        var project = data.GetProperty(ownerField).GetProperty("projectV2");
-        if (project.ValueKind == System.Text.Json.JsonValueKind.Null)
+            new { login = ownerLogin, number = projectNumber, first = 50 },
+            ownerField + ".projectV2.views",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
         {
-            throw new GitHubGraphQLException(
-                $"Project #{projectNumber.ToString(CultureInfo.InvariantCulture)} was not found while reading View tab order.");
+            tabs.Add(new TargetTab(
+                node.GetProperty("number").GetInt32(),
+                node.GetProperty("name").GetString() ?? string.Empty));
         }
 
-        return project.GetProperty("views").GetProperty("nodes").EnumerateArray()
-            .Select(node => new TargetTab(
-                node.GetProperty("number").GetInt32(),
-                node.GetProperty("name").GetString() ?? string.Empty))
-            .ToList();
+        return tabs;
     }
 
     internal static List<TabMove> BuildTabMovePlan(
@@ -919,11 +916,12 @@ public sealed class ViewUiImporter
 
     private const string TargetTabOrderQueryTemplate =
         """
-        query($login: String!, $number: Int!) {
+        query($login: String!, $number: Int!, $first: Int!, $after: String) {
           __OWNER__(login: $login) {
             projectV2(number: $number) {
-              views(first: 50, orderBy: { field: POSITION, direction: ASC }) {
+              views(first: $first, after: $after, orderBy: { field: POSITION, direction: ASC }) {
                 nodes { number name }
+                pageInfo { hasNextPage endCursor }
               }
             }
           }
