@@ -338,4 +338,258 @@ public class ItemImporterTests
             // Best-effort cleanup of the temp log directory.
         }
     }
+
+    [Fact]
+    public async Task Pull_request_item_is_relinked_to_the_target_repository_with_its_number_preserved()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var token = Token;
+        var suffix = Guid.NewGuid().ToString("N");
+        var sourceRepositoryName = $"ghpmv-pr-source-{suffix}";
+        var targetRepositoryName = $"ghpmv-pr-target-{suffix}";
+        var sourceProjectTitle = $"ghpmv-pr-source-project-{suffix}";
+        var targetProjectTitle = $"ghpmv-pr-target-project-{suffix}";
+        var projectLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        var itemLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-pr-item-{suffix}");
+
+        using var graphQl = IntegrationTestSettings.CreateClient(token);
+        using var rest = IntegrationTestSettings.CreateRestClient(token);
+        var sourceRepository = new DisposableRepositoryFixture(rest, SourceOrg, sourceRepositoryName);
+        var targetRepository = new DisposableRepositoryFixture(rest, TargetOrg, targetRepositoryName);
+        var repositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [sourceRepository.FullName] = targetRepository.FullName,
+        };
+        var cleanupFailures = new List<Exception>();
+        Exception? testFailure = null;
+
+        try
+        {
+            await sourceRepository.CreateAsync(cancellationToken);
+            var sourcePullRequestNumber = await sourceRepository.CreatePullRequestAsync(cancellationToken);
+            await targetRepository.CreateAsync(cancellationToken);
+            var targetPullRequestNumber = await targetRepository.CreatePullRequestAsync(cancellationToken);
+
+            Assert.Equal(sourcePullRequestNumber, targetPullRequestNumber);
+            Assert.True(sourcePullRequestNumber > 0);
+
+            var sourceProject = await TemporaryProjectFixture.CreateAsync(
+                graphQl,
+                SourceOrg,
+                sourceProjectTitle,
+                cancellationToken);
+            var sourcePullRequestId = await GetPullRequestIdAsync(
+                graphQl,
+                SourceOrg,
+                sourceRepositoryName,
+                sourcePullRequestNumber,
+                cancellationToken);
+            await graphQl.QueryAsync(
+                """
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) { item { id } }
+                }
+                """,
+                new { projectId = sourceProject.Id, contentId = sourcePullRequestId },
+                cancellationToken);
+
+            var exporter = new ProjectExporter(graphQl);
+            var sourceExport = await ExportUntilAsync(
+                exporter,
+                SourceOrg,
+                sourceProject.Number,
+                snapshot => snapshot.Items.Count == 1
+                    && snapshot.Items[0].Type == "PULL_REQUEST"
+                    && string.Equals(snapshot.Items[0].Repository, sourceRepository.FullName, StringComparison.OrdinalIgnoreCase)
+                    && snapshot.Items[0].Number == sourcePullRequestNumber,
+                cancellationToken);
+            var sourcePullRequest = Assert.Single(sourceExport.Items);
+            Assert.Equal("PULL_REQUEST", sourcePullRequest.Type);
+            Assert.Equal(sourceRepository.FullName, sourcePullRequest.Repository, ignoreCase: true);
+            Assert.Equal(sourcePullRequestNumber, sourcePullRequest.Number);
+
+            var snapshot = sourceExport with
+            {
+                Project = sourceExport.Project with { Title = targetProjectTitle },
+                Items = [sourcePullRequest with { Position = 0 }],
+            };
+            var projectImporter = new ProjectImporter(graphQl)
+            {
+                RepositoryMapping = repositoryMapping,
+                OperationLogDirectory = projectLogDirectory,
+            };
+            var targetProject = await projectImporter.ImportAsync(snapshot, TargetOrg, cancellationToken);
+            var itemResult = await new ItemImporter(graphQl)
+            {
+                RepositoryMapping = repositoryMapping,
+            }.ImportAsync(snapshot, targetProject, itemLogDirectory, cancellationToken);
+
+            Assert.Equal(1, itemResult.Created);
+            Assert.Equal(0, itemResult.Skipped);
+            Assert.Empty(itemResult.Warnings);
+
+            var targetExport = await ExportUntilAsync(
+                exporter,
+                TargetOrg,
+                targetProject.ProjectNumber,
+                exported => exported.Items.Count == 1
+                    && exported.Items[0].Type == "PULL_REQUEST"
+                    && string.Equals(exported.Items[0].Repository, targetRepository.FullName, StringComparison.OrdinalIgnoreCase)
+                    && exported.Items[0].Number == targetPullRequestNumber,
+                cancellationToken);
+            var importedPullRequest = Assert.Single(targetExport.Items);
+            Assert.Equal("PULL_REQUEST", importedPullRequest.Type);
+            Assert.Equal(targetRepository.FullName, importedPullRequest.Repository, ignoreCase: true);
+            Assert.Equal(sourcePullRequestNumber, importedPullRequest.Number);
+            Assert.Equal(targetPullRequestNumber, importedPullRequest.Number);
+        }
+        catch (Exception exception)
+        {
+            testFailure = exception;
+        }
+        finally
+        {
+            foreach (var cleanup in (Func<Task>[])[
+                () => TemporaryProjectFixture.DeleteAllByTitleAsync(
+                    graphQl,
+                    TargetOrg,
+                    targetProjectTitle,
+                    CancellationToken.None),
+                () => TemporaryProjectFixture.DeleteAllByTitleAsync(
+                    graphQl,
+                    SourceOrg,
+                    sourceProjectTitle,
+                    CancellationToken.None),
+                () => targetRepository.DeleteAsync(CancellationToken.None),
+                () => sourceRepository.DeleteAsync(CancellationToken.None),
+            ])
+            {
+                try
+                {
+                    await cleanup();
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailures.Add(exception);
+                }
+            }
+
+            foreach (var directory in (string[])[projectLogDirectory, itemLogDirectory])
+            {
+                if (Directory.Exists(directory))
+                {
+                    try
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                    catch (Exception exception)
+                    {
+                        cleanupFailures.Add(exception);
+                    }
+                }
+            }
+        }
+
+        if (testFailure is not null)
+        {
+            if (cleanupFailures.Count > 0)
+            {
+                throw new AggregateException(
+                    "The pull-request relinking test failed and one or more owned resources could not be cleaned up.",
+                    [testFailure, .. cleanupFailures]);
+            }
+
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(testFailure).Throw();
+        }
+
+        if (cleanupFailures.Count > 0)
+        {
+            throw new AggregateException(
+                "One or more pull-request relinking resources could not be cleaned up.",
+                cleanupFailures);
+        }
+    }
+
+    private static async Task<string> GetPullRequestIdAsync(
+        GitHubGraphQLClient client,
+        string owner,
+        string name,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        var data = await client.QueryAsync(
+            """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) { id }
+              }
+            }
+            """,
+            new { owner, name, number },
+            cancellationToken);
+        return data.GetProperty("repository").GetProperty("pullRequest").GetProperty("id").GetString()!;
+    }
+
+    private sealed class DisposableRepositoryFixture(
+        GitHubRestClient rest,
+        string owner,
+        string name)
+    {
+        public string FullName => $"{owner}/{name}";
+
+        public async Task CreateAsync(CancellationToken cancellationToken)
+        {
+            _ = await rest.PostAsync(
+                $"orgs/{owner}/repos",
+                new { name, @private = true },
+                cancellationToken);
+            var readmeContent = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes($"# {name}\n\nDisposable ghpmv pull-request relinking fixture.\n"));
+            _ = await rest.PutAsync(
+                $"repos/{FullName}/contents/README.md",
+                new { message = "Initial commit", content = readmeContent },
+                cancellationToken);
+        }
+
+        public async Task<int> CreatePullRequestAsync(CancellationToken cancellationToken)
+        {
+            var repository = await rest.GetAsync($"repos/{FullName}", cancellationToken)
+                ?? throw new InvalidOperationException($"Repository '{FullName}' was not found after creation.");
+            var defaultBranch = repository.GetProperty("default_branch").GetString()
+                ?? throw new InvalidOperationException($"Repository '{FullName}' returned no default branch.");
+            var baseReference = await rest.GetAsync(
+                $"repos/{FullName}/git/ref/heads/{defaultBranch}",
+                cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Default branch '{defaultBranch}' was not found in '{FullName}'.");
+            var baseSha = baseReference.GetProperty("object").GetProperty("sha").GetString()
+                ?? throw new InvalidOperationException(
+                    $"Default branch '{defaultBranch}' returned no SHA for '{FullName}'.");
+            var branchName = $"ghpmv-pr-{Guid.NewGuid():N}";
+            _ = await rest.PostAsync(
+                $"repos/{FullName}/git/refs",
+                new { @ref = $"refs/heads/{branchName}", sha = baseSha },
+                cancellationToken);
+            var fileContent = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes($"Disposable pull request for {FullName}.\n"));
+            _ = await rest.PutAsync(
+                $"repos/{FullName}/contents/pull-request.txt",
+                new { message = "Add pull request content", content = fileContent, branch = branchName },
+                cancellationToken);
+            var pullRequest = await rest.PostAsync(
+                $"repos/{FullName}/pulls",
+                new
+                {
+                    title = $"Disposable pull request {Guid.NewGuid():N}",
+                    body = "Owned by the ghpmv pull-request relinking integration test.",
+                    head = branchName,
+                    @base = defaultBranch,
+                },
+                cancellationToken);
+            return pullRequest.GetProperty("number").GetInt32();
+        }
+
+        public Task DeleteAsync(CancellationToken cancellationToken)
+            => rest.DeleteAsync($"repos/{FullName}", cancellationToken);
+    }
 }
