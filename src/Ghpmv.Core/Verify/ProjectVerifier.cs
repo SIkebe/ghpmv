@@ -752,16 +752,38 @@ public sealed class ProjectVerifier
 
         var sourceOrder = source
             .OrderBy(view => view.TabPosition)
-            .Select(view => view.Name)
             .ToList();
         var targetOrder = target
             .OrderBy(view => view.TabPosition)
-            .Select(view => view.Name)
             .ToList();
-        if (!sourceOrder.SequenceEqual(targetOrder, StringComparer.Ordinal))
+        if (!sourceOrder.Select(view => view.Name).SequenceEqual(
+            targetOrder.Select(view => view.Name),
+            StringComparer.Ordinal))
         {
             AddError(differences, ViewCategory,
-                $"view tab order mismatch (source [{string.Join(", ", sourceOrder)}], target [{string.Join(", ", targetOrder)}])");
+                $"view tab order mismatch (source [{string.Join(", ", sourceOrder.Select(view => view.Name))}], target [{string.Join(", ", targetOrder.Select(view => view.Name))}])");
+            return;
+        }
+
+        foreach (var name in sourceOrder
+            .GroupBy(view => view.Name, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key))
+        {
+            var sourceGroup = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
+            var targetGroup = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
+            if (!MultisetEquals(sourceGroup, targetGroup, ViewApiEquals))
+            {
+                continue;
+            }
+
+            var sourcePositions = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
+            var targetPositions = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
+            if (!sourcePositions.Zip(targetPositions).All(pair => ViewApiEquals(pair.First, pair.Second)))
+            {
+                AddError(differences, ViewCategory,
+                    $"views named '{name}': tab order mismatch between API-visible settings");
+            }
         }
     }
 
