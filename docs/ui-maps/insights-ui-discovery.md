@@ -104,7 +104,7 @@ accessibility tree:
 | chart link | Custom charts list 内 `getByRole('link', { name: chartName, exact: true })` | verified。duplicate name は §12 の blocker |
 | chart options | chart link 内 `getByRole('button', { name: 'Chart options', exact: true })` | verified。page 全体では同名が複数ある |
 | create | `getByRole('button', { name: 'New chart', exact: true })` | verified |
-| current chart heading | `GetByRole(Heading, new() { NameRegex = new($"^{Regex.Escape(name)} Edit chart name Configure$"), Level = 2 })` | verified。dynamic name は必ず `Regex.Escape` し、実測済み control suffix まで anchor して `Chart` と `Chart 1` を混同しない |
+| current chart heading | `GetByRole(AriaRole.Heading, new() { NameRegex = new($"^{Regex.Escape(name)} Edit chart name Configure$"), Level = 2 })` | verified。dynamic name は必ず `Regex.Escape` し、実測済み control suffix まで anchor して `Chart` と `Chart 1` を混同しない |
 | rename entry | heading 内 `getByRole('button', { name: 'Edit chart name', exact: true })` | verified |
 | configure entry | heading 内 `getByRole('button', { name: 'Configure', exact: true })` | verified |
 | configure pane | `getByRole('heading', { name: 'Configure chart', level: 2 })` を起点に scope | verified |
@@ -244,14 +244,17 @@ chart number を保存するだけでは、GitHub が作成してから local lo
 
 既存 create mutation と同じ fail-closed lifecycle を使う:
 
-1. click 前に Custom charts の href/number baseline と pending chart operation を
+1. pending state の永続化や UI write より前に `BeforeWriteAsync` / `ValidateAuthenticationAsync` を通し、
+   browser host/login が target API token owner と一致することを検証する。失効・差し替え済み profile は
+   chart を作成せず失敗する。
+2. click 前に Custom charts の href/number baseline と pending chart operation を
    `project-import-log.json` (または専用 browser-operation log) へ atomic write する。
-2. `New chart` を 1 回だけ click する。
-3. 遷移先 href と baseline の差分が exactly one なら、その target chart number を pending operation へ
+3. `New chart` を 1 回だけ click する。
+4. 遷移先 href と baseline の差分が exactly one なら、その target chart number を pending operation へ
    atomic bind して設定を続ける。
-4. response / navigation が ambiguous な場合、再 click しない。resume は current list と記録済み baseline を
+5. response / navigation が ambiguous な場合、再 click しない。resume は current list と記録済み baseline を
    比較して exactly one の new chart だけを adopt する。
-5. new chart が 0 または複数なら manual reconciliation error で停止する。
+6. new chart が 0 または複数なら manual reconciliation error で停止する。
 
 この project-level lifecycle を item/status 用 `import-log.json` に混在させない。
 
@@ -460,7 +463,8 @@ Discovery blockers を解消後、次の順で分ける。
 1. **Contract / pure logic**: nullable custom chart collection (`CurrentSchemaVersion` は上げない)、
    normalization、field identity、comparison、backward compatibility。historical points は model に入れない。
 2. **Selectors + read-only exporter**: `Sel.cs`、custom list/order、filter/config reader、default exclusion。
-3. **Importer lifecycle**: create → target chart ID persist → rename → configure → filter → read-back。
+3. **Importer lifecycle**: mandatory host/login preflight → pending create + baseline persist → create/reconcile →
+   target chart ID persist → rename → configure → filter → read-back。
 4. **Delete / conflict / resume / order**: verified menu/D&D selectors 後に実装。
 5. **Verifier**: exporter を再利用し property-level diff。historical points は明示的に対象外。
 6. **Fixture + E2E + manual plan**: §10 / §11 を実装し、GitHub.com と GHEC/GEI で確認。
