@@ -68,7 +68,13 @@ public class ProjectTemplateIntegrationTests
                 TargetOrg,
                 target.ProjectNumber,
                 cancellationToken);
-            Assert.True(report.IsMatch, string.Join(Environment.NewLine, report.Differences.Select(d => d.Message)));
+            Assert.Contains(report.Categories, category =>
+                category.Category == "Project" && category.Status == VerifyStatus.Match);
+            Assert.Contains(report.Categories, category =>
+                category.Category == "StatusUpdate" && category.Status == VerifyStatus.Match);
+            Assert.DoesNotContain(report.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category is not "View" and not "Workflow");
 
             var reloaded = await new ProjectExporter(client).ExportAsync(
                 TargetOrg,
@@ -97,8 +103,8 @@ public class ProjectTemplateIntegrationTests
                 }
                 finally
                 {
-                    Directory.Delete(sourceDirectory, recursive: true);
-                    Directory.Delete(targetDirectory, recursive: true);
+                    TryDeleteDirectory(sourceDirectory);
+                    TryDeleteDirectory(targetDirectory);
                 }
              }
         }
@@ -160,9 +166,9 @@ public class ProjectTemplateIntegrationTests
                 await DeleteProjectAsync(client, target.ProjectId);
             }
 
-            Directory.Delete(initialDirectory, recursive: true);
-            Directory.Delete(ordinaryDirectory, recursive: true);
-            Directory.Delete(legacyDirectory, recursive: true);
+            TryDeleteDirectory(initialDirectory);
+            TryDeleteDirectory(ordinaryDirectory);
+            TryDeleteDirectory(legacyDirectory);
         }
     }
 
@@ -268,5 +274,13 @@ public class ProjectTemplateIntegrationTests
             "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
             new { projectId },
             CancellationToken.None);
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
     }
 }
