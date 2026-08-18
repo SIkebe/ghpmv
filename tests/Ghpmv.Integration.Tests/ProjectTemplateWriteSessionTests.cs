@@ -31,7 +31,7 @@ public class ProjectTemplateWriteSessionTests
     public async Task Template_state_is_restored_after_status_update_writes()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var projectTitle = NewTestTitle();
         string? projectId = null;
@@ -136,7 +136,7 @@ public class ProjectTemplateWriteSessionTests
     public async Task Prepare_on_a_non_template_project_requires_no_restoration()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var projectTitle = NewTestTitle();
         string? projectId = null;

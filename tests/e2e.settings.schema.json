@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/SIkebe/ghpmv/tests/e2e.settings.schema.json",
+  "title": "ghpmv E2E settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "target", "fixtures", "users", "gei", "execution"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "source": { "$ref": "#/$defs/endpoint" },
+    "target": { "$ref": "#/$defs/endpoint" },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["integration", "browser"],
+      "properties": {
+        "integration": { "$ref": "#/$defs/fixture" },
+        "browser": { "$ref": "#/$defs/fixture" }
+      }
+    },
+    "users": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceBrowserLogin", "targetBrowserLogin", "collaboratorLogin", "mappings"],
+      "properties": {
+        "sourceBrowserLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "targetBrowserLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "collaboratorLogin": { "$ref": "#/$defs/userLogin" },
+        "mappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sourceLogin", "targetLogin"],
+            "properties": {
+              "sourceLogin": { "$ref": "#/$defs/userLogin" },
+              "targetLogin": { "$ref": "#/$defs/userLogin" }
+            }
+          }
+        }
+      }
+    },
+    "gei": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRepository",
+        "targetRepository",
+        "targetRepositoryVisibility",
+        "sourceTokenEnvironmentVariable",
+        "targetTokenEnvironmentVariable",
+        "sourceTokenOwnerLogin",
+        "targetTokenOwnerLogin",
+        "sourceRole",
+        "targetRole"
+      ],
+      "properties": {
+        "sourceRepository": { "$ref": "#/$defs/repositoryName" },
+        "targetRepository": { "$ref": "#/$defs/repositoryName" },
+        "targetRepositoryVisibility": { "enum": ["private", "internal", "public"] },
+        "sourceTokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "May match the source ghpmv token variable, but must not match either target-side token variable for cross-deployment GEI."
+        },
+        "targetTokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "May match the target ghpmv token variable, but must not match either source-side token variable for cross-deployment GEI."
+        },
+        "sourceTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "targetTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
+        "sourceRole": { "$ref": "#/$defs/geiRole" },
+        "targetRole": { "$ref": "#/$defs/geiRole" }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "fixturePreparation",
+        "repositoryPreparationMode",
+        "reuseSourceFixture",
+        "createTemporaryTargetProject"
+      ],
+      "properties": {
+        "fixturePreparation": { "enum": ["existing", "create"] },
+        "repositoryPreparationMode": { "enum": ["gei", "fixture-seed"] },
+        "reuseSourceFixture": { "type": "boolean" },
+        "createTemporaryTargetProject": { "type": "boolean" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "execution": {
+            "properties": {
+              "repositoryPreparationMode": { "const": "gei" }
+            },
+            "required": ["repositoryPreparationMode"]
+          },
+          "target": {
+            "properties": {
+              "apiBaseUrl": { "pattern": "^https://api\\.[A-Za-z0-9-]+\\.ghe\\.com" }
+            },
+            "required": ["apiBaseUrl"]
+          }
+        },
+        "required": ["execution", "target"]
+      },
+      "then": {
+        "properties": {
+          "target": {
+            "properties": {
+              "uploadsBaseUrl": {
+                "type": "string",
+                "pattern": "^https://uploads\\.[A-Za-z0-9-]+\\.ghe\\.com/?$"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "organization",
+        "apiBaseUrl",
+        "webBaseUrl",
+        "uploadsBaseUrl",
+        "browserProfile",
+        "browserStateEnvironmentVariable",
+        "tokenEnvironmentVariable"
+      ],
+      "properties": {
+        "organization": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
+        "apiBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://api(?:\\.github\\.com|\\.[A-Za-z0-9-]+\\.ghe\\.com)(?:/graphql)?/?$"
+        },
+        "webBaseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://(?:github\\.com|[A-Za-z0-9-]+\\.ghe\\.com)/?$"
+        },
+        "uploadsBaseUrl": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://uploads(?:\\.github\\.com|\\.[A-Za-z0-9-]+\\.ghe\\.com)/?$"
+            }
+          ]
+        },
+        "browserProfile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "browserStateEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must not match either endpoint's tokenEnvironmentVariable."
+        },
+        "tokenEnvironmentVariable": {
+          "$ref": "#/$defs/environmentVariable",
+          "description": "Must not match either endpoint's browserStateEnvironmentVariable."
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectNumber", "sourceRepository", "targetRepository"],
+      "properties": {
+        "projectNumber": { "type": "integer", "minimum": 1 },
+        "sourceRepository": { "$ref": "#/$defs/repositoryName" },
+        "targetRepository": { "$ref": "#/$defs/repositoryName" }
+      }
+    },
+    "environmentVariable": {
+      "type": "string",
+      "pattern": "^(?!(?:ghp|gho|ghu|ghs|ghr|github_pat)_)[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "geiRole": {
+      "enum": ["owner", "migrator-active", "migrator-pending"]
+    },
+    "repositoryName": {
+      "type": "string",
+      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,100}$"
+    },
+    "userLogin": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?$"
+    },
+    "optionalUserLogin": {
+      "type": "string",
+      "pattern": "^(?:|[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?)$"
+    }
+  }
+}

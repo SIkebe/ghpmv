@@ -158,6 +158,8 @@ gh extension upgrade github/gh-gei
 
 `.env` に次のプレースホルダーを用意しています。実行前にローカルで値を入れてください。
 
+PAT以外の繰り返し利用する値は、コメント付きの[`tests/e2e.settings.jsonc`](../tests/e2e.settings.jsonc)で管理できます。環境固有値はgitignore対象の`tests/e2e.settings.local.jsonc`へコピーし、Organization、repository、Project番号、source/target browser login、GEI role、EMUを含むuser mappingを記録します。PAT値はJSONCへ書かず、設定内にはPATを保持する環境変数名だけを書きます。
+
 | 変数 | 用途 |
 |---|---|
 | `GHPMV_SOURCE_TOKEN` | source fixture 作成と `ghpmv export` に使う token。 |

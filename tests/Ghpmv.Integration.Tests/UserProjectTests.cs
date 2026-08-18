@@ -27,7 +27,7 @@ public class UserProjectTests
     public async Task User_project_export_import_round_trip()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
 
         var viewer = await client.QueryAsync("query { viewer { id login } }", cancellationToken: cancellationToken);
         var viewerId = viewer.GetProperty("viewer").GetProperty("id").GetString()!;

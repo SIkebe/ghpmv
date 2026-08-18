@@ -59,6 +59,12 @@ dotnet artifacts/fdd/ghpmv.dll --version
 
 ここで扱う `GHPMV_TEST_*` はメンテナー向けの共有 fixture テスト用です。通常の利用者が Project を移行する際の token 権限ではありません。移行用の最小権限は README の [Token permissions](../README.md#token-permissions)、fixture を新規作成する権限は [MANUAL_TEST_PLAN.md の 4.3](MANUAL_TEST_PLAN.md#fixture-token-permissions) を参照してください。
 
+Organization、Project番号、repository、browser profile、GEI、user mappingなどの非secret値は、コメント付きの [`tests/e2e.settings.jsonc`](../tests/e2e.settings.jsonc) にまとめています。環境固有の値は、このファイルを `tests/e2e.settings.local.jsonc` にコピーして編集してください。local fileはgitignoreされます。別の場所に置く場合は、`GHPMV_E2E_SETTINGS`にそのfile pathを設定します。
+
+Organization、Project番号、repositoryなどのfixture値は、既存の`GHPMV_TEST_*`環境変数、`tests/e2e.settings.local.jsonc`、共有`tests/e2e.settings.jsonc`の順で解決します。Browser E2EのPATとstorage-state pathは、JSONCでsideごとに指定した環境変数を優先します。sourceとtargetが同じGitHub deploymentの場合だけ、未設定値を互換用の`GHPMV_TEST_TOKEN`と`GHPMV_BROWSER_STATE`へfallbackします。deploymentをまたぐ場合はside別の環境変数が必須で、同じ変数名も指定できません。PAT、browser cookie、storage-stateの内容はJSONCへ保存せず、JSONCにはそれらを保持する環境変数名だけを記載します。
+
+実API integration suiteは既存どおり単一の`GHPMV_TEST_TOKEN`を使用し、sourceとtargetが同じGitHub deploymentにある構成を対象にします。JSONCのsource/target API originが異なる場合は誤ったhostへ書き込まず、明示的に失敗します。GitHub.comからGHEC with data residencyなどdeploymentをまたぐ検証は、source/target別tokenとbrowser stateを使うbrowser/manual E2Eで行います。
+
 | 変数 | 使用箇所 | 意味 |
 |---|---|---|
 | `GHPMV_TEST_TOKEN` | 統合テスト、browser E2E | fixture org に対して SSO authorization 済みの token。integration suite では source/target 両 organization の disposable Team を作成・削除できる token owner 権限に加え、classic PAT の `admin:org` または fine-grained PAT の **Members: Read and write** が必要。単一tokenで両orgを操作するため、cross-organization構成では通常classic PATを使う。 |

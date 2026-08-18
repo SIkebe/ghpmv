@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Ghpmv.Core\Ghpmv.Core.csproj" />
+    <ProjectReference Include="..\Ghpmv.TestSupport\Ghpmv.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>

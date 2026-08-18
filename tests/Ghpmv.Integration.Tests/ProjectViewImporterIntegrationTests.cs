@@ -27,7 +27,7 @@ public class ProjectViewImporterIntegrationTests
     public async Task Import_round_trips_graphql_readable_view_settings()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var title = "ghpmv-view-api-test-" + Guid.NewGuid().ToString("N");
         var snapshot = Snapshot(title);
         try

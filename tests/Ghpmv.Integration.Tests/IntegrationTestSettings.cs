@@ -1,4 +1,5 @@
-using System.Globalization;
+using Ghpmv.TestSupport;
+using Ghpmv.Core.GitHub;
 
 namespace Ghpmv.Integration.Tests;
 
@@ -6,20 +7,13 @@ internal static class IntegrationTestSettings
 {
     public const int FixturePullRequestNumber = 3;
 
-    public static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG")
-        ?? Environment.GetEnvironmentVariable("GHPMV_SOURCE_ORG")
-        ?? "gpm-source";
+    public static string SourceOrg => E2eTestEnvironment.SourceOrganization;
 
-    public static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG")
-        ?? Environment.GetEnvironmentVariable("GHPMV_TARGET_ORG")
-        ?? "gpm-target";
+    public static string TargetOrg => E2eTestEnvironment.TargetOrganization;
 
-    public static string FixtureRepositoryName => Environment.GetEnvironmentVariable("GHPMV_TEST_FIXTURE_REPO")
-        ?? Environment.GetEnvironmentVariable("GHPMV_FIXTURE_REPO")
-        ?? "fixture-repo2";
+    public static string FixtureRepositoryName => E2eTestEnvironment.IntegrationSourceRepository;
 
-    public static string TargetFixtureRepositoryName => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_FIXTURE_REPO")
-        ?? "fixture-repo";
+    public static string TargetFixtureRepositoryName => E2eTestEnvironment.IntegrationTargetRepository;
 
     public static string FixtureRepositoryFullName => $"{SourceOrg}/{FixtureRepositoryName}";
 
@@ -28,22 +22,15 @@ internal static class IntegrationTestSettings
     public static string CreateOperationLogDirectory()
         => Path.Combine(Path.GetTempPath(), $"ghpmv-project-import-{Guid.NewGuid():N}");
 
-    public static int FixtureProjectNumber
+    public static int FixtureProjectNumber => E2eTestEnvironment.IntegrationProjectNumber;
+
+    public static GitHubGraphQLClient CreateClient(string token)
+        => new(token, GitHubGraphQLClient.NormalizeBaseUrl(E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri));
+
+    public static GitHubRestClient CreateRestClient(string token)
     {
-        get
-        {
-            var value = Environment.GetEnvironmentVariable("GHPMV_TEST_PROJECT_NUMBER");
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                return 89;
-            }
-
-            if (int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var projectNumber))
-            {
-                return projectNumber;
-            }
-
-            throw new FormatException($"GHPMV_TEST_PROJECT_NUMBER must be a valid integer, but was '{value}'.");
-        }
+        var graphQlEndpoint = GitHubGraphQLClient.NormalizeBaseUrl(
+            E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri);
+        return new GitHubRestClient(token, GitHubRestClient.ToRestBaseUri(graphQlEndpoint));
     }
 }

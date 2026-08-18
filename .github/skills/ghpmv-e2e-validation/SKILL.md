@@ -181,6 +181,29 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | target host type / web URL / API / uploads URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com`, `https://uploads.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 
+## E2E settings の読み込み
+
+Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている場合は、そのpathだけをauthoritativeなJSONCとして読む。明示pathが存在しない、読み取れない、またはvalidationに失敗した場合は、local/shared fileへfallbackせず、pathとエラーを示して修正されるまで停止する。`GHPMV_E2E_SETTINGS`が未設定の場合だけ、`tests/e2e.settings.local.jsonc`、`tests/e2e.settings.jsonc`の順で最初に存在するfileを読む。`//`コメントと末尾commaを許可する。設定値は次の用途に使い、同じ非secret値を再質問しない。
+
+- source / target Organization、API / Web / uploads URL、browser profile
+- Integration / Browser fixtureのProject番号とsource / target repository
+- source / target browser login、collaborator login、EMUを含むuser mapping
+- fixture preparation、GEIまたはfixture-seedのrepository preparation mode
+- GEI source / target repository、visibility、token owner login、role status
+- PATおよびbrowser stateを保持する**環境変数名**
+
+自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
+
+`source.apiBaseUrl` / `target.apiBaseUrl`はghpmv用GraphQL endpointで、`https://api.TENANT.ghe.com/graphql`またはtenant API originのどちらも受け付ける。GEIの`--github-source-api-url` / `--target-api-url`へ渡す値は別に導出し、末尾のoptional `/graphql`とtrailing slashを除いた`https://api.TENANT.ghe.com` originを使う。GraphQL endpointをそのままGEI argumentへ再利用しない。
+
+settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$`、repository short nameは`^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$`、user loginは`^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,98}[A-Za-z0-9])?$`で検証する。これらを含むsettings由来の文字列をPowerShell commandへ渡す場合は、profileだけでなくOrganization、repository、login、URL、title、path、mapping値をすべてsingle-quoted argumentにする。値のpatternがsingle quoteを許可する項目では、既存の規則どおり`'`を`''`へ置換してから囲む。検証済みであってもunquoted substitutionは行わない。
+
+このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。
+
+同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
+
+設定済みでも、実resource作成の説明と同意、Organization administrator / GEI roleの現在状態、PAT permission / approval、warning許容、cleanup同意は省略しない。特に`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
+
 ## Step 1: 確認範囲を決める
 
 次から一つ選んでもらう。質問文にも「実 resource への影響」を判断基準として示す。choice は次のように、内部 ID だけでなく実行範囲を表示する。

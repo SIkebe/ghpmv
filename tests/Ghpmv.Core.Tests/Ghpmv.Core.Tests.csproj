@@ -19,6 +19,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Ghpmv.Core\Ghpmv.Core.csproj" />
     <ProjectReference Include="..\..\src\Ghpmv.Cli\Ghpmv.Cli.csproj" />
+    <ProjectReference Include="..\Ghpmv.TestSupport\Ghpmv.TestSupport.csproj" />
   </ItemGroup>
 
 </Project>

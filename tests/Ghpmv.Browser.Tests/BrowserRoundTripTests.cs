@@ -4,6 +4,7 @@ using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
+using Ghpmv.TestSupport;
 using System.Text.Json;
 
 namespace Ghpmv.Browser.Tests;
@@ -19,23 +20,29 @@ namespace Ghpmv.Browser.Tests;
 [Trait("Category", "E2E")]
 public class BrowserRoundTripTests
 {
-    private static string SourceOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_ORG") ?? "gpm-source";
+    private static string SourceOrg => E2eTestEnvironment.SourceOrganization;
 
-    private static string TargetOrg => Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_ORG") ?? "gpm-target";
+    private static string TargetOrg => E2eTestEnvironment.TargetOrganization;
 
-    private static int FixtureProjectNumber =>
-        int.TryParse(Environment.GetEnvironmentVariable("GHPMV_TEST_PROJECT_NUMBER"), out var number)
-            ? number
-            : 3;
+    private static int FixtureProjectNumber => E2eTestEnvironment.BrowserProjectNumber;
 
-    private static string SourceFixtureRepository =>
-        Environment.GetEnvironmentVariable("GHPMV_TEST_FIXTURE_REPO") ?? "fixture-repo";
+    private static string SourceFixtureRepository => E2eTestEnvironment.BrowserSourceRepository;
 
-    private static string TargetFixtureRepository =>
-        Environment.GetEnvironmentVariable("GHPMV_TEST_TARGET_FIXTURE_REPO") ?? "fixture-repo";
+    private static string TargetFixtureRepository => E2eTestEnvironment.BrowserTargetRepository;
 
-    private static string ExplicitCollaboratorLogin =>
-        Environment.GetEnvironmentVariable("GHPMV_TEST_COLLABORATOR_LOGIN") ?? "ravel-maurice-uo_sde";
+    private static string ExplicitCollaboratorLogin => E2eTestEnvironment.CollaboratorLogin;
+
+    private static IReadOnlyDictionary<string, string> RepositoryMapping =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [$"{SourceOrg}/{SourceFixtureRepository}"] = $"{TargetOrg}/{TargetFixtureRepository}",
+        };
+
+    private static IReadOnlyDictionary<string, string> OrganizationMapping =>
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [SourceOrg] = TargetOrg,
+        };
 
     private static string CreateOperationLogDirectory()
         => Path.Combine(Path.GetTempPath(), $"ghpmv-browser-project-import-{Guid.NewGuid():N}");
@@ -43,24 +50,41 @@ public class BrowserRoundTripTests
     [Fact]
     public async Task Explicit_collaborators_are_exported_through_browser_automation()
     {
-        var statePath = Environment.GetEnvironmentVariable("GHPMV_BROWSER_STATE");
+        var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
+        var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
         Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(statePath) || !File.Exists(statePath),
-            "GHPMV_BROWSER_STATE is not set or the file does not exist; skipping browser E2E test.");
-        var token = Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(token), "GHPMV_TEST_TOKEN is not set; skipping browser E2E test.");
+            string.IsNullOrWhiteSpace(sourceStatePath) || !File.Exists(sourceStatePath),
+            "The configured source browser state file does not exist; skipping browser E2E test.");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(targetStatePath) || !File.Exists(targetStatePath),
+            "The configured target browser state file does not exist; skipping browser E2E test.");
+        var sourceToken = E2eTestEnvironment.SourceToken;
+        var targetToken = E2eTestEnvironment.TargetToken;
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(sourceToken), "The configured source token is not set; skipping browser E2E test.");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(targetToken), "The configured target token is not set; skipping browser E2E test.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(token!);
-        var (projectId, userId) = await ResolveProjectAndUserIdsAsync(client, SourceOrg, ExplicitCollaboratorLogin, cancellationToken);
+        using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
+        using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
+        var (projectId, userId) = await ResolveProjectAndUserIdsAsync(sourceClient, SourceOrg, ExplicitCollaboratorLogin, cancellationToken);
+        var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
+        var targetCollaboratorLogin = userMapping.TryGetValue(ExplicitCollaboratorLogin, out var mappedLogin)
+            ? mappedLogin
+            : ExplicitCollaboratorLogin;
+        var targetUserId = await ResolveUserIdAsync(targetClient, targetCollaboratorLogin, cancellationToken);
 
-        await SetCollaboratorAsync(client, projectId, userId, "WRITER", cancellationToken);
+        await SetCollaboratorAsync(sourceClient, projectId, userId, "WRITER", cancellationToken);
         try
         {
-            await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
-            var exporter = new ProjectExporter(client);
+            await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
+            await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+            var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+                targetClient,
+                targetSession,
+                cancellationToken);
+            var exporter = new ProjectExporter(sourceClient);
             var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-            var collaboratorExporter = new CollaboratorUiExporter(session);
+            var collaboratorExporter = new CollaboratorUiExporter(sourceSession);
 
             snapshot = await collaboratorExporter.EnrichAsync(snapshot, SourceOrg, ProjectOwnerType.Organization, FixtureProjectNumber, cancellationToken);
 
@@ -79,20 +103,27 @@ public class BrowserRoundTripTests
                 LinkedRepositories = [],
                 Collaborators = [collaborator],
             };
-            var result = await new ProjectImporter(client)
+            var result = await new ProjectImporter(targetClient)
             {
                 OperationLogDirectory = CreateOperationLogDirectory(),
+                BeforeWriteAsync = validateTargetAuthentication,
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
             }.ImportAsync(
                 verificationSnapshot,
                 TargetOrg,
                 cancellationToken);
             try
             {
-                var targetViewExporter = new ViewUiExporter(session);
-                var targetWorkflowExporter = new WorkflowUiExporter(session);
-                var targetCollaboratorExporter = new CollaboratorUiExporter(session);
-                var verifier = new ProjectVerifier(client)
+                var targetViewExporter = new ViewUiExporter(targetSession);
+                var targetWorkflowExporter = new WorkflowUiExporter(targetSession);
+                var targetCollaboratorExporter = new CollaboratorUiExporter(targetSession);
+                var verifier = new ProjectVerifier(targetClient)
                 {
+                    OrganizationMapping = OrganizationMapping,
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
                     PostExportAsync = async (target, ct) =>
                     {
                         target = await targetViewExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
@@ -113,7 +144,7 @@ public class BrowserRoundTripTests
                     cancellationToken);
                 Assert.DoesNotContain(matchReport.Differences, difference => difference.Category == "Collaborator");
 
-                await SetCollaboratorAsync(client, result.ProjectId, userId, "READER", cancellationToken);
+                await SetCollaboratorAsync(targetClient, result.ProjectId, targetUserId, "READER", cancellationToken);
                 var driftReport = await verifier.VerifyAsync(
                     verificationSnapshot,
                     TargetOrg,
@@ -126,32 +157,44 @@ public class BrowserRoundTripTests
             }
             finally
             {
-                await DeleteProjectAsync(client, result.ProjectId);
+                await DeleteProjectAsync(targetClient, result.ProjectId);
             }
         }
         finally
         {
-            await SetCollaboratorAsync(client, projectId, userId, "NONE", CancellationToken.None);
+            await SetCollaboratorAsync(sourceClient, projectId, userId, "NONE", CancellationToken.None);
         }
     }
 
     [Fact]
     public async Task Views_round_trip_through_browser_automation()
     {
-        var statePath = Environment.GetEnvironmentVariable("GHPMV_BROWSER_STATE");
+        var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
+        var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
         Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(statePath) || !File.Exists(statePath),
-            "GHPMV_BROWSER_STATE is not set or the file does not exist; skipping browser E2E test.");
-        var token = Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(token), "GHPMV_TEST_TOKEN is not set; skipping browser E2E test.");
+            string.IsNullOrWhiteSpace(sourceStatePath) || !File.Exists(sourceStatePath),
+            "The configured source browser state file does not exist; skipping browser E2E test.");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(targetStatePath) || !File.Exists(targetStatePath),
+            "The configured target browser state file does not exist; skipping browser E2E test.");
+        var sourceToken = E2eTestEnvironment.SourceToken;
+        var targetToken = E2eTestEnvironment.TargetToken;
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(sourceToken), "The configured source token is not set; skipping browser E2E test.");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(targetToken), "The configured target token is not set; skipping browser E2E test.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(token!);
-        await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
+        using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
+        using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
+        await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
+        await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+            targetClient,
+            targetSession,
+            cancellationToken);
 
         // Export the fixture with UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(client);
-        var uiExporter = new ViewUiExporter(session);
+        var exporter = new ProjectExporter(sourceClient);
+        var uiExporter = new ViewUiExporter(sourceSession);
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await uiExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(uiExporter.Warnings);
@@ -176,16 +219,21 @@ public class BrowserRoundTripTests
 
         var title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
+        var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
 
-        var importer = new ProjectImporter(client)
+        var importer = new ProjectImporter(targetClient)
         {
             OperationLogDirectory = CreateOperationLogDirectory(),
+            BeforeWriteAsync = validateTargetAuthentication,
             BrowserViewEnrichmentPlanned = true,
+            OrganizationMapping = OrganizationMapping,
+            RepositoryMapping = RepositoryMapping,
+            UserMapping = userMapping,
         };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
-            var viewImporter = new ViewUiImporter(session);
+            var viewImporter = new ViewUiImporter(targetSession);
             await viewImporter.EnrichAsync(
                 snapshot,
                 TargetOrg,
@@ -197,9 +245,12 @@ public class BrowserRoundTripTests
 
             // Verify re-exports the target through GraphQL and its browser post-export hook.
             ProjectSnapshot? reExported = null;
-            var reExportUi = new ViewUiExporter(session);
-            var verifier = new ProjectVerifier(client)
+            var reExportUi = new ViewUiExporter(targetSession);
+            var verifier = new ProjectVerifier(targetClient)
             {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
                 PostExportAsync = async (target, ct) =>
                 {
                     reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
@@ -256,7 +307,7 @@ public class BrowserRoundTripTests
         }
         finally
         {
-            await DeleteProjectAsync(client, result.ProjectId);
+            await DeleteProjectAsync(targetClient, result.ProjectId);
         }
     }
 
@@ -270,20 +321,32 @@ public class BrowserRoundTripTests
     [Fact]
     public async Task Workflows_round_trip_through_browser_automation()
     {
-        var statePath = Environment.GetEnvironmentVariable("GHPMV_BROWSER_STATE");
+        var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
+        var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
         Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(statePath) || !File.Exists(statePath),
-            "GHPMV_BROWSER_STATE is not set or the file does not exist; skipping browser E2E test.");
-        var token = Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(token), "GHPMV_TEST_TOKEN is not set; skipping browser E2E test.");
+            string.IsNullOrWhiteSpace(sourceStatePath) || !File.Exists(sourceStatePath),
+            "The configured source browser state file does not exist; skipping browser E2E test.");
+        Assert.SkipWhen(
+            string.IsNullOrWhiteSpace(targetStatePath) || !File.Exists(targetStatePath),
+            "The configured target browser state file does not exist; skipping browser E2E test.");
+        var sourceToken = E2eTestEnvironment.SourceToken;
+        var targetToken = E2eTestEnvironment.TargetToken;
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(sourceToken), "The configured source token is not set; skipping browser E2E test.");
+        Assert.SkipWhen(string.IsNullOrWhiteSpace(targetToken), "The configured target token is not set; skipping browser E2E test.");
 
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(token!);
-        await using var session = new BrowserSession(new BrowserSessionOptions { StatePath = statePath });
+        using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
+        using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
+        await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
+        await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+            targetClient,
+            targetSession,
+            cancellationToken);
 
         // Export the fixture with workflow UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(client);
-        var workflowExporter = new WorkflowUiExporter(session);
+        var exporter = new ProjectExporter(sourceClient);
+        var workflowExporter = new WorkflowUiExporter(sourceSession);
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await workflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(workflowExporter.Warnings);
@@ -304,20 +367,24 @@ public class BrowserRoundTripTests
 
         var title = "ghpmv-browser-wf-test-" + Guid.NewGuid().ToString("N");
         var snapshot = source with { Project = source.Project with { Title = title } };
+        var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
 
-        var importer = new ProjectImporter(client)
+        var importer = new ProjectImporter(targetClient)
         {
             OperationLogDirectory = CreateOperationLogDirectory(),
+            BeforeWriteAsync = validateTargetAuthentication,
+            OrganizationMapping = OrganizationMapping,
+            RepositoryMapping = RepositoryMapping,
+            UserMapping = userMapping,
         };
         var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
         try
         {
-            var workflowImporter = new WorkflowUiImporter(session)
+            var workflowImporter = new WorkflowUiImporter(targetSession)
             {
-                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [$"{SourceOrg}/{SourceFixtureRepository}"] = $"{TargetOrg}/{TargetFixtureRepository}",
-                },
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
             };
             await workflowImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.True(
@@ -325,10 +392,13 @@ public class BrowserRoundTripTests
                 string.Join(Environment.NewLine, workflowImporter.Warnings));
             Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
 
-            var reExportUi = new WorkflowUiExporter(session);
+            var reExportUi = new WorkflowUiExporter(targetSession);
             ProjectSnapshot? reExported = null;
-            var verifier = new ProjectVerifier(client)
+            var verifier = new ProjectVerifier(targetClient)
             {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
                 PostExportAsync = async (target, ct) =>
                 {
                     reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
@@ -376,7 +446,7 @@ public class BrowserRoundTripTests
         }
         finally
         {
-            await DeleteProjectAsync(client, result.ProjectId);
+            await DeleteProjectAsync(targetClient, result.ProjectId);
         }
     }
 
@@ -386,6 +456,40 @@ public class BrowserRoundTripTests
             "mutation($projectId: ID!) { deleteProjectV2(input: { projectId: $projectId }) { projectV2 { id } } }",
             new { projectId },
             CancellationToken.None);
+    }
+
+    private static GitHubGraphQLClient CreateClient(string token, string apiBaseUrl)
+        => new(token, GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl));
+
+    private static BrowserSession CreateSession(string statePath, E2eEndpointSettings endpoint)
+        => new(new BrowserSessionOptions
+        {
+            BaseUrl = BrowserBaseUrl.Resolve(
+                GitHubGraphQLClient.NormalizeBaseUrl(endpoint.ApiBaseUrl),
+                endpoint.WebBaseUrl),
+            Profile = endpoint.BrowserProfile,
+            StatePath = statePath,
+        });
+
+    private static async Task<Func<CancellationToken, Task>> CreateTargetAuthenticationGuardAsync(
+        GitHubGraphQLClient targetClient,
+        BrowserSession targetSession,
+        CancellationToken cancellationToken)
+    {
+        var apiLogin = await targetClient.GetViewerLoginAsync(cancellationToken);
+        return ct => targetSession.ValidateAuthenticationAsync(apiLogin, ct);
+    }
+
+    private static async Task<string> ResolveUserIdAsync(
+        GitHubGraphQLClient client,
+        string login,
+        CancellationToken cancellationToken)
+    {
+        var data = await client.QueryAsync(
+            "query($login: String!) { user(login: $login) { id } }",
+            new { login },
+            cancellationToken);
+        return data.GetProperty("user").GetProperty("id").GetString()!;
     }
 
         private static async Task<(string ProjectId, string UserId)> ResolveProjectAndUserIdsAsync(

@@ -27,7 +27,7 @@ public class IssueFieldLifecycleIntegrationTests
     public async Task Import_creates_links_updates_and_deletes_organization_issue_field()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = new GitHubGraphQLClient(Token);
+        using var client = IntegrationTestSettings.CreateClient(Token);
         var suffix = Guid.NewGuid().ToString("N")[..12];
         var fieldName = $"ghpmv-ci-if-{suffix}";
         var title = $"ghpmv-issue-field-test-{suffix}";

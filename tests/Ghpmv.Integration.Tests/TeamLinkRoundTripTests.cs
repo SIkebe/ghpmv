@@ -35,8 +35,8 @@ public class TeamLinkRoundTripTests
         var createdTeams = new List<(string Organization, string Slug)>();
         var operationDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
 
-        using var graphQl = new GitHubGraphQLClient(Token);
-        using var rest = new GitHubRestClient(Token);
+        using var graphQl = IntegrationTestSettings.CreateClient(Token);
+        using var rest = IntegrationTestSettings.CreateRestClient(Token);
         var cleanupFailures = new List<Exception>();
         Exception? testFailure = null;
         try
