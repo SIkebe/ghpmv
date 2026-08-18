@@ -86,7 +86,7 @@ Start with the cheapest leaf-facing live contract. Exercise the production REST 
 ## Phase 2: Pull-Request Item Relinking
 
 ### Overview
-Add the missing real `PULL_REQUEST` branch to the existing `ItemImporter` Integration class. Each side uses a fresh disposable repository so shared Issue/PR numbering is controlled without touching configured long-lived fixtures.
+Add the missing real `PULL_REQUEST` branch to the existing `ItemImporter` Integration class using the canonical fixture PR and an identity repository mapping. This exercises PR resolution and relinking without expanding the credential contract or mutating long-lived repositories.
 
 ### Files to Test
 
@@ -97,24 +97,19 @@ Add the missing real `PULL_REQUEST` branch to the existing `ItemImporter` Integr
 
 **Methods to Test**:
 1. `ImportAsync`, PR branch of `CreateContentItemAsync` / `ResolveIssueOrPullRequestIdAsync` — `Pull_request_item_is_relinked_to_the_target_repository_with_its_number_preserved`
-   - Create unique private repositories in configured `SourceOrg` and `TargetOrg` via `GitHubRestClient`.
-   - For each repository, serially create the repository, PUT `README.md` for the initial commit, read its default branch/ref, create a unique head ref, PUT one file on that branch, and POST `/pulls`.
-   - Create no Issues before either PR. Capture both returned PR numbers and assert they are equal before invoking import; do not hardcode `1`.
-   - Create a disposable source Project, resolve the source PR node ID, and add it via `addProjectV2ItemById`.
-   - Poll production export until the source Project contains exactly the expected item with `Type == "PULL_REQUEST"`.
-   - Import to a uniquely titled target Project using production `ItemImporter`, mapping `{ sourceRepoFullName -> targetRepoFullName }`, with a unique operation/log directory.
+   - Read the canonical `PULL_REQUEST` from `IntegrationFixtureSnapshot.CreateKnownAsync`.
+   - Build a minimal snapshot containing only that PR with position zero and no field values.
+   - Import to a uniquely titled target Project using production `ItemImporter`, mapping the configured fixture repository to itself, with a unique operation/log directory.
    - Poll production export until the target item is visible.
-   - Assert exactly one content item; `Type == "PULL_REQUEST"`; repository equals the target full name; number equals both captured PR numbers; `ImportResult.Created == 1`; `ImportResult.Skipped == 0`; and no warning is associated with the item.
+   - Assert exactly one content item; `Type == "PULL_REQUEST"`; repository equals the configured fixture repository; number equals the source PR number; `ImportResult.Created == 1`; `ImportResult.Skipped == 0`; and no warning is associated with the item.
 
 ### Fixtures and Helpers
-- Keep a private nested `DisposableRepositoryFixture` in `ItemImporterTests.cs`; do not add a repository helper elsewhere for this single scenario.
-- Give it narrowly scoped operations such as `CreateAsync`, `CreatePullRequestAsync`, and `DeleteAsync`, all backed by the production REST client and configured owner.
-- Reuse `TemporaryProjectFixture` for source/target Project lifecycle and defensive deletion by unique title.
+- Reuse `IntegrationFixtureSnapshot` for the read-only source PR.
+- Reuse `TemporaryProjectFixture` for target Project lifecycle and defensive deletion by unique title.
 - Add a bounded private polling helper only if existing local polling code cannot express “export until exactly one expected PR appears.”
 
 ### Cleanup
-- Track source and target repository names/titles as soon as allocated so partial setup remains cleanable.
-- In `finally`, attempt deletion of both Projects, then both owned repositories through `DELETE repos/{owner}/{name}`, then operation/log directories.
+- In `finally`, delete the owned target Project and operation/log directories.
 - Use `CancellationToken.None` for every cleanup call, attempt all cleanup operations, and retain the original test failure.
 - Never delete `SourceFixtureRepositoryFullName`, `TargetFixtureRepositoryFullName`, or any other configured long-lived repository.
 
@@ -122,14 +117,13 @@ Add the missing real `PULL_REQUEST` branch to the existing `ItemImporter` Integr
 1. Build with the repository Release command.
 2. Run:
    `dotnet test --project tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --filter "FullyQualifiedName~Ghpmv.Integration.Tests.ItemImporterTests.Pull_request_item_is_relinked_to_the_target_repository_with_its_number_preserved"`
-3. Confirm the test passes with credentials, skips only for an absent token, and leaves neither repository, Project, nor local log directory behind.
+3. Confirm the test passes with credentials, skips only for an absent token, and leaves neither target Project nor local log directory behind.
 4. Run `--list-tests` and confirm the exact test name is discovered.
 
 ### Success Criteria
-- [ ] Source and target PR numbers are compared before import.
-- [ ] Read-back proves relinking to the mapped target repository with type and number preserved.
+- [ ] Read-back proves relinking through the identity repository mapping with type and source number preserved.
 - [ ] Import result counts and warning behavior are asserted.
-- [ ] Every owned remote and local resource is cleaned in `finally`.
+- [ ] Every owned remote and local resource is cleaned in `finally`; shared fixture resources remain read-only.
 
 ---
 
@@ -205,9 +199,9 @@ Preserve the authoritative Issue #50 View POSITION test and extend the already e
 |---:|---|---|
 | 1 | Use only `GHPMV_TEST_TOKEN`; skip only when absent. | Shared Conventions; asserted in every phase's scoped verification. |
 | 2 | Work cancellation token; `None` for cleanup. | Shared Conventions plus cleanup sections in Phases 1–3. |
-| 3 | Configured orgs/endpoints; no hardcoded identifiers. | Shared Conventions; Phase 1 settings, Phase 2 configured owners, Phase 3 existing fixtures. |
-| 4 | PR test owns and cleans unique repositories/Projects. | Phase 2 setup, fixture, and `finally` cleanup. |
-| 5 | Match PR numbers and assert mapped target PR read-back. | Phase 2 assertions before import and after export. |
+| 3 | Configured orgs/endpoints; no hardcoded identifiers. | Shared Conventions; Phase 1 settings, Phase 2 configured fixture, Phase 3 existing fixtures. |
+| 4 | PR test keeps shared fixtures read-only and cleans its target Project. | Phase 2 setup and `finally` cleanup. |
+| 5 | Assert mapped target PR read-back preserves the source number. | Phase 2 assertions after export. |
 | 6 | Call production `ImportCapabilityPreflight.ValidateAsync`. | Both Phase 1 tests call the production method directly/from `BeforeWriteAsync`. |
 | 7 | Real repository role and Team/Members-read calls. | Phase 1 success plan and completion assertion. |
 | 8 | Safe read-only failure through `BeforeWriteAsync`; no Project. | Phase 1 failure test and defensive title verification/cleanup. |

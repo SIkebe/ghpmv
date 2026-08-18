@@ -13,9 +13,8 @@
 - [x] `GHPMV_TEST_TOKEN` is the only credential source; generated tests skip only when it is absent.
 - [x] Normal operations use `TestContext.Current.CancellationToken`; cleanup uses `CancellationToken.None`.
 - [x] Organizations, repositories, and API clients come from `IntegrationTestSettings`; no organization is hardcoded.
-- [x] The PR relink test owns unique source/target repositories and Projects and attempts every cleanup in `finally`.
-- [x] Source and target PR numbers are compared before import.
-- [x] Target read-back asserts `PULL_REQUEST`, mapped target repository, and the preserved PR number.
+- [x] The PR relink test reads the canonical source fixture PR without mutation, owns a unique target Project, and attempts every owned cleanup in `finally`.
+- [x] Target read-back asserts `PULL_REQUEST`, the identity-mapped fixture repository, and the preserved source PR number.
 - [x] Production `ImportCapabilityPreflight.ValidateAsync` is called for live repository-role and Members/Teams-read validation.
 - [x] The live preflight success test asserts the configured repository identity, effective write role, and Team response shape.
 - [x] A production preflight failure is attached through `ProjectImporter.BeforeWriteAsync`; the test asserts one invocation and no target Project write.
@@ -52,7 +51,7 @@ The final full-workspace run built fresh. Its 39 Integration skips were caused b
 
 The credentialed paths could not be mutation-run locally because the token is absent, so live-path conclusions are static and cross-checked against the passing deterministic Core suite:
 
-- PR type, target repository, number preservation, result counts, and warning removal are each pinned by concrete assertions and target export read-back.
+- PR type, identity-mapped repository, source number preservation, result counts, and warning removal are each pinned by concrete assertions and target export read-back.
 - Removing or moving the repository preflight past the first Project write is pinned by the expected exception, invocation count, and absence of the uniquely titled Project.
 - The Members/Teams request is additionally pinned by the existing deterministic test `ImportCapabilityTests.Preflight_validates_members_read_for_team_collaborators`.
 - Item truncation, cursor loss, order drift, and position reset are pinned by exact 120-node count/set/sequence and `0..119` assertions.

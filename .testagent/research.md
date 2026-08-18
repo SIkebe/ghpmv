@@ -19,7 +19,7 @@
   - `ItemImporter` depends on `GitHubGraphQLClient`, `ProjectSnapshot`, `ImportResult`, and durable `ImportLog`.
 - **Top-layer target**: `ProjectImporter`; its `BeforeWriteAsync` hook is called immediately before the first Project mutation and is where the CLI wires `ImportCapabilityPreflight.ValidateAsync`.
 - **Composition-only dependency**: `src/Ghpmv.Cli/Program.cs` analyzes capabilities, creates the production preflight callback, and assigns it to `ProjectImporter.BeforeWriteAsync`. Do not process-test the CLI for this scope.
-- **Test helpers**: `IntegrationTestSettings` creates correctly hosted GraphQL/REST clients; `TemporaryProjectFixture` creates/deletes Projects; no disposable-repository helper currently exists.
+- **Test helpers**: `IntegrationTestSettings` creates correctly hosted GraphQL/REST clients; `IntegrationFixtureSnapshot` exposes the canonical shared PR item; `TemporaryProjectFixture` creates/deletes Projects.
 
 ## Build & Test Commands
 - **Restore**: `dotnet restore Ghpmv.slnx`
@@ -53,7 +53,7 @@
 ### High Priority
 | File | Classes/Functions | Testability | Estimated Coverage | Notes |
 |------|-------------------|-------------|-------------------|-------|
-| `src/Ghpmv.Core/Import/ItemImporter.cs` | `ItemImporter.ImportAsync`; PR branch of `CreateContentItemAsync` / `ResolveIssueOrPullRequestIdAsync` | High with disposable repos/Projects | Partial | Existing live test deliberately removes `PULL_REQUEST`; add the missing real PR relink case. |
+| `src/Ghpmv.Core/Import/ItemImporter.cs` | `ItemImporter.ImportAsync`; PR branch of `CreateContentItemAsync` / `ResolveIssueOrPullRequestIdAsync` | High with the canonical fixture PR and a disposable target Project | Partial | Existing live test deliberately removes `PULL_REQUEST`; add the missing real PR relink case. |
 | `src/Ghpmv.Core/Import/ImportCapabilityPreflight.cs` | `ValidateAsync`, repository role validation | High with configured fixture repo/org | Partial | Deterministic unit coverage is substantial, but no real REST integration coverage exists. |
 | `src/Ghpmv.Core/Import/ProjectImporter.cs` | `BeforeWriteAsync` placement in `ImportAsync` | High | Partial for this contract | Use a failing production preflight callback and prove no target Project was created. |
 | `src/Ghpmv.Core/Export/ProjectExporter.cs` | `ExportAsync`, `FetchViewsAsync`, `FetchItemsAsync` | High | Partial | Stub tests cover View cursor continuation; live tests cover POSITION but not exporter page-boundary completeness. Reuse the existing 120-item live fixture. |
@@ -104,13 +104,11 @@
 
 ### 1. Pull Request item import/relink
 - **Placement/name**: add `ItemImporterTests.Pull_request_item_is_relinked_to_the_target_repository_with_its_number_preserved`.
-- Add narrowly scoped private helper code (or one internal `DisposableRepositoryFixture` if reused) because no repository lifecycle helper exists.
-- For both configured `SourceOrg` and `TargetOrg`, create a uniquely named private repository through `GitHubRestClient`. Mirror the proven fixture sequence: create repo, PUT `README.md` for the initial commit, read default branch/ref, create a unique head ref, PUT one file on that branch, then POST `/pulls`.
-- Create no Issues before either PR. Issues and PRs share numbering; assert the returned source and target PR numbers are equal before testing relinking. Fresh disposable repositories should produce matching `#1`, but the assertion—not a hardcoded number—is authoritative.
-- Create a disposable source Project, resolve the source PR node ID, add it with `addProjectV2ItemById`, and export until the source contains exactly the expected `PULL_REQUEST`.
-- Import a uniquely titled target Project, then call production `ItemImporter` with `{sourceRepoFullName -> targetRepoFullName}` and a unique log directory.
-- Export the target until visible and assert: exactly one content item; `Type == "PULL_REQUEST"`; repository is the target full name; number equals both returned PR numbers; result has `Created == 1`, `Skipped == 0`, and no warning for that item.
-- Finally delete both Projects, both repositories (`repos/{owner}/{name}`), and operation/log directories with `CancellationToken.None`. Never delete configured long-lived fixture repositories.
+- Read the canonical source PR from `IntegrationFixtureSnapshot.CreateKnownAsync`.
+- Build a minimal snapshot containing only that PR, with no field values, and map the configured source fixture repository to itself. Identity mapping still exercises production `pullRequest(number:)` resolution and `addProjectV2ItemById` without new repository permissions.
+- Import a uniquely titled target Project, then call production `ItemImporter` with the identity repository mapping and a unique log directory.
+- Export the target until visible and assert: exactly one content item; `Type == "PULL_REQUEST"`; repository is the configured fixture repository; number equals the source PR number; result has `Created == 1`, `Skipped == 0`, and no warning for that item.
+- Finally delete the owned target Project and operation/log directories with `CancellationToken.None`. Never mutate or delete configured long-lived fixture repositories.
 
 ### 2. Production import capability preflight
 - **Placement**: new `tests/Ghpmv.Integration.Tests/ImportCapabilityPreflightIntegrationTests.cs`.
@@ -128,8 +126,8 @@
 - [ ] Use only `GHPMV_TEST_TOKEN`; skip only when it is absent.
 - [ ] Use `TestContext.Current.CancellationToken` for test work and `CancellationToken.None` for every cleanup.
 - [ ] Use configured source/target organizations and API endpoints; no hardcoded org, host, repository, Project number, or PR number.
-- [ ] PR test owns unique source/target repositories and Projects and cleans all of them in `finally`.
-- [ ] Assert source/target PR numbers match before import; assert target export is `PULL_REQUEST` in the mapped target repo with that preserved number.
+- [ ] PR test keeps the canonical source fixture read-only, owns a unique target Project, and cleans it in `finally`.
+- [ ] Assert target export is `PULL_REQUEST` in the identity-mapped fixture repository with the source number preserved.
 - [ ] Call production `ImportCapabilityPreflight.ValidateAsync`, not a reimplemented HTTP check.
 - [ ] Success preflight performs real repository visibility/role and Team/Members-read REST calls.
 - [ ] Failure preflight is safe/read-only and is attached through production `ProjectImporter.BeforeWriteAsync`; assert no target Project was created.
@@ -143,7 +141,7 @@
 
 ## Recommendations
 1. Add the preflight Integration class first; it is read-only and validates the credential contract cheaply.
-2. Add the disposable PR relink test and its tightly bounded repository helper next.
+2. Add the fixture-backed PR relink test without expanding repository lifecycle permissions.
 3. Extend the existing 120-item live pagination test rather than adding another high-write fixture.
 4. Preserve and include the branch’s existing View POSITION test in the scoped and whole-project runs.
-5. Update credential documentation if repository create/delete in both configured organizations is a newly enforced CI prerequisite. Do not convert permission/policy failures into skips.
+5. Keep the existing credential contract unchanged; do not convert permission/policy failures into skips.
