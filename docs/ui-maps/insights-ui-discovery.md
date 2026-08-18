@@ -104,7 +104,7 @@ accessibility tree:
 | chart link | Custom charts list 内 `getByRole('link', { name: chartName, exact: true })` | verified。duplicate name は §12 の blocker |
 | chart options | chart link 内 `getByRole('button', { name: 'Chart options', exact: true })` | verified。page 全体では同名が複数ある |
 | create | `getByRole('button', { name: 'New chart', exact: true })` | verified |
-| current chart heading | `GetByRole(Heading, new() { NameRegex = new($"^{Regex.Escape(name)}"), Level = 2 })` | verified。dynamic name は必ず `Regex.Escape` する。heading name に `Edit chart name Configure` が結合されるため prefix match |
+| current chart heading | `GetByRole(Heading, new() { NameRegex = new($"^{Regex.Escape(name)} Edit chart name Configure$"), Level = 2 })` | verified。dynamic name は必ず `Regex.Escape` し、実測済み control suffix まで anchor して `Chart` と `Chart 1` を混同しない |
 | rename entry | heading 内 `getByRole('button', { name: 'Edit chart name', exact: true })` | verified |
 | configure entry | heading 内 `getByRole('button', { name: 'Configure', exact: true })` | verified |
 | configure pane | `getByRole('heading', { name: 'Configure chart', level: 2 })` を起点に scope | verified |
