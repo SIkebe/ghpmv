@@ -7,10 +7,9 @@ using Ghpmv.Core.Snapshot;
 namespace Ghpmv.Core.Tests;
 
 /// <summary>
-/// Tests for the narrow <see cref="ProjectTemplateWriteSession"/> seam (issue #46):
-/// GitHub rejects status-update writes against a project that is marked as a template,
-/// so the importer temporarily unmarks the target and restores the flag as the final
-/// import stage. Broader project-template migration (issue #47) is out of scope here.
+/// Tests the template write session used by issues #46 and #47. GitHub rejects
+/// status-update writes against a template, so import temporarily unmarks the target,
+/// restores it on failure, and applies the captured final state only after all writers.
 /// </summary>
 public class ProjectTemplateWriteSessionTests
 {
@@ -298,6 +297,55 @@ public class ProjectTemplateWriteSessionTests
             "GraphQL success response did not contain the expected 'markProjectV2AsTemplate' result.",
             exception.Message);
         Assert.Equal(4, incompleteHandler.MarkCount);
+    }
+
+    [Fact]
+    public async Task Complete_false_keeps_a_temporarily_unmarked_project_non_template()
+    {
+        var persistedStates = new List<bool>();
+        Task PersistAsync(bool required, CancellationToken _)
+        {
+            persistedStates.Add(required);
+            return Task.CompletedTask;
+        }
+
+        using var handler = new TemplateHandler(template: true);
+        using var client = CreateClient(handler);
+        var session = await ProjectTemplateWriteSession.PrepareAsync(
+            client,
+            ProjectId,
+            restorationWasPending: false,
+            PersistAsync,
+            onProgress: null,
+            TestContext.Current.CancellationToken);
+
+        await session.CompleteAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.False(session.RestorationRequired);
+        Assert.Equal([true, false], persistedStates);
+        Assert.Equal(1, handler.UnmarkCount);
+        Assert.Equal(0, handler.MarkCount);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Set_final_state_applies_the_requested_template_value(
+        bool initialTemplate,
+        bool desiredTemplate)
+    {
+        using var handler = new TemplateHandler(initialTemplate);
+        using var client = CreateClient(handler);
+
+        await ProjectTemplateWriteSession.SetFinalStateAsync(
+            client,
+            ProjectId,
+            desiredTemplate,
+            onProgress: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(desiredTemplate ? 1 : 0, handler.MarkCount);
+        Assert.Equal(desiredTemplate ? 0 : 1, handler.UnmarkCount);
     }
 
     [Fact]

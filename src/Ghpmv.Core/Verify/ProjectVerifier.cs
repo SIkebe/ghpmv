@@ -360,6 +360,12 @@ public sealed class ProjectVerifier
             AddError(differences, ProjectCategory, string.Create(CultureInfo.InvariantCulture,
                 $"closed state mismatch (source closed={source.Closed}, target closed={target.Closed})"));
         }
+
+        if (source.Template is { } sourceTemplate && sourceTemplate != target.Template)
+        {
+            AddError(differences, ProjectCategory, string.Create(CultureInfo.InvariantCulture,
+                $"template state mismatch (source template={sourceTemplate}, target template={target.Template})"));
+        }
     }
 
     // ----- fields -----
