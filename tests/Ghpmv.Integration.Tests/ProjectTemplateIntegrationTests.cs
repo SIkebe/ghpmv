@@ -42,6 +42,7 @@ public class ProjectTemplateIntegrationTests
                 Snapshot(NewTitle("source"), template, includeStatusUpdate: true),
                 sourceDirectory,
                 addStatusAttribution: false,
+                registerProject: result => source = result,
                 cancellationToken);
             var exported = await new ProjectExporter(client).ExportAsync(
                 SourceOrg,
@@ -59,6 +60,7 @@ public class ProjectTemplateIntegrationTests
                 targetSnapshot,
                 targetDirectory,
                 addStatusAttribution: true,
+                registerProject: result => target = result,
                 cancellationToken);
 
             var report = await new ProjectVerifier(client).VerifyAsync(
@@ -121,6 +123,7 @@ public class ProjectTemplateIntegrationTests
                 initial,
                 initialDirectory,
                 addStatusAttribution: true,
+                registerProject: result => target = result,
                 cancellationToken);
 
             var ordinary = initial with { Project = initial.Project with { Template = false } };
@@ -169,12 +172,14 @@ public class ProjectTemplateIntegrationTests
         ProjectSnapshot snapshot,
         string directory,
         bool addStatusAttribution,
+        Action<ImportResult> registerProject,
         CancellationToken cancellationToken)
     {
         var result = await new ProjectImporter(client)
         {
             OperationLogDirectory = directory,
         }.ImportAsync(snapshot, organization, cancellationToken);
+        registerProject(result);
         await new ItemImporter(client).ImportAsync(snapshot, result, directory, cancellationToken);
 
         ProjectTemplateWriteSession? templateSession = null;
