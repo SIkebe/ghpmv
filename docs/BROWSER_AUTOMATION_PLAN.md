@@ -36,7 +36,20 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | name / number / enabled | GraphQL `ProjectV2Workflow` | **UI**(enable は保存操作に内包) |
 | トリガー条件・対象(issue/PR)・Set する Status 値・フィルター・対象リポジトリ | ❌ API に無い → **UI で読む** | **UI** |
 
-つまり完全移行には **export/import の両側で Playwright が必要**(group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細)。API-only import でも View の基本構成は作成される。
+### Insights chart の discovery source map (#48)
+
+2026-08-16 の再調査でも REST / GraphQL に chart / insight API は無い。実 UI の確定事項と未解消 blocker は
+[insights-ui-discovery.md](ui-maps/insights-ui-discovery.md) を正とする。
+
+| プロパティ | export(読み) | import(書き) | 備考 |
+|---|---|---|---|
+| custom chart name / order | **UI** | **UI** | default `Burn up` は target built-in のため collection から除外 |
+| kind | **UI** | **UI** | X-axis=`Time` なら historical、それ以外は current |
+| filter / layout / X-axis / Group by | **UI** | **UI** | field は name + kind で target へ再解決 |
+| Y-axis aggregation / Number field | **UI** | **UI** | Count 以外は Number field 必須 |
+| historical data points | 対象外 | 対象外 | target item history から生成。設定だけを移行・verify |
+
+つまり完全移行には **export/import の両側で Playwright が必要**(group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細、Insights chart 設定)。API-only import でも View の基本構成は作成される。
 
 ---
 
@@ -47,12 +60,15 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 ```
 組織プロジェクト   {base}/orgs/{org}/projects/{number}
 ユーザープロジェクト {base}/users/{user}/projects/{number}
-特定 View        {base}/orgs/{org}/projects/{number}/views/{viewNumber}
-Workflows 一覧    {base}/orgs/{org}/projects/{number}/workflows
-特定 Workflow     {base}/orgs/{org}/projects/{number}/workflows/{uiWorkflowId}
-設定             {base}/orgs/{org}/projects/{number}/settings
+特定 View        {projectUrl}/views/{viewNumber}
+Workflows 一覧    {projectUrl}/workflows
+特定 Workflow     {projectUrl}/workflows/{uiWorkflowId}
+Insights           {projectUrl}/insights
+Custom chart       {projectUrl}/insights/{uiChartNumber}
+設定             {projectUrl}/settings
 ```
 
+- `{projectUrl}` は owner type に応じて上記の組織またはユーザープロジェクト URL を使う。
 - `viewNumber` は GraphQL の `ProjectV2View.number` と一致する。Workflow の URL ID は GraphQL の `ProjectV2Workflow.number` とは独立しているため、Workflow はサイドバーの accessible name で開く。
 
 ### 1.2 認証
@@ -316,6 +332,7 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 | disabled workflow への設定適用 | 対応済み。設定保存後に toggle off へ戻す |
 | memex 内部 API の直接利用 | 既定では不採用。HAR は現時点で成果物として記録していない。UI 操作不能項目が出た場合に調査・取得を検討 |
 | UI 変更による破損 | リリース前の手動 browser E2E と `docs/ui-maps/` の実測記録で確認。回復可能な破損は warning + 対象設定の skip。scheduled/nightly CI は未実装 |
+| Insights chart | #48 の blocking Discovery は部分完了。read-only selectors と config shape は確定したが、rename/delete/order/save/error と Y-axis field picker は [UI map §12](ui-maps/insights-ui-discovery.md#12-unknowns--blockers) 解消まで実装しない |
 
 ## 9. 実装タスク分解と現在の状態
 
