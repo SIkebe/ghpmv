@@ -222,7 +222,27 @@ public class BrowserRoundTripTests
             StringComparer.Ordinal));
 
         var title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N");
-        var snapshot = source with { Project = source.Project with { Title = title } };
+        var shiftedSourceViews = source.Views.Select(view => view with
+        {
+            TabPosition = view.TabPosition + 1,
+        }).ToList();
+        var overflowViews = Enumerable.Range(1, 6).Select(index => new ViewSnapshot
+        {
+            Number = 100 + index,
+            TabPosition = index == 1 ? 0 : source.Views.Count + index - 1,
+            Name = $"Overflow {index}",
+            Layout = "TABLE_LAYOUT",
+            GroupByFields = [],
+            SortByFields = [],
+            VerticalGroupByFields = [],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot(),
+        }).ToList();
+        var snapshot = source with
+        {
+            Project = source.Project with { Title = title },
+            Views = [.. shiftedSourceViews, .. overflowViews],
+        };
         var apiPositions = snapshot.Views
             .OrderBy(view => view.Number)
             .Select((view, position) => (view.Number, position))
@@ -259,6 +279,8 @@ public class BrowserRoundTripTests
                 && difference.Category == "View"
                 && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
 
+            var targetPage = await targetSession.GetPageAsync(cancellationToken);
+            await targetPage.SetViewportSizeAsync(480, 1000);
             var viewImporter = new ViewUiImporter(targetSession, targetClient);
             await viewImporter.EnrichAsync(
                 snapshot,
@@ -300,6 +322,7 @@ public class BrowserRoundTripTests
             Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
 
             Assert.Equal(snapshot.Views.Count, target.Views.Count);
+            Assert.True(snapshot.Views.Count > 3);
             Assert.Equal(
                 snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name),
                 target.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));

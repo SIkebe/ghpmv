@@ -688,7 +688,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 | ID | 手順 | 期待結果 |
 |---|---|---|
-| N-1 | `--enable-browser-automation` なしで export/import | POSITION を含む API-only 項目は移行される。既存 target の tab order 差分は修復せず warning、Views / Workflows UI-only 項目も warning または未移行として扱われる。 |
+| N-1 | `--enable-browser-automation` なしで export/import | POSITION は snapshot に保存され verify で比較されるが、API-only import は既存 target の tab order 差分を修復せず warning にする。Views / Workflows UI-only 項目も warning または未移行として扱われる。 |
 | N-2 | `repository-mappings.csv` から fixture repo 行を削除して import | Issue / PR item が warning + skip され、Draft items は作成される。 |
 | N-3 | target token を source token に差し替えて import | 権限不足で失敗し、Project を壊さない。 |
 | N-4 | browser profile を間違える | ログイン / 権限エラーで失敗し、再ログイン案内が出る。 |

@@ -1,6 +1,7 @@
 using Ghpmv.Core.Browser;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
+using Microsoft.Playwright;
 
 namespace Ghpmv.Browser.Tests;
 
@@ -207,6 +208,34 @@ public class ViewUiLogicTests
             Assert.Equal(desired, ApplyMoves(current, moves));
             Assert.Equal(desired.Length - LongestIncreasingSubsequenceLength(current), moves.Count);
         }
+    }
+
+    [Fact]
+    public async Task Tab_move_execution_reports_drag_and_final_readback_failures()
+    {
+        var moves = new List<ViewUiImporter.TabMove>
+        {
+            new(2, 1, PlaceBefore: true),
+        };
+        var desired = new List<int> { 2, 1 };
+        var names = new Dictionary<int, string> { [1] = "First", [2] = "Second" };
+
+        var warnings = await ViewUiImporter.ApplyTabMovesAsync(
+            moves,
+            desired,
+            names,
+            (_, _) => throw new PlaywrightException("forced drag failure"),
+            _ => Task.FromResult<IReadOnlyList<int>>([1, 2]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(warnings, warning =>
+            warning.Contains("view tab 'Second' could not be reordered", StringComparison.Ordinal)
+            && warning.Contains("forced drag failure", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning =>
+            warning.Contains("could not be fully applied", StringComparison.Ordinal)
+            && warning.Contains("expected [Second, First]", StringComparison.Ordinal)
+            && warning.Contains("actual [First, Second]", StringComparison.Ordinal));
+        Assert.Equal(2, warnings.Count);
     }
 
     // ----- verifier: Ui comparison (M6) -----

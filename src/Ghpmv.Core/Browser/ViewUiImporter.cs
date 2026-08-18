@@ -228,10 +228,11 @@ public sealed class ViewUiImporter
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
             $"Reordering View tabs with {moves.Count} drag operation(s)..."));
-        foreach (var move in moves)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
+        _warnings.AddRange(await ApplyTabMovesAsync(
+            moves,
+            desiredNumbers,
+            names,
+            async (move, token) =>
             {
                 var source = Sel.DraggableViewTab(page, move.ViewNumber);
                 var anchor = Sel.DraggableViewTab(page, move.AnchorViewNumber);
@@ -247,26 +248,54 @@ public sealed class ViewUiImporter
                         Y = anchorBox.Height / 2,
                     },
                 }).ConfigureAwait(false);
-                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                await PauseAsync(token).ConfigureAwait(false);
+            },
+            token => ReadImportedTabOrderAsync(
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                importedNumbers,
+                desiredNumbers,
+                token),
+            cancellationToken).ConfigureAwait(false));
+    }
+
+    internal static async Task<List<string>> ApplyTabMovesAsync(
+        List<TabMove> moves,
+        List<int> desiredNumbers,
+        Dictionary<int, string> names,
+        Func<TabMove, CancellationToken, Task> dragAsync,
+        Func<CancellationToken, Task<IReadOnlyList<int>>> readOrderAsync,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(moves);
+        ArgumentNullException.ThrowIfNull(desiredNumbers);
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(dragAsync);
+        ArgumentNullException.ThrowIfNull(readOrderAsync);
+
+        var warnings = new List<string>();
+        foreach (var move in moves)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                await dragAsync(move, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
-                _warnings.Add($"view tab '{names[move.ViewNumber]}' could not be reordered — {exception.Message}");
+                warnings.Add($"view tab '{names[move.ViewNumber]}' could not be reordered — {exception.Message}");
             }
         }
 
-        var actualNumbers = await ReadImportedTabOrderAsync(
-            ownerLogin,
-            ownerType,
-            projectNumber,
-            importedNumbers,
-            desiredNumbers,
-            cancellationToken).ConfigureAwait(false);
+        var actualNumbers = await readOrderAsync(cancellationToken).ConfigureAwait(false);
         if (!desiredNumbers.SequenceEqual(actualNumbers))
         {
-            _warnings.Add(
+            warnings.Add(
                 $"view tab order could not be fully applied (expected [{FormatOrder(desiredNumbers, names)}], actual [{FormatOrder(actualNumbers, names)}])");
         }
+
+        return warnings;
     }
 
     private async Task<IReadOnlyList<int>> ReadImportedTabOrderAsync(
@@ -328,7 +357,7 @@ public sealed class ViewUiImporter
             .ToList();
     }
 
-    internal static IReadOnlyList<TabMove> BuildTabMovePlan(
+    internal static List<TabMove> BuildTabMovePlan(
         IReadOnlyList<int> current,
         IReadOnlyList<int> desired)
     {
