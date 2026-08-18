@@ -60,14 +60,15 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 ```
 組織プロジェクト   {base}/orgs/{org}/projects/{number}
 ユーザープロジェクト {base}/users/{user}/projects/{number}
-特定 View        {base}/orgs/{org}/projects/{number}/views/{viewNumber}
-Workflows 一覧    {base}/orgs/{org}/projects/{number}/workflows
-特定 Workflow     {base}/orgs/{org}/projects/{number}/workflows/{uiWorkflowId}
-Insights           {base}/orgs/{org}/projects/{number}/insights
-Custom chart       {base}/orgs/{org}/projects/{number}/insights/{uiChartNumber}
-設定             {base}/orgs/{org}/projects/{number}/settings
+特定 View        {projectUrl}/views/{viewNumber}
+Workflows 一覧    {projectUrl}/workflows
+特定 Workflow     {projectUrl}/workflows/{uiWorkflowId}
+Insights           {projectUrl}/insights
+Custom chart       {projectUrl}/insights/{uiChartNumber}
+設定             {projectUrl}/settings
 ```
 
+- `{projectUrl}` は owner type に応じて上記の組織またはユーザープロジェクト URL を使う。
 - `viewNumber` は GraphQL の `ProjectV2View.number` と一致する。Workflow の URL ID は GraphQL の `ProjectV2Workflow.number` とは独立しているため、Workflow はサイドバーの accessible name で開く。
 
 ### 1.2 認証

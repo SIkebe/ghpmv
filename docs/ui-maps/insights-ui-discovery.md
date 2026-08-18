@@ -104,7 +104,7 @@ accessibility tree:
 | chart link | Custom charts list 内 `getByRole('link', { name: chartName, exact: true })` | verified。duplicate name は §12 の blocker |
 | chart options | chart link 内 `getByRole('button', { name: 'Chart options', exact: true })` | verified。page 全体では同名が複数ある |
 | create | `getByRole('button', { name: 'New chart', exact: true })` | verified |
-| current chart heading | `getByRole('heading', { name: /^<name>/, level: 2 })` | verified。ただし heading name に `Edit chart name Configure` が結合される |
+| current chart heading | `GetByRole(Heading, new() { NameRegex = new($"^{Regex.Escape(name)}"), Level = 2 })` | verified。dynamic name は必ず `Regex.Escape` する。heading name に `Edit chart name Configure` が結合されるため prefix match |
 | rename entry | heading 内 `getByRole('button', { name: 'Edit chart name', exact: true })` | verified |
 | configure entry | heading 内 `getByRole('button', { name: 'Configure', exact: true })` | verified |
 | configure pane | `getByRole('heading', { name: 'Configure chart', level: 2 })` を起点に scope | verified |
@@ -239,8 +239,21 @@ property を含む warning にして次 chart へ進む。chart link / config pa
 - URL が `/insights/1` に遷移
 - reload 後も chart が残存
 
-した。したがって create は transaction ではなく、設定失敗時にも空 chart が残る。
-import-log に target chart number を保存してから設定し、resume で再利用する必要がある。
+した。したがって create は transaction ではなく、設定失敗時にも空 chart が残る。`New chart` の click 後に
+chart number を保存するだけでは、GitHub が作成してから local log write 前に停止する crash window がある。
+
+既存 create mutation と同じ fail-closed lifecycle を使う:
+
+1. click 前に Custom charts の href/number baseline と pending chart operation を
+   `project-import-log.json` (または専用 browser-operation log) へ atomic write する。
+2. `New chart` を 1 回だけ click する。
+3. 遷移先 href と baseline の差分が exactly one なら、その target chart number を pending operation へ
+   atomic bind して設定を続ける。
+4. response / navigation が ambiguous な場合、再 click しない。resume は current list と記録済み baseline を
+   比較して exactly one の new chart だけを adopt する。
+5. new chart が 0 または複数なら manual reconciliation error で停止する。
+
+この project-level lifecycle を item/status 用 `import-log.json` に混在させない。
 
 ### 6.3 Rename
 
