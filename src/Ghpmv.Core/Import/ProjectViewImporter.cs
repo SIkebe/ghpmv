@@ -126,10 +126,30 @@ internal sealed class ProjectViewImporter
 
         var expected = orderedSourceViews.Select(view => viewNumbers[view.Number]).ToList();
         var importedNumbers = expected.ToHashSet();
-        var actual = (await FetchViewsAsync(projectId, cancellationToken).ConfigureAwait(false))
-            .Where(view => importedNumbers.Contains(view.Number))
-            .Select(view => view.Number)
-            .ToList();
+        List<int> actual = [];
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+            }
+
+            actual = (await FetchViewsAsync(projectId, cancellationToken).ConfigureAwait(false))
+                .Where(view => importedNumbers.Contains(view.Number))
+                .Select(view => view.Number)
+                .ToList();
+            if (actual.Count == expected.Count)
+            {
+                break;
+            }
+        }
+
+        if (actual.Count < expected.Count)
+        {
+            Warn("view tab order could not be confirmed because the target View list remained incomplete; rerun verify after GitHub finishes updating the View connection");
+            return;
+        }
+
         if (!expected.SequenceEqual(actual))
         {
             Warn("view tab order differs from the snapshot; public APIs cannot repair it, so rerun import with browser automation");
