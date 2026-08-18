@@ -116,6 +116,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Issue 2 件
 - open Pull Request 1 件
 - Project `gpm-fixture`
+- Organization Project template 属性（`setup --fixture` の全 API fixture 作成後に template 化）
 - custom fields(Text / Number / Date / Single-select / Multi-select (`Fixture Areas`) / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
@@ -481,6 +482,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
 確認ポイント:
 
 - `$env:GHPMV_SNAPSHOT_DIR/snapshot.json` が作成される。
+- `snapshot.json` の `project.template` が `true` である。
 - `snapshot.json` の `statusUpdates` が source UI と同じ reverse-chronological sequence で、5件の status/date/body/creator/createdAt/updatedAt を含む。
 - `repository-mappings.csv` が生成される。
 - linked Team がある場合は `team-mappings.csv` が生成され、source 値は `organization/slug` になっている。
@@ -560,6 +562,8 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。同じ snapshot directory と `--project-number <target-project-number> --on-conflict update` で再実行し、`created=0`、`already-complete=5` となり、UI の履歴件数が増えないことも確認します。本文が同じ Status Update が複数あっても内容で統合されず、snapshot の各 sequence が1件ずつ残ることが合格条件です。
 
+template 化は import の最終書き込み段です。stderr で Items / Status Updates / API View / browser View enrichment・tab order / Workflows の完了後に `Marking the target project as a template as the final import stage...` が出ることを確認します。Organization の **Projects → Templates** と Create project ダイアログで target Project がテンプレートとして表示されることも確認します。
+
 ```text
 Target project URL: https://github.com/orgs/<target-org>/projects/<target-project-number>
 Target project number: <target-project-number>
@@ -595,7 +599,7 @@ source / target の repository 名、user login、または Team slug が異な�
 OK: the target project matches the snapshot.
 ```
 
-human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
+human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれ、`Project: Match` に template 属性の一致が反映されることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
@@ -680,6 +684,13 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] explicit Team collaborator の role 差分と Team link 差分が別カテゴリで報告される。
 - [ ] inherited access は判定対象外として記録。
 
+### 8.8 Project template
+
+- [ ] source と target の `project.template` が一致し、Organization の Templates UI と Create project ダイアログに表示される。
+- [ ] Status Updates を含む import では、target が一時的に通常 Project となり、全 writer 完了後に template へ戻る。
+- [ ] snapshot の `project.template` を `false` にして既存 template target へ再 import すると、最終段で通常 Projectへ戻る。
+- [ ] `project.template` 行を削除した schema v1 snapshot では、既存 target の template 状態が変わらない。
+
 ---
 
 ## 9. 追加のネガティブテスト
@@ -699,6 +710,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-9 | Team read/maintainer 権限のない token、または admin access のない既存 Project で import | Team mutation の実行前に `permission` preflight error で停止する。 |
 | N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
 | N-11 | target UI で View tab を逆順にして API-only verify | `View` category と JSON report に `view tab order mismatch` が出る。続けて browser-assisted import を再実行すると順序が修復される。 |
+| N-12 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
 
 ---
 

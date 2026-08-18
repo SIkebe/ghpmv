@@ -16,6 +16,7 @@ public class SnapshotTests
             Readme = "# Readme\n\nBody",
             Public = false,
             Closed = false,
+            Template = true,
         },
         Fields =
         [
@@ -430,6 +431,7 @@ public class SnapshotTests
         var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
 
         Assert.NotNull(restored);
+        Assert.Null(restored.Project.Template);
         Assert.Null(restored.StatusUpdates);
         Assert.Empty(restored.Items);
     }
@@ -446,6 +448,7 @@ public class SnapshotTests
         using var document = JsonDocument.Parse(json);
         Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
+        Assert.True(document.RootElement.GetProperty("project").GetProperty("template").GetBoolean());
     }
 
     [Fact]

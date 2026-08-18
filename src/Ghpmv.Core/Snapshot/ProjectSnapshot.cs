@@ -116,6 +116,12 @@ public sealed record ProjectInfoSnapshot
     public required bool Public { get; init; }
 
     public required bool Closed { get; init; }
+
+    /// <summary>
+    /// Whether an organization-owned Project is a template. Null when the snapshot
+    /// predates template support and import must preserve the target's current state.
+    /// </summary>
+    public bool? Template { get; init; }
 }
 
 /// <summary>

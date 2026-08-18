@@ -288,6 +288,13 @@ public sealed class FixtureProjectBuilder
                 && !importStatusUpdates
                 && IsCompletedOperation(projectLog, itemLog))
             {
+                await InvokeBeforeWriteOnceAsync(cancellationToken).ConfigureAwait(false);
+                await ProjectTemplateWriteSession.SetFinalStateAsync(
+                    _graphQl,
+                    existing.Id,
+                    snapshot.Project.Template!.Value,
+                    OnProgress,
+                    cancellationToken).ConfigureAwait(false);
                 OnProgress?.Invoke($"Fixture project already completed; no API fixture writes are required: {existing.Url}");
                 return new FixtureProjectSetupResult(
                     existing.Number,
@@ -399,6 +406,23 @@ public sealed class FixtureProjectBuilder
                     cancellationToken).ConfigureAwait(false);
             }
 
+            if (templateWriteSession is not null)
+            {
+                await templateWriteSession.CompleteAsync(
+                    snapshot.Project.Template,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await InvokeBeforeWriteOnceAsync(cancellationToken).ConfigureAwait(false);
+                await ProjectTemplateWriteSession.SetFinalStateAsync(
+                    _graphQl,
+                    project.ProjectId,
+                    snapshot.Project.Template!.Value,
+                    OnProgress,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             await MarkOperationCompletedAsync(
                 operationDirectory,
                 operationWarningCount,
@@ -436,12 +460,25 @@ public sealed class FixtureProjectBuilder
         ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(snapshot);
 
-        if (log.StatusUpdates.Count > 0
-            || log.PendingStatusUpdates.Count > 0
-            || !string.Equals(
-                log.SourceSnapshotFingerprint,
-                ImportLog.ComputeSnapshotFingerprint(snapshot with { StatusUpdates = null }),
-                StringComparison.Ordinal))
+        var withoutTemplate = snapshot with
+        {
+            Project = snapshot.Project with { Template = null },
+        };
+        var matchesPreTemplateSnapshot = string.Equals(
+            log.SourceSnapshotFingerprint,
+            ImportLog.ComputeSnapshotFingerprint(withoutTemplate),
+            StringComparison.Ordinal);
+        var matchesPreStatusSnapshot = log.StatusUpdates.Count == 0
+            && log.PendingStatusUpdates.Count == 0
+            && (string.Equals(
+                    log.SourceSnapshotFingerprint,
+                    ImportLog.ComputeSnapshotFingerprint(snapshot with { StatusUpdates = null }),
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    log.SourceSnapshotFingerprint,
+                    ImportLog.ComputeSnapshotFingerprint(withoutTemplate with { StatusUpdates = null }),
+                    StringComparison.Ordinal));
+        if (!matchesPreTemplateSnapshot && !matchesPreStatusSnapshot)
         {
             return null;
         }
@@ -1451,6 +1488,7 @@ public sealed class FixtureProjectBuilder
                 Readme = "# ghpmv fixture 📦\n\nPermanent fixture project for ghpmv integration tests.\n\n- All custom field types (Text / Number / Date / Single-select / Multi-select / Iteration)\n- An organization multi-select Issue Field with multiple selected values\n- Drafts with 日本語 values, an Issue, a PR, an archived item and an assigned item\n- Views and workflows can be created by running `ghpmv setup --fixture-ui` (C# browser module) 🚀",
                 Public = false,
                 Closed = false,
+                Template = true,
             },
             Fields =
             [

@@ -361,6 +361,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
         }
 
+        if (ownerType == ProjectOwnerType.User && snapshot.Project.Template is true)
+        {
+            throw new InvalidOperationException(
+                "A user-owned Project cannot be marked as a template. Import this snapshot into an organization-owned Project.");
+        }
+
         var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation, ownerType);
         if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
         {
@@ -661,7 +667,16 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         if (templateWriteSession is not null)
         {
-            await templateWriteSession.RestoreAsync(cancellationToken);
+            await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
+        }
+        else if (snapshot.Project.Template is { } desiredTemplate)
+        {
+            await ProjectTemplateWriteSession.SetFinalStateAsync(
+                client,
+                result.ProjectId,
+                desiredTemplate,
+                Console.Error.WriteLine,
+                cancellationToken);
         }
 
         var completedProjectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);

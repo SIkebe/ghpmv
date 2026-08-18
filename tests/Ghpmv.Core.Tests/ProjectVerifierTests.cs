@@ -203,7 +203,7 @@ public class ProjectVerifierTests
     {
         using var handler = new StubHandler(
             """
-            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            {"data":{"organization":{"projectV2":{"title":"Raw target","shortDescription":null,"readme":null,"public":false,"closed":false,"template":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
             """,
             """
             {"data":{"organization":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
@@ -251,7 +251,7 @@ public class ProjectVerifierTests
     {
         using var handler = new StubHandler(
             """
-            {"data":{"user":{"projectV2":{"title":"Fixture","shortDescription":"desc","readme":"# Readme","public":false,"closed":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            {"data":{"user":{"projectV2":{"title":"Fixture","shortDescription":"desc","readme":"# Readme","public":false,"closed":false,"template":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
             """,
             """
             {"data":{"user":{"projectV2":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
@@ -312,6 +312,39 @@ public class ProjectVerifierTests
 
         Assert.False(report.IsMatch);
         Assert.Contains(report.Differences, d => d.Severity == VerifySeverity.Error && d.Category == "Project" && d.Message.Contains("visibility", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Project_template_difference_is_an_error()
+    {
+        var source = BuildSnapshot() with
+        {
+            Project = BuildSnapshot().Project with { Template = true },
+        };
+        var target = source with { Project = source.Project with { Template = false } };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.False(report.IsMatch);
+        Assert.Contains(report.Differences, difference =>
+            difference is
+            {
+                Severity: VerifySeverity.Error,
+                Category: "Project",
+            } && difference.Message.Contains("template state mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Legacy_null_template_state_is_not_compared()
+    {
+        var source = BuildSnapshot();
+        var target = source with { Project = source.Project with { Template = true } };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "Project"
+            && difference.Message.Contains("template", StringComparison.Ordinal));
     }
 
     // ----- fields -----
