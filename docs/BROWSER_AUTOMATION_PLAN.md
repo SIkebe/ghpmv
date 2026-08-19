@@ -319,6 +319,8 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 | memex 内部 API の直接利用 | 既定では不採用。HAR は現時点で成果物として記録していない。UI 操作不能項目が出た場合に調査・取得を検討 |
 | UI 変更による破損 | リリース前の手動 browser E2E と `docs/ui-maps/` の実測記録で確認。回復可能な破損は warning + 対象設定の skip。scheduled/nightly CI は未実装 |
 
+`ViewUiExporter.GraphQlPositionMatchesDomOrder`は、APIのPOSITION順とDOM saved-tab順の一致状態を記録する。Browser round-trip E2Eは現時点の乖離をcapability canaryとしてassertする。GitHub側の修正により一致した場合、E2Eを意図的に失敗させ、browser readをGraphQL readへ置換できるか再評価する。public mutationにtab-order write inputが追加されたかは別途GraphQL schema/changelogで確認する。
+
 ## 9. 実装タスク分解と現在の状態
 
 | ID | タスク | 状態 |

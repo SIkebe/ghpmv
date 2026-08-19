@@ -198,6 +198,9 @@ public class BrowserRoundTripTests
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await uiExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(uiExporter.Warnings);
+        Assert.False(
+            uiExporter.GraphQlPositionMatchesDomOrder,
+            "GraphQL POSITION now matches the saved-tab DOM order. Re-evaluate replacing the browser read path with the public API.");
         Assert.All(source.Views, v => Assert.NotNull(v.Ui));
         Assert.Contains(source.Fields, field => field.Name == "Labels" && field.DataType == "LABELS");
         Assert.Contains(source.Fields, field => field.Name == "Fixture Teams" && field.IssueField is not null);
