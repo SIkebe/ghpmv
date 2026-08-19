@@ -107,8 +107,10 @@ public class ProjectViewImporterIntegrationTests
                 difference.Severity == VerifySeverity.Warning
                 && difference.Category == "View"
                 && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
-            Assert.Contains(report.Categories, category =>
-                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
+            Assert.DoesNotContain(report.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order", StringComparison.Ordinal));
         }
         finally
         {
