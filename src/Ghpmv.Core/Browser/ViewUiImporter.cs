@@ -523,11 +523,11 @@ public sealed class ViewUiImporter
                 cancellationToken).ConfigureAwait(false);
         }
 
-        // "Field sum" is a checkbox overlay (Count + number fields). A fresh board
-        // defaults to ["Count"], so apply the complete desired set, including empty.
-        if (isBoard && view.Ui is not null)
+        // Grouped Table/Roadmap views and Board views expose the same checkbox overlay
+        // (Count + number fields). Apply the complete desired set, including empty.
+        if (FieldSumValuesToApply(view) is { } fieldSum)
         {
-            await TrySetCheckboxesAsync(page, "Field sum", view.Ui.FieldSum ?? [], view.Name, cancellationToken).ConfigureAwait(false);
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         if (view.Ui?.Roadmap is { } roadmap)
@@ -545,6 +545,20 @@ public sealed class ViewUiImporter
             await TrySetCheckboxesAsync(page, "Markers", roadmap.Markers ?? [], view.Name, cancellationToken).ConfigureAwait(false);
         }
 
+    }
+
+    internal static IReadOnlyList<string>? FieldSumValuesToApply(ViewSnapshot view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        if (view.Ui is null)
+        {
+            return null;
+        }
+
+        var controlIsAvailable = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            || view.GroupByFields.Count > 0
+            && (view.Layout is "TABLE_LAYOUT" or "ROADMAP_LAYOUT");
+        return controlIsAvailable ? view.Ui.FieldSum ?? [] : null;
     }
 
     private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
@@ -706,7 +720,17 @@ public sealed class ViewUiImporter
 
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
-            await ToggleCheckboxesAsync(page, new HashSet<string>(values, StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            var available = await ToggleCheckboxesAsync(
+                overlay,
+                new HashSet<string>(values, StringComparer.Ordinal),
+                cancellationToken).ConfigureAwait(false);
+            foreach (var value in values.Where(value => !available.Contains(value)))
+            {
+                _warnings.Add($"view '{viewName}': {label} value '{value}' is not available on the target");
+            }
+
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
@@ -722,25 +746,30 @@ public sealed class ViewUiImporter
     /// <c>menuitemcheckbox</c> entries, while "Fields" renders <c>option</c> entries — both
     /// carry <c>aria-checked</c>.
     /// </summary>
-    private static async Task ToggleCheckboxesAsync(IPage page, HashSet<string> desired, CancellationToken cancellationToken)
+    private static async Task<HashSet<string>> ToggleCheckboxesAsync(
+        ILocator overlay,
+        HashSet<string> desired,
+        CancellationToken cancellationToken)
     {
-        var checkboxes = page.GetByRole(AriaRole.Menuitemcheckbox);
+        var checkboxes = overlay.GetByRole(AriaRole.Menuitemcheckbox);
         if (await checkboxes.CountAsync().ConfigureAwait(false) == 0)
         {
-            checkboxes = page.GetByRole(AriaRole.Option);
+            checkboxes = overlay.GetByRole(AriaRole.Option);
         }
 
+        var available = new HashSet<string>(StringComparer.Ordinal);
         var count = await checkboxes.CountAsync().ConfigureAwait(false);
         for (var i = 0; i < count; i++)
         {
             var checkbox = checkboxes.Nth(i);
-            if (string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            var name = ViewUiExporter.NormalizeUiText(await checkbox.InnerTextAsync().ConfigureAwait(false));
+            if (name is null)
             {
                 continue;
             }
 
-            var name = ViewUiExporter.NormalizeUiText(await checkbox.InnerTextAsync().ConfigureAwait(false));
-            if (name is null)
+            available.Add(name);
+            if (string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal))
             {
                 continue;
             }
@@ -752,6 +781,8 @@ public sealed class ViewUiImporter
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
         }
+
+        return available;
     }
 
     private async Task TrySetDateFieldsAsync(IPage page, RoadmapSettingsSnapshot roadmap, string viewName, CancellationToken cancellationToken)

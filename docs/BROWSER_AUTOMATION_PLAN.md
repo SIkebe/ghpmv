@@ -25,7 +25,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | Board の列フィールド | GraphQL `verticalGroupByFields` | **UI**("Column by") | |
 | sort(複数キー+方向) | GraphQL `sortByFields`(`ProjectV2SortByField.direction`) | **UI** | |
 | **Slice by** | ❌ API に無い → **UI で読む** | **UI** | |
-| **Field sum** | ❌ API に無い → **UI で読む** | **UI** | |
+| **Field sum** | ❌ API に無い → **UI で読む** | **UI** | Board と grouped Table / Roadmap。Count、複数 Number field、空集合を complete-set 同期 |
 | **Roadmap 設定(Dates / Zoom / Markers)** | ❌ API に無い → **UI で読む** | **UI** | |
 | タブの並び順 | **UI**(`navigation "Select view"` 内のsaved tab `href`順) | **UI**(タブの drag & drop) | GraphQL `POSITION`は現行UIのsaved-tab順と乖離する場合がある。`ViewSnapshot.tabPosition`はschema v1のnullable additive field |
 
@@ -153,7 +153,7 @@ internal static class Sel
 | V-1 | Table 基本 | 表示フィールド選択と列順 |
 | V-2 | Table + group-by | 任意フィールド 1 つ(Status/Single-select/Iteration など) |
 | V-3 | Table + sort | export は複数キーを保持。v1 browser import が適用するのは先頭キーのみ |
-| V-4 | Table + Field sum | グループ見出しに合計表示する Number フィールド群 |
+| V-4 | Table / Board / Roadmap + Field sum | grouped Table / Roadmap と Board で Count、複数 Number field、空集合を complete-set 同期 |
 | V-5 | Board | Column by(Status / 任意 single-select / iteration) |
 | V-6 | Board + swimlane | Group by(横帯)との組み合わせ |
 | V-7 | Roadmap | Dates(date フィールド対 or iteration)、Zoom(Month/Quarter/Year)、Markers |
@@ -171,7 +171,7 @@ internal static class Sel
 2. `Sel.ViewMenuButton(page).ClickAsync()` → 開いた menu の accessible name / checked state を取得
 3. メニュー項目のラベルから現在値を読む:
    - "Slice by: <field>" → `ViewUiSnapshot.SliceBy`
-   - "Field sum: <fields>" → `ViewUiSnapshot.FieldSum`
+   - "Field sum: <fields>" の子 menu を開き、checked `menuitemcheckbox` 全件 → `ViewUiSnapshot.FieldSum` (summary は 3 件以上で `1 more` に省略されるため使用しない)
    - Roadmap のみ: "Dates: <...>", "Zoom level: <Month|Quarter|Year>", "Markers: <...>"
 4. Esc でメニューを閉じる
 5. `navigation "Select view"`内のsaved tab `href`をDOM順に列挙し、View numberへ変換して`tabPosition`を付与する
@@ -190,7 +190,7 @@ EnrichView(spec, targetViewNumber):
  3. Group by / Swimlanes: layout に応じた項目で spec.GroupBy を選択
  4. Sort by: View menu → "Sort by" → 先頭キーを選択 → 必要なら方向トグル
  5. Slice by: ViewOptions → "Slice by" → spec.SliceBy
- 6. Field sum: ViewOptions → "Field sum" → spec.FieldSum の各フィールドをチェック
+ 6. Field sum: Board または grouped Table / Roadmap で ViewOptions → "Field sum" → 子 menu 内だけを対象に spec.FieldSum の complete set へ同期(Count と空集合を含む)
  7. Roadmap のみ: "Dates" → 開始/終了フィールド対 or iteration を選択、"Zoom level"、"Markers" のチェック群
  8. 保存: View menu → "Save view" → alertdialog の "Save"(dialog が出ない UI variant では直接保存)
  9. 全 View 設定の適用後、target のDOM `href`順と snapshot順から最小移動計画を作り、必要なタブだけdrag-and-drop
@@ -315,11 +315,11 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
 `GHPMV_TEST_ORG` に作る基準プロジェクト(セットアップスクリプトは可能な限り GraphQL、View/Workflow 部分は初回手動 + 本ツール自身でのブートストラップ):
 
 - フィールド: Status(custom option 4 つ、色・説明付き)/ Priority(single-select)/ Estimate(number)/ Start・End(date)/ Sprint(iteration, 2 週間, 完了済み 1 + 未来 2)/ Notes(text)
-- Views(§3.1 の V-1〜V-9 を全て網羅する 4 view):
-  1. "Backlog" — Table, filter, hidden fields, 2 キー sort, Field sum(Estimate), group-by Status
-  2. "Board" — Board, Column by Priority, swimlane = Sprint, Slice by Assignees
-  3. "Roadmap" — Roadmap, Dates = Start/End, Zoom = Quarter, Markers 有効
-  4. "Everything" — Table, 設定ほぼデフォルト(デフォルト値の透過を確認)
+- Views(§3.1 の V-1〜V-10 を網羅):
+  1. "View 1" — grouped Table, filter, sort, Slice by, Field sum=[Count, Fixture Number, Fixture Number 2]
+  2. "Fixture Board" — Board, Column by, swimlane, Field sum=[Fixture Number]
+  3. "Fixture Roadmap" — grouped Roadmap, Field sum=[Fixture Number 2], Dates, Zoom, Markers
+  4. "Fixture Empty Sums" — grouped Table, Field sum=[]
 - Workflows: W-1〜W-8 を非デフォルト Status 値で有効化、W-9 を 2 本(別リポ + 別フィルター)。1 つは disabled のまま設定を持たせる(§4.3 の D0 論点の検証用)
 - Items: issue 10 / PR 3 / draft 3(archived 2 を含む)
 

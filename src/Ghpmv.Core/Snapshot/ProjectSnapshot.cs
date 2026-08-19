@@ -246,7 +246,7 @@ public sealed record ViewUiSnapshot
 {
     public string? SliceBy { get; init; }
 
-    /// <summary>Board "Field sum" entries (e.g. "Count", number field names).</summary>
+    /// <summary>Grouped Table, Board, or Roadmap "Field sum" entries (e.g. "Count", number field names).</summary>
     public IReadOnlyList<string>? FieldSum { get; init; }
 
     public RoadmapSettingsSnapshot? Roadmap { get; init; }

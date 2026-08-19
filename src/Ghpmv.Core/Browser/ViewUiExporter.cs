@@ -122,7 +122,11 @@ public sealed class ViewUiExporter
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
 
         var sliceBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Slice by").ConfigureAwait(false));
-        var fieldSum = ParseListValue(await ReadMenuItemTextAsync(menu, "Field sum").ConfigureAwait(false));
+        var fieldSum = await ReadCheckedMenuValuesAsync(
+            page,
+            menu,
+            "Field sum",
+            cancellationToken).ConfigureAwait(false);
 
         RoadmapSettingsSnapshot? roadmap = null;
         if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
@@ -159,6 +163,47 @@ public sealed class ViewUiExporter
         }
 
         return await item.First.InnerTextAsync().ConfigureAwait(false);
+    }
+
+    private static async Task<IReadOnlyList<string>?> ReadCheckedMenuValuesAsync(
+        IPage page,
+        ILocator menu,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        var item = Sel.ConfigurationMenuItem(menu, label);
+        if (await item.CountAsync().ConfigureAwait(false) == 0)
+        {
+            return null;
+        }
+
+        await item.First.ClickAsync().ConfigureAwait(false);
+        var overlay = Sel.OpenMenu(page);
+        await overlay.WaitForAsync().ConfigureAwait(false);
+        await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+
+        var values = new List<string>();
+        var checkboxes = overlay.GetByRole(AriaRole.Menuitemcheckbox);
+        var count = await checkboxes.CountAsync().ConfigureAwait(false);
+        for (var index = 0; index < count; index++)
+        {
+            var checkbox = checkboxes.Nth(index);
+            if (!string.Equals(
+                    await checkbox.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                    "true",
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (NormalizeUiText(await checkbox.InnerTextAsync().ConfigureAwait(false)) is { } value)
+            {
+                values.Add(value);
+            }
+        }
+
+        await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+        return values.Count == 0 ? null : values;
     }
 
     /// <summary>
