@@ -40,7 +40,7 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums
   - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]

@@ -698,7 +698,7 @@ source が data residency の場合は選択した source command に `--api-bas
 
 出力された source Project number を記録する。
 
-`fixture preparation=create` の成功後、出力された source Project title / number / URL と `<source-org>/<source-repo>` を resource inventory に `created` として追加する。`browser-e2e` では作成された source fixture が上記 contract を持つことを前提にせず、Step 6 の gate で必ず確認する。
+`fixture preparation=create` の成功後、出力された source Project title / number / URL を resource inventory に `created` として追加する。`source empty-repository fallback=selected` なら `<source-org>/<source-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。`browser-e2e` では作成された source fixture が上記 contract を持つことを前提にせず、Step 6 の gate で必ず確認する。
 
 `browser-e2e` の再試行も同じ combined command と同じ title / repository を使う。CLI は owned fixture の `fixture-ui-complete` marker を確認し、完了済みなら UI setup を自動で skipし、未完了なら再開する。marker-aware retry を迂回するため、通常の再試行で `--fixture-ui --fixture-project <source-project-number>` を実行しない。
 
@@ -796,6 +796,7 @@ foreach ($expected in $expectedViews) {
     if ($matches.Count -ne 1) { Stop-FieldSumSnapshotCheck "Expected exactly one view '$($expected.Name)', found $($matches.Count)."; return }
     $actual = $matches[0]
     if ($actual.layout -ne $expected.Layout) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' layout mismatch: expected $($expected.Layout), actual $($actual.layout)."; return }
+    if ($null -eq $actual.ui) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' is missing browser-captured UI settings."; return }
     $actualGroupBy = @($actual.groupByFields)
     $actualFieldSum = @($actual.ui.fieldSum)
     if ([string]::Join("`0", [string[]]$actualGroupBy) -ne [string]::Join("`0", [string[]]$expected.GroupBy)) {
@@ -948,7 +949,7 @@ target が data residency の場合は `--api-base-url <target-api-url>` を追�
 
 `target empty-repository fallback` が `selected` の場合だけ、上記 target command に `--fixture-allow-existing-empty-repo` も追加する。
 
-fixture seed 成功後、出力された target seed Project title / number / URL と `<target-org>/<target-repo>` を resource inventory に `created` として追加する。import 先 Project とは別 entry にする。
+fixture seed 成功後、出力された target seed Project title / number / URL を resource inventory に `created` として追加する。`target empty-repository fallback=selected` なら `<target-org>/<target-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。import 先 Project とは別 entry にする。
 
 target 側の `setup --fixture-ui` は不要。
 
