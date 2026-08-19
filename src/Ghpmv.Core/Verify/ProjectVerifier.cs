@@ -657,6 +657,8 @@ public sealed class ProjectVerifier
         List<VerifyDifference> differences,
         HashSet<string> notVerified)
     {
+        CompareViewOrder(source, target, differences, notVerified);
+
         foreach (var name in Names(source.Select(v => v.Name), target.Select(v => v.Name)))
         {
             var s = source.Where(v => string.Equals(v.Name, name, StringComparison.Ordinal)).ToList();
@@ -725,6 +727,70 @@ public sealed class ProjectVerifier
                     AddError(differences, ViewCategory,
                         $"views named '{name}': combined API and UI settings do not match");
                 }
+            }
+        }
+    }
+
+    private static void CompareViewOrder(
+        IReadOnlyList<ViewSnapshot> source,
+        IReadOnlyList<ViewSnapshot> target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source.Count == 0 || source.Any(view => view.TabPosition is null))
+        {
+            return;
+        }
+
+        if (target.Any(view => view.TabPosition is null))
+        {
+            notVerified.Add(ViewCategory);
+            Add(differences, VerifySeverity.Warning, ViewCategory,
+                "view tab order was captured in the source but could not be read from the target");
+            return;
+        }
+
+        var sourceOrder = source
+            .OrderBy(view => view.TabPosition)
+            .ToList();
+        var targetOrder = target
+            .OrderBy(view => view.TabPosition)
+            .ToList();
+        if (!sourceOrder.Select(view => view.Name).SequenceEqual(
+            targetOrder.Select(view => view.Name),
+            StringComparer.Ordinal))
+        {
+            AddError(differences, ViewCategory,
+                $"view tab order mismatch (source [{string.Join(", ", sourceOrder.Select(view => view.Name))}], target [{string.Join(", ", targetOrder.Select(view => view.Name))}])");
+            return;
+        }
+
+        foreach (var name in sourceOrder
+            .GroupBy(view => view.Name, StringComparer.Ordinal)
+            .Where(group => group.Count() > 1)
+            .Select(group => group.Key))
+        {
+            var sourceGroup = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
+            var targetGroup = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal)).ToList();
+            var compareUi = sourceGroup.All(view => view.Ui is not null)
+                && targetGroup.All(view => view.Ui is not null);
+            bool SameSemanticView(ViewSnapshot sourceView, ViewSnapshot targetView)
+                => ViewApiEquals(sourceView, targetView)
+                    && (!compareUi || ViewUiEquals(sourceView.Ui!, targetView.Ui!));
+
+            if (!MultisetEquals(sourceGroup, targetGroup, SameSemanticView))
+            {
+                continue;
+            }
+
+            var sourcePositions = sourceOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
+            var targetPositions = targetOrder.Where(view => string.Equals(view.Name, name, StringComparison.Ordinal));
+            if (!sourcePositions.Zip(targetPositions).All(pair => SameSemanticView(pair.First, pair.Second)))
+            {
+                AddError(differences, ViewCategory,
+                    compareUi
+                        ? $"views named '{name}': tab order mismatch between combined API and UI settings"
+                        : $"views named '{name}': tab order mismatch between API-visible settings");
             }
         }
     }

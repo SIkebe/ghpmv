@@ -185,6 +185,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている場合は、そのpathだけをauthoritativeなJSONCとして読む。明示pathが存在しない、読み取れない、またはvalidationに失敗した場合は、local/shared fileへfallbackせず、pathとエラーを示して修正されるまで停止する。`GHPMV_E2E_SETTINGS`が未設定の場合だけ、`tests/e2e.settings.local.jsonc`、`tests/e2e.settings.jsonc`の順で最初に存在するfileを読む。`//`コメントと末尾commaを許可する。設定値は次の用途に使い、同じ非secret値を再質問しない。
 
+自動検出ではglobやtracked-file一覧だけに依存しない。`tests/e2e.settings.local.jsonc`はgitignore対象のため、file search結果に現れないことがある。必ずrepository rootから`Test-Path -LiteralPath tests/e2e.settings.local.jsonc`でexact pathの存在を先に確認し、存在すればshared fileを読む前にlocal fileを読む。local fileが存在するのにshared fileを先に読んだり、localに非空で設定されたlogin、organization、repository、policy confirmationを再質問したりしてはならない。
+
 - source / target Organization、API / Web / uploads URL、browser profile
 - Integration / Browser fixtureのProject番号とsource / target repository
 - source / target browser login、collaborator login、EMUを含むuser mapping
@@ -193,6 +195,8 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 - PATおよびbrowser stateを保持する**環境変数名**
 
 自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
+
+`browser-e2e`で`users.sourceBrowserLogin`と`users.targetBrowserLogin`が両方とも非空なら、source / target browser accountが同一か別かを質問しない。account identityは正規化した`webBaseUrl` hostとbrowser loginの組で機械判定する。同じhostでloginがcase-insensitiveに一致する場合だけ同一account、hostまたはloginが異なる場合は別accountとして記録する。どちらかのloginが空の場合だけ不足しているloginを一件ずつ質問し、両方確定後に同じ規則で判定する。
 
 `source.apiBaseUrl` / `target.apiBaseUrl`はghpmv用GraphQL endpointで、`https://api.TENANT.ghe.com/graphql`またはtenant API originのどちらも受け付ける。GEIの`--github-source-api-url` / `--target-api-url`へ渡す値は別に導出し、末尾のoptional `/graphql`とtrailing slashを除いた`https://api.TENANT.ghe.com` originを使う。GraphQL endpointをそのままGEI argumentへ再利用しない。
 
@@ -251,7 +255,7 @@ GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用す
 1. source host type: **GitHub.com（通常の GHEC を含む）** または **GHEC with data residency (`*.ghe.com`)**
 2. `api-only` / `browser-e2e` では target host type も同じ二択で確認する。
 3. data residency を選んだ側ごとに、placeholder ではない tenant web URL (`https://TENANT.ghe.com`) を自由入力の質問カードで確認する。対応する API URL (`https://api.TENANT.ghe.com`) を導出して別の確認カードで提示し、確定する。target側ではuploads URL (`https://uploads.TENANT.ghe.com`) も導出して別の確認カードで確定する。
-4. `browser-e2e` では source / target の browser account が同一か別かを host とは別の質問で確認する。
+4. `browser-e2e` では、settingsのbrowser loginが片側でも空の場合だけ不足loginを確認する。両login確定後は`(web host, login)`で同一/別accountを機械判定し、同一か別かを別質問で確認しない。
 
 GitHub.com は web URL `https://github.com`、API URL `https://api.github.com/graphql` として記録する。特に **GitHub.com source → GHEC with data residency target** を `github.com-to-ghec-dr` として一級シナリオにする。この topology では source command は既定の GitHub.com endpoint を使い、target command と target browser profile だけに tenant endpoint を指定する。host が異なる場合は login 文字列が似ていても `source` / `target` browser profile と token を必ず分ける。
 

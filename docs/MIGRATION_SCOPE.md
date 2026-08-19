@@ -65,7 +65,7 @@ View names, layouts, filters, and ordered visible fields are imported through th
 | Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
 | View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
 | View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
-| View tab order | ❌ | Views are recreated, but tab drag-and-drop ordering is not reproduced in v1. |
+| View tab order | ✅ with browser automation | The public GraphQL `POSITION` order can differ from the saved-tab order shown by GitHub. Browser-assisted export/verify read tab `href` values in DOM order, and browser-assisted import applies the minimum drag-and-drop moves after all View settings. API-only export leaves tab order uncaptured, API-only import warns when a snapshot contains it, and API-only verify marks it not verified. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 
 ## Workflows
@@ -85,7 +85,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
+| `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL-readable View settings are always checked; `--enable-browser-automation` additionally re-reads saved-tab order, UI-only View / Workflow settings, and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. An ambiguous Status Update create that did not persist its target ID keeps durable pending state and requires manual reconciliation instead of claiming a body/status/date match. |
 | Mapping CSV templates | ✅ | `export` writes repository, organization, Team, and user mapping templates without overwriting existing files. Team rows use `organization/slug` on both sides. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
@@ -113,7 +113,6 @@ Pass the same repository, user, organization, and Team mappings to `ghpmv verify
 | Original author and creation timestamp for draft issues | GitHub always attributes newly-created draft issues to the importing user. | `ghpmv` prepends a note with the original metadata. |
 | Item history / field history | GitHub has no API to recreate historical field changes. | Only the current state is migrated. |
 | Exporting inherited/base-role project access | GitHub separates explicit project collaborators from inherited access. | Handle inherited access through GEI and the target organization/team/repository/enterprise policy model. |
-| View tab drag-and-drop order | UI-only and fragile; not part of v1. | Reorder tabs manually if the order matters. |
 | Insights charts | No public API; UI is more complex than Views/Workflows. | Future v2 candidate. |
 | Redacted items | The exporting account cannot see them. | Export with an account that has access to all project content. |
 
@@ -122,7 +121,7 @@ Pass the same repository, user, organization, and Team mappings to `ghpmv verify
 - The module is opt-in and uses your own interactive session stored locally in `%APPDATA%/ghpmv/browser-state*.json`. Nothing is sent anywhere except to GitHub itself.
 - Automating the web UI is not covered by the public API's stability guarantees. You are responsible for using it consistently with the [GitHub Terms of Service](https://docs.github.com/site-policy/github-terms/github-terms-of-service); `ghpmv` performs low-rate, human-scale, sequential operations against your own Projects and does not scrape other users' data.
 - UI selectors can break when GitHub updates the Projects UI. Recoverable failures are warnings, and browser writes are not transactional. Always run browser-assisted `ghpmv verify` afterward.
-- View tab order is not reproduced.
+- View tab ordering is a recoverable, non-transactional browser write. A failed drag leaves any successful earlier moves in place and emits a warning; rerun browser-assisted import or reorder manually, then verify.
 
 ### Auto-add workflow limits per plan
 

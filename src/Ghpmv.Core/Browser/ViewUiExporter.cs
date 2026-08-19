@@ -28,6 +28,13 @@ public sealed class ViewUiExporter
     /// <summary>Warnings collected while scraping (views whose UI settings could not be read).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
+    /// <summary>
+    /// Whether the API's POSITION-ordered View connection matched the saved-tab DOM order.
+    /// Null when browser tab order could not be read. A true value is a capability signal:
+    /// re-evaluate whether browser reads are still required before changing behavior.
+    /// </summary>
+    public bool? GraphQlPositionMatchesDomOrder { get; private set; }
+
     /// <summary>Returns a copy of <paramref name="snapshot"/> with <see cref="ViewSnapshot.Ui"/> populated.</summary>
     public async Task<ProjectSnapshot> EnrichAsync(ProjectSnapshot snapshot, string orgLogin, int projectNumber, CancellationToken cancellationToken = default)
         => await EnrichAsync(snapshot, orgLogin, ProjectOwnerType.Organization, projectNumber, cancellationToken).ConfigureAwait(false);
@@ -74,6 +81,20 @@ public sealed class ViewUiExporter
             }
 
             views.Add(view with { Ui = ui });
+        }
+
+        try
+        {
+            var graphQlPositionOrder = views.Select(view => view.Number).ToList();
+            var tabOrder = await ViewTabOrder.ReadAsync(page, cancellationToken).ConfigureAwait(false);
+            GraphQlPositionMatchesDomOrder = graphQlPositionOrder.SequenceEqual(tabOrder);
+            views = [.. ViewTabOrder.Apply(views, tabOrder)];
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            GraphQlPositionMatchesDomOrder = null;
+            _warnings.Add($"view tab order could not be read — {exception.Message}");
+            views = [.. views.Select(view => view with { TabPosition = null })];
         }
 
         return snapshot with { Views = views };

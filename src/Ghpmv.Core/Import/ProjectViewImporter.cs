@@ -63,7 +63,7 @@ internal sealed class ProjectViewImporter
         var usedTargetIds = new HashSet<string>(StringComparer.Ordinal);
         var initiallyExistingTargetIds = targetViews.Select(view => view.Id).ToHashSet(StringComparer.Ordinal);
         var viewNumbers = new Dictionary<int, int>();
-        var orderedSourceViews = sourceViews.OrderBy(view => view.Number).ToArray();
+        var orderedSourceViews = OrderSourceViews(sourceViews).ToArray();
 
         for (var index = 0; index < orderedSourceViews.Length; index++)
         {
@@ -96,7 +96,27 @@ internal sealed class ProjectViewImporter
             }
         }
 
+        if (!BrowserEnrichmentPlanned)
+        {
+            WarnAboutUnappliedTabOrder(orderedSourceViews);
+        }
+
         return viewNumbers;
+    }
+
+    private static IOrderedEnumerable<ViewSnapshot> OrderSourceViews(IReadOnlyList<ViewSnapshot> sourceViews)
+        => sourceViews
+            .OrderBy(view => view.TabPosition ?? int.MaxValue)
+            .ThenBy(view => view.Number);
+
+    private void WarnAboutUnappliedTabOrder(ViewSnapshot[] orderedSourceViews)
+    {
+        if (orderedSourceViews.Length < 2 || orderedSourceViews.Any(view => view.TabPosition is null))
+        {
+            return;
+        }
+
+        Warn("view tab order requires browser automation and was not applied");
     }
 
     private void ValidatePendingOperations(IReadOnlyList<ViewSnapshot> sourceViews, string projectId)
@@ -436,7 +456,7 @@ internal sealed class ProjectViewImporter
         query($projectId: ID!, $first: Int!, $after: String) {
           node(id: $projectId) {
             ... on ProjectV2 {
-              views(first: $first, after: $after) {
+              views(first: $first, after: $after, orderBy: { field: POSITION, direction: ASC }) {
                 nodes { id number name layout }
                 pageInfo { hasNextPage endCursor }
               }

@@ -570,6 +570,10 @@ public sealed record E2eEndpointSettings
 {
     public string Organization { get; init; } = "";
 
+    public bool? ProjectsEnabled { get; init; }
+
+    public bool? PrivateRepositoryCreationAllowed { get; init; }
+
     public string ApiBaseUrl { get; init; } = "https://api.github.com/graphql";
 
     public string WebBaseUrl { get; init; } = "https://github.com";

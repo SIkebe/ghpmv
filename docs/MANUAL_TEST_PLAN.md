@@ -45,7 +45,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
   - linked repository
   - linked Team と Team に付与される read permission
   - explicit project collaborators
-  - Table / Board / Roadmap views
+  - Table / Board / Roadmap views と tab order
   - enabled / disabled workflows と Auto-add settings
 
 ---
@@ -66,7 +66,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Project-to-Team links | `ghpmv verify` + Team Projects / Manage access UI | `organization/slug` で識別。explicit collaborator とは別カテゴリ。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
-| Views | browser export/import + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum など。 |
+| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、tab order。saved-tab orderのread/verifyにはbrowser automationが必要。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
 
 ### 2.2 対象外または warning 許容
@@ -75,7 +75,6 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 - Draft issue の元作成者 / 作成日時の完全保持。
 - item / field value の履歴。
 - inherited / base-role / org owner / enterprise policy 由来の project access。
-- View tab の drag-and-drop 順序。
 - Insights charts。
 - REDACTED / 権限不足で見えない items。
 - archived item の position。
@@ -126,7 +125,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 
 Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
-Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定と Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer でそれらだけを補完します。手動で UI をぽちぽち濃くする必要はありません。
+Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
 
 ---
 
@@ -199,7 +198,7 @@ Get-Content .env | Where-Object { $_ -and $_ -notmatch '^\s*#' } | ForEach-Objec
 |---|---|---|
 | 通常の Project 移行 | `export` / `import` / `verify` | README の [Token permissions](../README.md#token-permissions) にある command 別の最小権限。 |
 | API-backed test fixture 作成 | `setup --fixture` | 下記の fine-grained PAT、または classic PAT。 |
-| 実 API integration suite | `dotnet test tests/Ghpmv.Integration.Tests` | 上記 fixture 権限に加え、token owner が source / target 両 organization で disposable Team を作成・削除できること。REST Team API 用に classic PAT は `admin:org`、fine-grained PAT は **Organization permissions → Members: Read and write** が必要。suite は両 organization に1つの `GHPMV_TEST_TOKEN` を使うため、通常の cross-organization 構成では両方を操作できる classic PAT を使う。 |
+| 実 API integration suite | `dotnet test tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj` | 上記 fixture 権限に加え、token owner が source / target 両 organization で disposable Team を作成・削除できること。REST Team API 用に classic PAT は `admin:org`、fine-grained PAT は **Organization permissions → Members: Read and write** が必要。suite は両 organization に1つの`GHPMV_TEST_TOKEN`を使うため、通常のcross-organization構成では両方を操作できるclassic PATを使う。 |
 | UI-only fixture 作成 | `setup --fixture-ui` | Project API を読める token と、同じユーザーで保存した browser profile。 |
 | GEI source | `gh gei migrate-repo --github-source-pat` | 下記の GEI source role / classic PAT scope。 |
 | GEI destination | `gh gei migrate-repo --github-target-pat` | 下記の GEI destination role / classic PAT scope。 |
@@ -308,7 +307,7 @@ Source project number: <source-project-number>
 
 ### 5.2 View / Workflow fixture を GraphQL API + C# / Playwright で作成する
 
-`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。`--fixture-require-new` を指定した新規 E2E fixture では、Project の Date / Iteration 値を実行週の月曜日を基準に配置し、Roadmap の初期表示範囲内で確認できるようにします。基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap など API 未対応設定と Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
+`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。`--fixture-require-new` を指定した新規 E2E fixture では、Project の Date / Iteration 値を実行週の月曜日を基準に配置し、Roadmap の初期表示範囲内で確認できるようにします。基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap、非自明な tab order、Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `
@@ -343,6 +342,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   - `View 1`: Table、filter、sort、Slice by、visible fields
   - `Fixture Board`: Board、Column by、Swimlanes、Field sum
   - `Fixture Roadmap`: Roadmap、date fields、Quarter zoom、markers
+  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board`
 - Workflows
   - item state 系 built-in workflows
   - `Auto-add to project`
@@ -359,6 +359,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 Views:
 
+- タブを `Fixture Roadmap` → Table view → Board view の非自明な順に並べる
 - Table view
   - filter を設定
   - hidden / visible fields を調整
@@ -486,6 +487,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - `repository-mappings.csv` が生成される。
 - linked Team がある場合は `team-mappings.csv` が生成され、source 値は `organization/slug` になっている。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
+- 各 View の `tabPosition` が 0 から始まる source UI 順で保存され、view `number` 順とは独立している。
 
 ### 7.2 Mapping CSV を補完
 
@@ -587,6 +589,8 @@ dotnet run --project src/Ghpmv.Cli -- verify `
 
 `--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
+同じverifyを先に`--enable-browser-automation` / `--browser-profile`なしでも実行し、API-readableなView設定を確認します。API-only verifyではsaved-tab orderとUI-only設定は`View` categoryの`NotVerified`として扱われます。続くbrowser-assisted verifyでDOM tab orderを含む完全一致を確認します。
+
 source / target の repository 名、user login、または Team slug が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` / `--team-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator、linked Team は target 側の名前へ正規化して比較されます。生成されていない optional mapping の引数は外してください。
 
 期待値:
@@ -648,7 +652,9 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Board view の Column by / Swimlanes / Slice by が一致。
 - [ ] Roadmap view の date fields / zoom / markers が一致。
 - [ ] View 名が一致。
-- [ ] View tab order は v1 対象外として warning または手動補正対象に記録。
+- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` で一致。
+- [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。
+- [ ] import を再実行しても既に正しい tab order は変化しない。
 
 ### 8.5 Status Updates
 
@@ -693,7 +699,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 | ID | 手順 | 期待結果 |
 |---|---|---|
-| N-1 | `--enable-browser-automation` なしで export/import | API-only 項目は移行され、Views / Workflows UI-only 項目は warning または未移行として扱われる。 |
+| N-1 | `--enable-browser-automation` なしで export/import | API-only exportは`tabPosition`を省略し、読み込み時はnull（未取得）として扱う。browserで取得済みのtab orderを持つsnapshotのAPI-only importは未適用warning、API-only verifyは`NotVerified`として扱う。Views / Workflows UI-only項目もwarningまたは未移行として扱われる。 |
 | N-2 | `repository-mappings.csv` から fixture repo 行を削除して import | Issue / PR item が warning + skip され、Draft items は作成される。 |
 | N-3 | target token を source token に差し替えて import | 権限不足で失敗し、Project を壊さない。 |
 | N-4 | browser profile を間違える | ログイン / 権限エラーで失敗し、再ログイン案内が出る。 |
@@ -703,7 +709,8 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-8 | `team-mappings.csv` を存在しない Team に向けて import | Project 作成・metadata 更新より前に `unresolved` preflight error で停止する。 |
 | N-9 | Team read/maintainer 権限のない token、または admin access のない既存 Project で import | Team mutation の実行前に `permission` preflight error で停止する。 |
 | N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
-| N-11 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
+| N-11 | target UI で View tab を逆順にして browser-assisted verify | `View` categoryとJSON reportに`view tab order mismatch`が出る。続けてbrowser-assisted importを再実行すると順序が修復される。 |
+| N-12 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
 
 ---
 

@@ -1,6 +1,7 @@
 using Ghpmv.Core.Browser;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
+using Microsoft.Playwright;
 
 namespace Ghpmv.Browser.Tests;
 
@@ -136,6 +137,9 @@ public class ViewUiLogicTests
         var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
 
         Assert.Equal(["View 1", "Fixture Board", "Fixture Roadmap"], snapshot.Views.Select(v => v.Name));
+        Assert.Equal(
+            ["Fixture Roadmap", "View 1", "Fixture Board"],
+            snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
         Assert.Contains(snapshot.Fields, field =>
             field.Name == "Fixture Teams"
             && field.DataType == "MULTI_SELECT"
@@ -144,6 +148,173 @@ public class ViewUiLogicTests
         Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add secondary" && w.Ui?.Filter == "is:issue label:bug");
         Assert.Empty(ViewUiImporter.CollectPreflightWarnings(snapshot));
         Assert.Empty(WorkflowUiImporter.CollectPreflightWarnings(snapshot, WorkflowUiImporter.DefaultMaxAutoAddWorkflows));
+    }
+
+    [Fact]
+    public void Tab_move_plan_is_empty_when_order_already_matches()
+        => Assert.Empty(ViewUiImporter.BuildTabMovePlan([1, 2, 3], [1, 2, 3]));
+
+    [Fact]
+    public void Tab_move_plan_uses_one_drag_for_a_rotation()
+    {
+        var moves = ViewUiImporter.BuildTabMovePlan([4, 1, 2, 3], [1, 2, 3, 4]);
+
+        var move = Assert.Single(moves);
+        Assert.Equal(new ViewUiImporter.TabMove(4, 3, PlaceBefore: false), move);
+        Assert.Equal([1, 2, 3, 4], ApplyMoves([4, 1, 2, 3], moves));
+    }
+
+    [Fact]
+    public void Tab_move_plan_uses_the_minimum_for_reverse_order()
+    {
+        var moves = ViewUiImporter.BuildTabMovePlan([8, 7, 6, 5, 4, 3, 2, 1], [1, 2, 3, 4, 5, 6, 7, 8]);
+
+        Assert.Equal(7, moves.Count);
+        Assert.Equal([1, 2, 3, 4, 5, 6, 7, 8], ApplyMoves([8, 7, 6, 5, 4, 3, 2, 1], moves));
+    }
+
+    [Fact]
+    public void Tab_move_plan_handles_more_tabs_than_fit_in_the_viewport()
+    {
+        int[] current = [12, 1, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10];
+        int[] desired = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+
+        var moves = ViewUiImporter.BuildTabMovePlan(current, desired);
+
+        Assert.Equal(desired, ApplyMoves(current, moves));
+        Assert.Equal(6, moves.Count);
+    }
+
+    [Fact]
+    public void Tab_move_plan_keeps_nonfixed_anchors_in_final_relative_order()
+    {
+        int[] current = [4, 3, 1, 2];
+        int[] desired = [1, 2, 3, 4];
+
+        var moves = ViewUiImporter.BuildTabMovePlan(current, desired);
+
+        Assert.Equal(2, moves.Count);
+        Assert.Equal(desired, ApplyMoves(current, moves));
+    }
+
+    [Fact]
+    public void Tab_move_plan_reaches_the_target_for_every_five_tab_permutation()
+    {
+        int[] desired = [1, 2, 3, 4, 5];
+        foreach (var current in Permutations(desired))
+        {
+            var moves = ViewUiImporter.BuildTabMovePlan(current, desired);
+
+            Assert.Equal(desired, ApplyMoves(current, moves));
+            Assert.Equal(desired.Length - LongestIncreasingSubsequenceLength(current), moves.Count);
+        }
+    }
+
+    [Fact]
+    public async Task Tab_move_execution_reports_drag_and_final_readback_failures()
+    {
+        var moves = new List<ViewUiImporter.TabMove>
+        {
+            new(2, 1, PlaceBefore: true),
+        };
+        var desired = new List<int> { 2, 1 };
+        var names = new Dictionary<int, string> { [1] = "First", [2] = "Second" };
+
+        var warnings = await ViewUiImporter.ApplyTabMovesAsync(
+            moves,
+            desired,
+            names,
+            (_, _) => throw new PlaywrightException("forced drag failure"),
+            _ => Task.FromResult<IReadOnlyList<int>>([1, 2]),
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains(warnings, warning =>
+            warning.Contains("view tab 'Second' could not be reordered", StringComparison.Ordinal)
+            && warning.Contains("forced drag failure", StringComparison.Ordinal));
+        Assert.Contains(warnings, warning =>
+            warning.Contains("could not be fully applied", StringComparison.Ordinal)
+            && warning.Contains("expected [Second, First]", StringComparison.Ordinal)
+            && warning.Contains("actual [First, Second]", StringComparison.Ordinal));
+        Assert.Equal(2, warnings.Count);
+    }
+
+    [Fact]
+    public async Task Tab_reorder_read_failure_is_recoverable()
+    {
+        var warnings = new List<string>();
+
+        await ViewUiImporter.ApplyTabOrderRecoverablyAsync(
+            () => throw new PlaywrightException("forced DOM read failure"),
+            warnings);
+
+        var warning = Assert.Single(warnings);
+        Assert.Contains("view tab order could not be applied", warning, StringComparison.Ordinal);
+        Assert.Contains("forced DOM read failure", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tab_order_poll_retries_an_incomplete_connection_until_all_mapped_views_are_visible()
+    {
+        var reads = new Queue<IReadOnlyList<int>>(
+        [
+            [1],
+            [1, 8],
+        ]);
+        var delays = 0;
+
+        var result = await ViewUiImporter.PollTabOrderAsync(
+            _ => Task.FromResult(reads.Dequeue()),
+            order => order.Count == 2,
+            _ =>
+            {
+                delays++;
+                return Task.CompletedTask;
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 8], result);
+        Assert.Empty(reads);
+        Assert.Equal(1, delays);
+    }
+
+    [Theory]
+    [InlineData("/orgs/octo/projects/7/views/42", 42)]
+    [InlineData("/orgs/octo/projects/7/views/42?pane=info", 42)]
+    [InlineData("https://github.com/orgs/octo/projects/7/views/42", 42)]
+    public void ParseViewNumber_reads_saved_tab_href(string href, int expected)
+        => Assert.Equal(expected, ViewTabOrder.ParseViewNumber(href));
+
+    [Fact]
+    public void ApplyViewTabOrder_overrides_graphql_enumeration_order()
+    {
+        var table = View("Table", "TABLE_LAYOUT") with { Number = 1 };
+        var board = View("Board", "BOARD_LAYOUT") with { Number = 2 };
+        var roadmap = View("Roadmap", "ROADMAP_LAYOUT") with { Number = 3 };
+
+        var result = ViewTabOrder.Apply([table, board, roadmap], [3, 1, 2]);
+
+        Assert.Equal(
+            ["Roadmap", "Table", "Board"],
+            result.OrderBy(view => view.TabPosition).Select(view => view.Name));
+        Assert.Equal(1, result.Single(view => view.Name == "Table").TabPosition);
+        Assert.Equal(2, result.Single(view => view.Name == "Board").TabPosition);
+        Assert.Equal(0, result.Single(view => view.Name == "Roadmap").TabPosition);
+    }
+
+    [Fact]
+    public void ApplyViewTabOrder_rejects_an_incomplete_tab_strip()
+    {
+        var views =
+            new[]
+            {
+                View("Table", "TABLE_LAYOUT") with { Number = 1 },
+                View("Board", "BOARD_LAYOUT") with { Number = 2 },
+            };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ViewTabOrder.Apply(views, [1]));
+
+        Assert.Contains("exactly the Views returned by the API", exception.Message, StringComparison.Ordinal);
     }
 
     // ----- verifier: Ui comparison (M6) -----
@@ -225,4 +396,54 @@ public class ViewUiLogicTests
         Workflows = [],
         Items = [],
     };
+
+    private static List<int> ApplyMoves(
+        IReadOnlyList<int> current,
+        IReadOnlyList<ViewUiImporter.TabMove> moves)
+    {
+        var result = current.ToList();
+        foreach (var move in moves)
+        {
+            result.Remove(move.ViewNumber);
+            var anchorIndex = result.IndexOf(move.AnchorViewNumber);
+            result.Insert(move.PlaceBefore ? anchorIndex : anchorIndex + 1, move.ViewNumber);
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<int[]> Permutations(int[] values)
+    {
+        if (values.Length == 1)
+        {
+            yield return [values[0]];
+            yield break;
+        }
+
+        for (var index = 0; index < values.Length; index++)
+        {
+            var remaining = values.Where((_, candidate) => candidate != index).ToArray();
+            foreach (var permutation in Permutations(remaining))
+            {
+                yield return [values[index], .. permutation];
+            }
+        }
+    }
+
+    private static int LongestIncreasingSubsequenceLength(int[] values)
+    {
+        var lengths = Enumerable.Repeat(1, values.Length).ToArray();
+        for (var index = 0; index < values.Length; index++)
+        {
+            for (var candidate = 0; candidate < index; candidate++)
+            {
+                if (values[candidate] < values[index])
+                {
+                    lengths[index] = Math.Max(lengths[index], lengths[candidate] + 1);
+                }
+            }
+        }
+
+        return lengths.Max();
+    }
 }

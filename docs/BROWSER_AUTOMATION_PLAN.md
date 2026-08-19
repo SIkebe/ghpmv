@@ -27,7 +27,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | **Slice by** | ❌ API に無い → **UI で読む** | **UI** | |
 | **Field sum** | ❌ API に無い → **UI で読む** | **UI** | |
 | **Roadmap 設定(Dates / Zoom / Markers)** | ❌ API に無い → **UI で読む** | **UI** | |
-| タブの並び順 | GraphQL `views`(orderBy: POSITION) | **UI**(タブの drag & drop)| v1 では省略可(§8) |
+| タブの並び順 | **UI**(`navigation "Select view"` 内のsaved tab `href`順) | **UI**(タブの drag & drop) | GraphQL `POSITION`は現行UIのsaved-tab順と乖離する場合がある。`ViewSnapshot.tabPosition`はschema v1のnullable additive field |
 
 ### Workflow のプロパティ別ソースマップ
 
@@ -159,11 +159,11 @@ internal static class Sel
 | V-7 | Roadmap | Dates(date フィールド対 or iteration)、Zoom(Month/Quarter/Year)、Markers |
 | V-8 | 全レイアウト共通 | filter 文字列(そのまま転記。フィールド名は移行済み前提で互換) |
 | V-9 | 全レイアウト共通 | Slice by |
-| V-10 | View の name / タブ並び順 | 並び順は v1 スコープ外(§8) |
+| V-10 | View の name / タブ並び順 | browser-assisted export/verifyでDOM `href`順を読み、browser-assisted importで最小D&Dを適用 |
 
-### 3.2 export: UI からの読み取り手順(API に無い 3 項目のみ)
+### 3.2 export: UI からの読み取り手順(APIで正しく取得できない4項目)
 
-対象: Slice by / Field sum / Roadmap 設定。GraphQL export の後、view ごとに 1 回だけページを開いて補完する。
+対象: saved-tab order / Slice by / Field sum / Roadmap設定。GraphQL exportの後、viewごとに1回だけページを開いて補完し、最後にtab stripのDOM順を取得する。
 
 ```
 手順(view ごと):
@@ -174,6 +174,7 @@ internal static class Sel
    - "Field sum: <fields>" → `ViewUiSnapshot.FieldSum`
    - Roadmap のみ: "Dates: <...>", "Zoom level: <Month|Quarter|Year>", "Markers: <...>"
 4. Esc でメニューを閉じる
+5. `navigation "Select view"`内のsaved tab `href`をDOM順に列挙し、View numberへ変換して`tabPosition`を付与する
 ```
 
 実装メモ: メニュー項目は「設定名 + 現在値」を accessible name に含むため、label prefix で特定する。複数選択項目は overlay の `aria-checked` を読む。
@@ -192,12 +193,13 @@ EnrichView(spec, targetViewNumber):
  6. Field sum: ViewOptions → "Field sum" → spec.FieldSum の各フィールドをチェック
  7. Roadmap のみ: "Dates" → 開始/終了フィールド対 or iteration を選択、"Zoom level"、"Markers" のチェック群
  8. 保存: View menu → "Save view" → alertdialog の "Save"(dialog が出ない UI variant では直接保存)
- 9. 検証は後続の `ghpmv verify --enable-browser-automation` または browser E2E で行う
+ 9. 全 View 設定の適用後、target のDOM `href`順と snapshot順から最小移動計画を作り、必要なタブだけdrag-and-drop
+ 10. 検証は後続の `ghpmv verify --enable-browser-automation` または browser E2E で行う
 ```
 
 Project conflict は API View stage より前に `--on-conflict skip|update|fail` または `--project-number` で解決する。API importer は source view number と target view number の対応を返し、browser importer はその View に未公開設定だけを適用する。
 
-作成順序: **スナップショットの view number 昇順**で作成(タブ順が概ね再現される)。デフォルトで作られる "View 1" は、スナップショット先頭の view で上書き(rename + 設定)して消費する。
+作成順序: browserで取得した`tabPosition`があるsnapshotはその昇順、未取得のsnapshotはview number昇順で作成する。デフォルトで作られる"View 1"はsnapshotの先頭Viewで上書き(rename + 設定)して消費する。API-only importはtab orderを適用できない旨をwarningにし、browser-assisted importはView設定適用後にtargetのDOM順を読み取って修復する。
 
 ---
 
@@ -267,7 +269,7 @@ ApplyWorkflow(spec):
 ```jsonc
 {
   "views": [{
-    "number": 1, "name": "Backlog", "layout": "TABLE_LAYOUT",
+    "number": 1, "tabPosition": 0, "name": "Backlog", "layout": "TABLE_LAYOUT",
     "filter": "is:issue -status:Done",
     "visibleFields": ["Title", "Assignees", "Status", "Priority"],   // 列順そのまま
     "groupBy": ["Status"], "verticalGroupBy": [], 
@@ -298,8 +300,8 @@ ApplyWorkflow(spec):
 
 browser importer 自体は各 view / workflow の適用直後に完全な read-back diff を行わない。移行後は `ghpmv verify --enable-browser-automation` が次を比較する:
 
-1. **API で読める項目**: GraphQL で対象 view を `views(first:50)` から number 一致で取得し、`layout / filter / groupByFields / sortByFields / verticalGroupByFields / fields(POSITION順)` を spec と比較
-2. **UI でしか読めない項目**: §3.2 / §4.2 の export 用読み取りルーチンを**そのまま再利用**してターゲットを再スクレイプし、spec.ui と比較
+1. **API で読める項目**: GraphQLで対象viewをnumber一致で取得し、`layout / filter / groupByFields / sortByFields / verticalGroupByFields / visibleFields`をspecと比較
+2. **UI でしか読めない項目**: saved-tab DOM順と§3.2 / §4.2のexport用読み取りルーチンを**そのまま再利用**してターゲットを再スクレイプし、`tabPosition`と`spec.ui`を比較
 3. 差分は `verify` コマンドと同じレポーター(期待値/実測値/対象)で出力
 
 手動実行する `BrowserRoundTripTests` は View と Workflow のラウンドトリップを別々のテストに分け、それぞれ
@@ -328,11 +330,13 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 | 項目 | 判断 |
 |---|---|
 | 表示フィールドの列順 | GraphQL `visibleFields` / `visibleFieldIds` で明示的に再現する |
-| View タブの並び順(D&D のみ) | v1 スコープ外。import 後に警告で「手動で並び替えてください」と案内 |
+| View タブの並び順(D&D のみ) | 対応済み。LIS を残す最小 D&D 計画を使い、overflow tab は `ScrollIntoViewIfNeededAsync` 後に操作。既に一致する場合は drag しない |
 | disabled workflow への設定適用 | 対応済み。設定保存後に toggle off へ戻す |
 | memex 内部 API の直接利用 | 既定では不採用。HAR は現時点で成果物として記録していない。UI 操作不能項目が出た場合に調査・取得を検討 |
 | UI 変更による破損 | リリース前の手動 browser E2E と `docs/ui-maps/` の実測記録で確認。回復可能な破損は warning + 対象設定の skip。scheduled/nightly CI は未実装 |
 | Insights chart | #48 の blocking Discovery は部分完了。read-only selectors と config shape は確定したが、rename/delete/order/save/error と Y-axis field picker は [UI map §12](ui-maps/insights-ui-discovery.md#12-unknowns--blockers) 解消まで実装しない |
+
+`ViewUiExporter.GraphQlPositionMatchesDomOrder`は、APIのPOSITION順とDOM saved-tab順の一致状態をprojectごとに記録する。新規targetの作成順などによって偶然一致する場合があるため、通常exportでは一致をAPI復旧noticeとして扱わない。Browser round-trip E2Eは、DOM順とGraphQL順が異なることを確認済みの非自明source fixtureに限って現時点の乖離をcapability canaryとしてassertする。そのsourceで一致した場合、E2Eを意図的に失敗させ、複数fixtureで再確認したうえでbrowser readをGraphQL readへ置換できるか再評価する。public mutationにtab-order write inputが追加されたかは別途GraphQL schema/changelogで確認する。
 
 ## 9. 実装タスク分解と現在の状態
 
@@ -348,3 +352,4 @@ v1 対象外項目の将来対応方針(v1.x / v2)は [PLAN.md §8「スコー�
 | B7 | Workflow import(§4.3)W-1〜W-8 | 完了 |
 | B8 | Workflow import W-9(Auto-add 複数 + 上限処理) | 完了。実装上限は 20 |
 | B9 | ラウンドトリップ E2E(§6) | テスト実装済み・手動実行。scheduled/nightly CI は未実装 |
+| B10 | View tab DOM-order export / verify + browser D&D import | 完了。API-only / 旧snapshotのnullは比較・修復対象外 |

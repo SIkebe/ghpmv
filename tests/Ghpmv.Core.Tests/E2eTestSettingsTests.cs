@@ -20,6 +20,8 @@ public class E2eTestSettingsTests
               "schemaVersion": 1,
               "source": {
                 "organization": "source-org",
+                "projectsEnabled": true,
+                "privateRepositoryCreationAllowed": false,
                 "apiBaseUrl": "https://api.github.com/graphql",
                 "webBaseUrl": "https://github.com",
                 "uploadsBaseUrl": null,
@@ -29,6 +31,8 @@ public class E2eTestSettingsTests
               },
               "target": {
                 "organization": "target-org",
+                "projectsEnabled": null,
+                "privateRepositoryCreationAllowed": true,
                 "apiBaseUrl": "https://api.example.ghe.com/graphql",
                 "webBaseUrl": "https://example.ghe.com",
                 "uploadsBaseUrl": "https://uploads.example.ghe.com",
@@ -81,6 +85,10 @@ public class E2eTestSettingsTests
             var result = E2eTestSettings.Load(path);
 
             Assert.Equal("example.ghe.com", new Uri(result.Target.WebBaseUrl).Host);
+            Assert.True(result.Source.ProjectsEnabled);
+            Assert.False(result.Source.PrivateRepositoryCreationAllowed);
+            Assert.Null(result.Target.ProjectsEnabled);
+            Assert.True(result.Target.PrivateRepositoryCreationAllowed);
             Assert.Equal("gei-target", result.Gei.TargetRepository);
             Assert.Equal("migrator-active", result.Gei.SourceRole);
             Assert.Equal("octocat_contoso", result.Users.ToMappingDictionary()["octocat"]);

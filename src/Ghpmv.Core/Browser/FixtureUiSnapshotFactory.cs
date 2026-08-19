@@ -60,6 +60,7 @@ public static class FixtureUiSnapshotFactory
         new ViewSnapshot
         {
             Number = 1,
+            TabPosition = 1,
             Name = "View 1",
             Layout = "TABLE_LAYOUT",
             Filter = "status:Todo",
@@ -75,6 +76,7 @@ public static class FixtureUiSnapshotFactory
         new ViewSnapshot
         {
             Number = 2,
+            TabPosition = 2,
             Name = "Fixture Board",
             Layout = "BOARD_LAYOUT",
             Filter = null,
@@ -90,6 +92,7 @@ public static class FixtureUiSnapshotFactory
         new ViewSnapshot
         {
             Number = 3,
+            TabPosition = 0,
             Name = "Fixture Roadmap",
             Layout = "ROADMAP_LAYOUT",
             Filter = null,

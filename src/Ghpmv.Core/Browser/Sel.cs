@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 
@@ -37,6 +38,19 @@ internal static class Sel
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
+
+    /// <summary>A saved View tab used as a drag source or drop target, identified by its stable URL number.</summary>
+    public static ILocator DraggableViewTab(IPage page, int viewNumber)
+    {
+        var number = viewNumber.ToString(CultureInfo.InvariantCulture);
+        return page.Locator(
+            $"[role='tab'][href$='/views/{number}'], [role='tab'][href*='/views/{number}?']").First;
+    }
+
+    /// <summary>All saved View tabs in their current DOM order (excludes the New view control).</summary>
+    public static ILocator SavedViewTabs(IPage page)
+        => page.GetByRole(AriaRole.Navigation, new() { Name = "Select view", Exact = true })
+            .Locator("[role='tab'][href*='/views/']");
 
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)

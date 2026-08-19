@@ -338,4 +338,133 @@ public class ItemImporterTests
             // Best-effort cleanup of the temp log directory.
         }
     }
+
+    [Fact]
+    public async Task Pull_request_item_is_imported_from_identity_mapped_repository_with_number_preserved()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var suffix = Guid.NewGuid().ToString("N");
+        var targetProjectTitle = $"ghpmv-pr-target-project-{suffix}";
+        var projectLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        var itemLogDirectory = Path.Combine(Path.GetTempPath(), $"ghpmv-pr-item-{suffix}");
+
+        using var graphQl = IntegrationTestSettings.CreateClient(Token);
+        var repositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [FixtureRepo] = FixtureRepo,
+        };
+        var cleanupFailures = new List<Exception>();
+        Exception? testFailure = null;
+
+        try
+        {
+            var fixture = await IntegrationFixtureSnapshot.CreateKnownAsync(graphQl, cancellationToken);
+            var sourcePullRequest = Assert.Single(fixture.Items, item => item.Type == "PULL_REQUEST");
+            Assert.Equal("PULL_REQUEST", sourcePullRequest.Type);
+            Assert.Equal(FixtureRepo, sourcePullRequest.Repository, ignoreCase: true);
+            Assert.NotNull(sourcePullRequest.Number);
+
+            var snapshot = new ProjectSnapshot
+            {
+                SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                Project = new ProjectInfoSnapshot
+                {
+                    Title = targetProjectTitle,
+                    Public = false,
+                    Closed = false,
+                },
+                Fields = [],
+                Views = [],
+                Workflows = [],
+                Items = [sourcePullRequest with { Position = 0, FieldValues = [] }],
+            };
+            var projectImporter = new ProjectImporter(graphQl)
+            {
+                RepositoryMapping = repositoryMapping,
+                OperationLogDirectory = projectLogDirectory,
+            };
+            var targetProject = await projectImporter.ImportAsync(snapshot, TargetOrg, cancellationToken);
+            var itemResult = await new ItemImporter(graphQl)
+            {
+                RepositoryMapping = repositoryMapping,
+            }.ImportAsync(snapshot, targetProject, itemLogDirectory, cancellationToken);
+
+            Assert.Equal(1, itemResult.Created);
+            Assert.Equal(0, itemResult.Skipped);
+            Assert.Empty(itemResult.Warnings);
+
+            var exporter = new ProjectExporter(graphQl);
+            var targetExport = await ExportUntilAsync(
+                exporter,
+                TargetOrg,
+                targetProject.ProjectNumber,
+                exported => exported.Items.Count == 1
+                    && exported.Items[0].Type == "PULL_REQUEST"
+                    && string.Equals(exported.Items[0].Repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
+                    && exported.Items[0].Number == sourcePullRequest.Number,
+                cancellationToken);
+            var importedPullRequest = Assert.Single(targetExport.Items);
+            Assert.Equal("PULL_REQUEST", importedPullRequest.Type);
+            Assert.Equal(FixtureRepo, importedPullRequest.Repository, ignoreCase: true);
+            Assert.Equal(sourcePullRequest.Number, importedPullRequest.Number);
+        }
+        catch (Exception exception)
+        {
+            testFailure = exception;
+        }
+        finally
+        {
+            foreach (var cleanup in (Func<Task>[])[
+                () => TemporaryProjectFixture.DeleteAllByTitleAsync(
+                    graphQl,
+                    TargetOrg,
+                    targetProjectTitle,
+                    CancellationToken.None),
+            ])
+            {
+                try
+                {
+                    await cleanup();
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailures.Add(exception);
+                }
+            }
+
+            foreach (var directory in (string[])[projectLogDirectory, itemLogDirectory])
+            {
+                if (Directory.Exists(directory))
+                {
+                    try
+                    {
+                        Directory.Delete(directory, recursive: true);
+                    }
+                    catch (Exception exception)
+                    {
+                        cleanupFailures.Add(exception);
+                    }
+                }
+            }
+        }
+
+        if (testFailure is not null)
+        {
+            if (cleanupFailures.Count > 0)
+            {
+                throw new AggregateException(
+                    "The pull-request relinking test failed and one or more owned resources could not be cleaned up.",
+                    [testFailure, .. cleanupFailures]);
+            }
+
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(testFailure).Throw();
+        }
+
+        if (cleanupFailures.Count > 0)
+        {
+            throw new AggregateException(
+                "One or more pull-request relinking resources could not be cleaned up.",
+                cleanupFailures);
+        }
+    }
 }

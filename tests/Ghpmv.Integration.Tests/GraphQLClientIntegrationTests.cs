@@ -55,7 +55,7 @@ public class GraphQLClientIntegrationTests
     }
 
     [Fact]
-    public async Task QueryPaginatedAsync_enumerates_120_items_across_real_pages()
+    public async Task QueryPaginatedAsync_and_ProjectExporter_enumerate_all_items_across_real_pages()
     {
         using var client = IntegrationTestSettings.CreateClient(Token);
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -68,25 +68,31 @@ public class GraphQLClientIntegrationTests
 
         var title = $"ghpmv-test-{Guid.NewGuid():N}";
         var createData = await client.QueryAsync(
-            "mutation($ownerId: ID!, $title: String!) { createProjectV2(input: {ownerId: $ownerId, title: $title}) { projectV2 { id } } }",
+            "mutation($ownerId: ID!, $title: String!) { createProjectV2(input: {ownerId: $ownerId, title: $title}) { projectV2 { id number } } }",
             new { ownerId, title },
             cancellationToken);
-        var projectId = createData.GetProperty("createProjectV2").GetProperty("projectV2").GetProperty("id").GetString()!;
+        var project = createData.GetProperty("createProjectV2").GetProperty("projectV2");
+        var projectId = project.GetProperty("id").GetString()!;
+        var projectNumber = project.GetProperty("number").GetInt32();
 
         try
         {
+            var createdTitles = Enumerable.Range(1, 120)
+                .Select(i => $"Draft {i:D3}")
+                .ToArray();
+
             // Serial on purpose: parallel writes would trip the secondary rate limit.
-            for (var i = 1; i <= 120; i++)
+            foreach (var draftTitle in createdTitles)
             {
                 await client.QueryAsync(
                     "mutation($projectId: ID!, $title: String!) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) { projectItem { id } } }",
-                    new { projectId, title = $"Draft {i:D3}" },
+                    new { projectId, title = draftTitle },
                     cancellationToken);
             }
 
             // The items connection is eventually consistent right after writes,
             // so poll until all 120 items are visible (up to ~75s).
-            List<string?> itemIds = [];
+            List<string> directTitles = [];
             for (var attempt = 0; attempt < 16; attempt++)
             {
                 if (attempt > 0)
@@ -94,14 +100,18 @@ public class GraphQLClientIntegrationTests
                     await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
                 }
 
-                itemIds = [];
+                directTitles = [];
                 await foreach (var node in client.QueryPaginatedAsync(
                     """
                     query($projectId: ID!, $first: Int!, $after: String) {
                       node(id: $projectId) {
                         ... on ProjectV2 {
-                          items(first: $first, after: $after) {
-                            nodes { id }
+                          items(first: $first, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                            nodes {
+                              content {
+                                ... on DraftIssue { title }
+                              }
+                            }
                             pageInfo { hasNextPage endCursor }
                           }
                         }
@@ -112,17 +122,52 @@ public class GraphQLClientIntegrationTests
                     "node.items",
                     cancellationToken: cancellationToken))
                 {
-                    itemIds.Add(node.GetProperty("id").GetString());
+                    directTitles.Add(node.GetProperty("content").GetProperty("title").GetString()!);
                 }
 
-                if (itemIds.Count >= 120)
+                if (directTitles.Count >= 120)
                 {
                     break;
                 }
             }
 
-            Assert.Equal(120, itemIds.Count);
-            Assert.Equal(120, itemIds.Distinct().Count());
+            Assert.Equal(120, directTitles.Count);
+            Assert.Equal(120, directTitles.Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(
+                createdTitles.Order(StringComparer.Ordinal),
+                directTitles.Order(StringComparer.Ordinal));
+
+            var exporter = new ProjectExporter(client);
+            IReadOnlyList<Ghpmv.Core.Snapshot.ItemSnapshot> exportedItems = [];
+            for (var attempt = 0; attempt < 16; attempt++)
+            {
+                if (attempt > 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+                }
+
+                var snapshot = await exporter.ExportAsync(Org, projectNumber, cancellationToken);
+                exportedItems = snapshot.Items;
+                if (exportedItems.Count >= 120)
+                {
+                    break;
+                }
+            }
+
+            Assert.Equal(120, exportedItems.Count);
+            Assert.All(exportedItems, item =>
+            {
+                Assert.Equal("DRAFT_ISSUE", item.Type);
+                Assert.NotNull(item.Draft);
+            });
+
+            var exportedTitles = exportedItems.Select(item => item.Draft!.Title).ToArray();
+            Assert.Equal(120, exportedTitles.Distinct(StringComparer.Ordinal).Count());
+            Assert.Equal(
+                directTitles.Order(StringComparer.Ordinal),
+                exportedTitles.Order(StringComparer.Ordinal));
+            Assert.Equal(directTitles, exportedTitles);
+            Assert.Equal(Enumerable.Range(0, 120), exportedItems.Select(item => item.Position));
         }
         finally
         {

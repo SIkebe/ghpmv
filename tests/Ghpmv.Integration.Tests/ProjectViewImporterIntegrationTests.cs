@@ -2,12 +2,15 @@ using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
+using Ghpmv.Core.Verify;
 
 namespace Ghpmv.Integration.Tests;
 
 /// <summary>
 /// Verifies the GraphQL-readable Project View import contract against the real API.
-/// Browser-only grouping, sorting, and UI settings are intentionally out of scope.
+/// API-only coverage intentionally treats saved tab order as browser-only state.
+/// Browser-only grouping, sorting, UI settings, tab order, and drag writes are
+/// outside this project's scope.
 /// </summary>
 public class ProjectViewImporterIntegrationTests
 {
@@ -74,6 +77,52 @@ public class ProjectViewImporterIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Api_only_import_warns_for_browser_tab_order_and_export_leaves_it_uncaptured()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = IntegrationTestSettings.CreateClient(Token);
+        var title = "ghpmv-view-position-test-" + Guid.NewGuid().ToString("N");
+        var initial = PositionedSnapshot(title);
+        var createLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        try
+        {
+            var createImporter = new ProjectImporter(client)
+            {
+                OperationLogDirectory = createLogDirectory,
+            };
+            var result = await createImporter.ImportAsync(initial, TargetOrg, cancellationToken);
+            Assert.Contains(createImporter.Warnings, warning =>
+                warning.Contains("tab order requires browser automation", StringComparison.Ordinal));
+
+            var imported = await ExportUntilViewsMatchAsync(
+                client,
+                result.ProjectNumber,
+                initial.Views,
+                cancellationToken);
+            Assert.All(imported.Views, view => Assert.Null(view.TabPosition));
+
+            var report = ProjectVerifier.Compare(initial, imported);
+            Assert.Contains(report.Differences, difference =>
+                difference.Severity == VerifySeverity.Warning
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.DoesNotContain(report.Differences, difference =>
+                difference.Severity == VerifySeverity.Error
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order", StringComparison.Ordinal));
+        }
+        finally
+        {
+            await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                client,
+                TargetOrg,
+                title,
+                CancellationToken.None);
+            TryDeleteDirectory(createLogDirectory);
+        }
+    }
+
     private static ProjectSnapshot Snapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
@@ -106,14 +155,26 @@ public class ProjectViewImporterIntegrationTests
         Items = [],
     };
 
+    private static ProjectSnapshot PositionedSnapshot(string title) => Snapshot(title) with
+    {
+        Views =
+        [
+            View(7, "Position A", "TABLE_LAYOUT", filter: null, visibleFields: [], tabPosition: 1),
+            View(11, "Position B", "TABLE_LAYOUT", filter: null, visibleFields: [], tabPosition: 2),
+            View(13, "Position C", "TABLE_LAYOUT", filter: null, visibleFields: [], tabPosition: 0),
+        ],
+    };
+
     private static ViewSnapshot View(
         int number,
         string name,
         string layout,
         string? filter,
-        IReadOnlyList<string> visibleFields) => new()
+        IReadOnlyList<string> visibleFields,
+        int? tabPosition = null) => new()
     {
         Number = number,
+        TabPosition = tabPosition,
         Name = name,
         Layout = layout,
         Filter = filter,
@@ -150,6 +211,20 @@ public class ProjectViewImporterIntegrationTests
         }
 
         return snapshot ?? throw new InvalidOperationException("The imported project could not be exported.");
+    }
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
 }

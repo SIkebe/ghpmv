@@ -141,6 +141,14 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
+        "projectsEnabled": {
+          "type": ["boolean", "null"],
+          "description": "Whether GitHub Projects is enabled for the organization; null when not yet confirmed."
+        },
+        "privateRepositoryCreationAllowed": {
+          "type": ["boolean", "null"],
+          "description": "Whether organization policy allows the validation identity to create private repositories; null when not yet confirmed."
+        },
         "apiBaseUrl": {
           "type": "string",
           "format": "uri",

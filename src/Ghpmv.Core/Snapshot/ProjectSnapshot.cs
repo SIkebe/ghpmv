@@ -205,6 +205,12 @@ public sealed record ViewSnapshot
 {
     public required int Number { get; init; }
 
+    /// <summary>
+    /// Zero-based saved-tab position captured from the Projects UI. Null when browser
+    /// automation was not used or when the tab strip could not be read.
+    /// </summary>
+    public int? TabPosition { get; init; }
+
     public required string Name { get; init; }
 
     /// <summary>GraphQL <c>ProjectV2ViewLayout</c> (TABLE_LAYOUT, BOARD_LAYOUT, ROADMAP_LAYOUT).</summary>

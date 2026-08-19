@@ -198,6 +198,9 @@ public class BrowserRoundTripTests
         var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
         source = await uiExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
         Assert.Empty(uiExporter.Warnings);
+        Assert.False(
+            uiExporter.GraphQlPositionMatchesDomOrder,
+            "GraphQL POSITION now matches the saved-tab DOM order. Re-evaluate replacing the browser read path with the public API.");
         Assert.All(source.Views, v => Assert.NotNull(v.Ui));
         Assert.Contains(source.Fields, field => field.Name == "Labels" && field.DataType == "LABELS");
         Assert.Contains(source.Fields, field => field.Name == "Fixture Teams" && field.IssueField is not null);
@@ -216,9 +219,44 @@ public class BrowserRoundTripTests
         var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
         Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+        var sourceTabOrder = source.Views.OrderBy(view => view.TabPosition).Select(view => view.Name).ToList();
+        Assert.False(sourceTabOrder.SequenceEqual(
+            source.Views.OrderBy(view => view.Number).Select(view => view.Name),
+            StringComparer.Ordinal));
 
         var title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N");
-        var snapshot = source with { Project = source.Project with { Title = title } };
+        var shiftedSourceViews = source.Views.Select(view => view with
+        {
+            TabPosition = view.TabPosition + 1,
+        }).ToList();
+        var overflowViews = Enumerable.Range(1, 6).Select(index => new ViewSnapshot
+        {
+            Number = 100 + index,
+            TabPosition = index == 1 ? 0 : source.Views.Count + index - 1,
+            Name = $"Overflow {index}",
+            Layout = "TABLE_LAYOUT",
+            GroupByFields = [],
+            SortByFields = [],
+            VerticalGroupByFields = [],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot(),
+        }).ToList();
+        var snapshot = source with
+        {
+            Project = source.Project with { Title = title },
+            Views = [.. shiftedSourceViews, .. overflowViews],
+        };
+        var apiPositions = snapshot.Views
+            .OrderBy(view => view.Number)
+            .Select((view, position) => (view.Number, position))
+            .ToDictionary(pair => pair.Number, pair => pair.position);
+        var apiImportSnapshot = snapshot with
+        {
+            Views = snapshot.Views.Select(view => view with
+            {
+                TabPosition = apiPositions[view.Number],
+            }).ToList(),
+        };
         var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
 
         var importer = new ProjectImporter(targetClient)
@@ -230,9 +268,24 @@ public class BrowserRoundTripTests
             RepositoryMapping = RepositoryMapping,
             UserMapping = userMapping,
         };
-        var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
+        var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
         try
         {
+            var initialReport = await new ProjectVerifier(targetClient)
+            {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
+            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Contains(initialReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Warning
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.Contains(initialReport.Categories, category =>
+                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
+
+            var targetPage = await targetSession.GetPageAsync(cancellationToken);
+            await targetPage.SetViewportSizeAsync(480, 1000);
             var viewImporter = new ViewUiImporter(targetSession);
             await viewImporter.EnrichAsync(
                 snapshot,
@@ -242,6 +295,19 @@ public class BrowserRoundTripTests
                 result.ViewNumbers,
                 cancellationToken);
             Assert.Empty(viewImporter.Warnings);
+
+            var apiOnlyReport = await new ProjectVerifier(targetClient)
+            {
+                OrganizationMapping = OrganizationMapping,
+                RepositoryMapping = RepositoryMapping,
+                UserMapping = userMapping,
+            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+            Assert.Contains(apiOnlyReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Warning
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.Contains(apiOnlyReport.Categories, category =>
+                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
 
             // Verify re-exports the target through GraphQL and its browser post-export hook.
             ProjectSnapshot? reExported = null;
@@ -264,8 +330,10 @@ public class BrowserRoundTripTests
             Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
 
             Assert.Equal(snapshot.Views.Count, target.Views.Count);
-            // Tab order re-creation is out of scope for v1 (PLAN §8.1) and target view
-            // numbers are re-assigned, so views are matched by name instead of position.
+            Assert.True(snapshot.Views.Count > 3);
+            Assert.Equal(
+                snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name),
+                target.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
             foreach (var expected in snapshot.Views)
             {
                 var actual = Assert.Single(target.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));

@@ -553,6 +553,121 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Captured_view_tab_order_is_compared_when_both_snapshots_include_positions()
+    {
+        var baseline = BuildSnapshot();
+        var table = baseline.Views[0] with { Number = 7, TabPosition = 0 };
+        var board = table with { Number = 3, TabPosition = 1, Name = "Board", Layout = "BOARD_LAYOUT" };
+        var source = baseline with { Views = [table, board] };
+        var target = baseline with
+        {
+            Views =
+            [
+                table with { TabPosition = 1 },
+                board with { TabPosition = 0 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal)
+            && difference.Message.Contains("Table, Board", StringComparison.Ordinal)
+            && difference.Message.Contains("Board, Table", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Legacy_view_positions_do_not_require_order_verification()
+    {
+        var baseline = BuildSnapshot();
+        var table = baseline.Views[0] with { Number = 7, TabPosition = null };
+        var board = table with { Number = 3, Name = "Board", Layout = "BOARD_LAYOUT" };
+        var source = baseline with { Views = [table, board] };
+        var target = baseline with { Views = [board, table] };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View"
+            && difference.Message.Contains("tab order", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Positioned_duplicate_view_names_use_api_settings_to_detect_a_swap()
+    {
+        var baseline = BuildSnapshot();
+        var todo = baseline.Views[0] with
+        {
+            Number = 7,
+            TabPosition = 0,
+            Name = "Duplicate",
+            Filter = "status:Todo",
+        };
+        var done = todo with
+        {
+            Number = 9,
+            TabPosition = 1,
+            Filter = "status:Done",
+        };
+        var source = baseline with { Views = [todo, done] };
+        var target = baseline with
+        {
+            Views =
+            [
+                done with { Number = 21, TabPosition = 0 },
+                todo with { Number = 22, TabPosition = 1 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("views named 'Duplicate'", StringComparison.Ordinal)
+            && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Positioned_duplicate_view_names_use_ui_settings_to_detect_a_swap()
+    {
+        var baseline = BuildSnapshot();
+        var status = baseline.Views[0] with
+        {
+            Number = 7,
+            TabPosition = 0,
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot { SliceBy = "Status" },
+        };
+        var assignees = status with
+        {
+            Number = 9,
+            TabPosition = 1,
+            Ui = new ViewUiSnapshot { SliceBy = "Assignees" },
+        };
+        var source = baseline with { Views = [status, assignees] };
+        var target = baseline with
+        {
+            Views =
+            [
+                assignees with { Number = 21, TabPosition = 0 },
+                status with { Number = 22, TabPosition = 1 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == "View"
+            && difference.Message.Contains("views named 'Duplicate'", StringComparison.Ordinal)
+            && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal)
+            && difference.Message.Contains("combined API and UI settings", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();

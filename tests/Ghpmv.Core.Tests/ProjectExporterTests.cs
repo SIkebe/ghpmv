@@ -64,6 +64,73 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Api_export_does_not_claim_graphql_position_is_saved_tab_order()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse(
+                """
+                [
+                  {"number":9,"name":"Roadmap","layout":"ROADMAP_LAYOUT","filter":null,
+                   "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                   "configuration":{"visibleFields":{"nodes":[]}}},
+                  {"number":2,"name":"Table","layout":"TABLE_LAYOUT","filter":null,
+                   "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                   "configuration":{"visibleFields":{"nodes":[]}}}
+                ]
+                """),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["Roadmap", "Table"], snapshot.Views.Select(view => view.Name));
+        Assert.All(snapshot.Views, view => Assert.Null(view.TabPosition));
+        Assert.Contains(
+            "views(first: 50, orderBy: { field: POSITION, direction: ASC })",
+            handler.RequestBodies[0],
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_paginates_views_without_claiming_tab_positions()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse(
+                """
+                [{"number":9,"name":"First","layout":"TABLE_LAYOUT","filter":null,
+                  "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                  "configuration":{"visibleFields":{"nodes":[]}}}]
+                """,
+                hasNextPage: true,
+                endCursor: "view-cursor"),
+            ViewsResponse(
+                """
+                [{"number":2,"name":"Second","layout":"BOARD_LAYOUT","filter":null,
+                  "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                  "configuration":{"visibleFields":{"nodes":[]}}}]
+                """),
+            EmptyItemsResponse,
+            EmptyStatusUpdatesResponse,
+            FieldsResponse("[]"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client).ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["First", "Second"], snapshot.Views.Select(view => view.Name));
+        Assert.All(snapshot.Views, view => Assert.Null(view.TabPosition));
+        Assert.Contains("\"after\":\"view-cursor\"", handler.RequestBodies[1], StringComparison.Ordinal);
+        Assert.Contains("orderBy", handler.RequestBodies[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_reads_linked_issue_field_identity_and_definition_directly_from_project_fields()
     {
         using var handler = new StubHandler(
@@ -640,12 +707,27 @@ public class ProjectExporterTests
         ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
         ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
-    private static string MetadataResponse(string views, bool template = false) =>
+    private static string MetadataResponse(
+        string views,
+        bool template = false,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
         "{\"data\":{\"organization\":{\"projectV2\":{" +
         "\"title\":\"Roadmap\",\"shortDescription\":null,\"readme\":null,\"public\":false,\"closed\":false," +
         "\"template\":" + template.ToString().ToLowerInvariant() + "," +
-        "\"views\":{\"nodes\":" + views + "},\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
+        "\"views\":{\"nodes\":" + views +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}," +
+        "\"workflows\":{\"nodes\":[]},\"repositories\":{\"nodes\":[]}" +
         "}}}}";
+
+    private static string ViewsResponse(
+        string views,
+        bool hasNextPage = false,
+        string? endCursor = null) =>
+        "{\"data\":{\"organization\":{\"projectV2\":{\"views\":{\"nodes\":" + views +
+        ",\"pageInfo\":{\"hasNextPage\":" + hasNextPage.ToString().ToLowerInvariant() +
+        ",\"endCursor\":" + (endCursor is null ? "null" : $"\"{endCursor}\"") + "}}}}}}";
 
     private static string FieldsResponse(
         string fields,
