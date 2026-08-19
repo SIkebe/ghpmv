@@ -88,11 +88,6 @@ public sealed class ViewUiExporter
             var graphQlPositionOrder = views.Select(view => view.Number).ToList();
             var tabOrder = await ViewTabOrder.ReadAsync(page, cancellationToken).ConfigureAwait(false);
             GraphQlPositionMatchesDomOrder = graphQlPositionOrder.SequenceEqual(tabOrder);
-            if (GraphQlPositionMatchesDomOrder is true)
-            {
-                OnProgress?.Invoke(
-                    "GraphQL POSITION now matches the saved-tab DOM order; re-evaluate whether browser tab-order reads are still required.");
-            }
             views = [.. ViewTabOrder.Apply(views, tabOrder)];
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
