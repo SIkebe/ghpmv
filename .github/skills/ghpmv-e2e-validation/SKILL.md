@@ -185,6 +185,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている場合は、そのpathだけをauthoritativeなJSONCとして読む。明示pathが存在しない、読み取れない、またはvalidationに失敗した場合は、local/shared fileへfallbackせず、pathとエラーを示して修正されるまで停止する。`GHPMV_E2E_SETTINGS`が未設定の場合だけ、`tests/e2e.settings.local.jsonc`、`tests/e2e.settings.jsonc`の順で最初に存在するfileを読む。`//`コメントと末尾commaを許可する。設定値は次の用途に使い、同じ非secret値を再質問しない。
 
+自動検出ではglobやtracked-file一覧だけに依存しない。`tests/e2e.settings.local.jsonc`はgitignore対象のため、file search結果に現れないことがある。必ずrepository rootから`Test-Path -LiteralPath tests/e2e.settings.local.jsonc`でexact pathの存在を先に確認し、存在すればshared fileを読む前にlocal fileを読む。local fileが存在するのにshared fileを先に読んだり、localに非空で設定されたlogin、organization、repository、policy confirmationを再質問したりしてはならない。
+
 - source / target Organization、API / Web / uploads URL、browser profile
 - Integration / Browser fixtureのProject番号とsource / target repository
 - source / target browser login、collaborator login、EMUを含むuser mapping

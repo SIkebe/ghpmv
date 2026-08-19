@@ -9,6 +9,12 @@
     // Project と fixture repository を所有する Organization の login です。表示名ではありません。
     "organization": "gpm-source",
 
+    // OrganizationでGitHub Projectsが有効かを記録します。true / false、未確認ならnullです。
+    "projectsEnabled": null,
+
+    // Organization policyでprivate repositoryを新規作成できるかを記録します。
+    "privateRepositoryCreationAllowed": null,
+
     // ghpmv が GraphQL API に接続するときの URL です。
     // GitHub.com は下記のまま、data residency は https://api.TENANT.ghe.com/graphql に変更します。
     "apiBaseUrl": "https://api.github.com/graphql",
@@ -35,6 +41,13 @@
   // import、verify、および一時 Project 作成先となる GitHub 環境です。
   "target": {
     "organization": "gpm-target",
+
+    // import先Projectを作成できるよう、target OrganizationでProjectsが有効かを記録します。
+    "projectsEnabled": null,
+
+    // fixture-seedでtarget repositoryを作る場合のOrganization policyです。GEI経路ではnullでも構いません。
+    "privateRepositoryCreationAllowed": null,
+
     "apiBaseUrl": "https://api.github.com/graphql",
     "webBaseUrl": "https://github.com",
 
