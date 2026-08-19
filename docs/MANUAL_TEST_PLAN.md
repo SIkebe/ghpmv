@@ -360,22 +360,27 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 Views:
 
-- タブを `Fixture Roadmap` → Table view → Board view の非自明な順に並べる
-- Table view
-  - filter を設定
-  - hidden / visible fields を調整
-  - 2 key sort
+- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` の順に並べる
+- `View 1` (Table)
+  - filter=`status:Todo`
+  - visible fields を標準 fixture に合わせる
+  - Sort by=`Fixture Number` ascending
   - group by Status
-  - Field sum に Number field を設定
-- Board view
-  - Column by Status または Single-select field
-  - Swimlanes / Slice by を設定
-- Roadmap view
+  - Slice by=`Fixture Select`
+  - Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
+- `Fixture Board` (Board)
+  - Column by=`Fixture Select`
+  - Swimlanes=`Status`
+  - Field sum=`Fixture Number`
+- `Fixture Roadmap` (Roadmap)
   - group by Status
-  - Field sum に `Fixture Number 2` を設定
-  - Date field または Iteration を設定
-  - Zoom を Quarter に設定
-  - markers を有効化
+  - Field sum=`Fixture Number 2`
+  - Dates=`Fixture Date` → `Fixture Sprint end`
+  - Zoom=`Quarter`
+  - Markers=`Fixture Date`
+- `Fixture Empty Sums` (Table) を作成
+  - group by Status
+  - Field sum は空（`Count` を含めてすべて解除）
 
 Workflows:
 

@@ -722,13 +722,19 @@ public sealed class ViewUiImporter
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             var overlay = Sel.OpenMenu(page);
             await overlay.WaitForAsync().ConfigureAwait(false);
-            var available = await ToggleCheckboxesAsync(
+            var result = await ToggleCheckboxesAsync(
                 overlay,
                 new HashSet<string>(values, StringComparer.Ordinal),
                 cancellationToken).ConfigureAwait(false);
-            foreach (var value in values.Where(value => !available.Contains(value)))
+            foreach (var value in values.Where(value => !result.Available.Contains(value)))
             {
                 _warnings.Add($"view '{viewName}': {label} value '{value}' is not available on the target");
+            }
+
+            foreach (var mismatch in result.DisabledMismatches)
+            {
+                var action = mismatch.ShouldBeChecked ? "selected" : "cleared";
+                _warnings.Add($"view '{viewName}': {label} value '{mismatch.Name}' is disabled on the target and could not be {action}");
             }
 
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -746,7 +752,7 @@ public sealed class ViewUiImporter
     /// <c>menuitemcheckbox</c> entries, while "Fields" renders <c>option</c> entries — both
     /// carry <c>aria-checked</c>.
     /// </summary>
-    private static async Task<HashSet<string>> ToggleCheckboxesAsync(
+    private static async Task<CheckboxToggleResult> ToggleCheckboxesAsync(
         ILocator overlay,
         HashSet<string> desired,
         CancellationToken cancellationToken)
@@ -758,6 +764,7 @@ public sealed class ViewUiImporter
         }
 
         var available = new HashSet<string>(StringComparer.Ordinal);
+        var disabledMismatches = new List<DisabledCheckboxMismatch>();
         var count = await checkboxes.CountAsync().ConfigureAwait(false);
         for (var i = 0; i < count; i++)
         {
@@ -769,21 +776,37 @@ public sealed class ViewUiImporter
             }
 
             available.Add(name);
-            if (string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            var isChecked = string.Equals(await checkbox.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal);
+            var isDisabled = string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal);
+            var shouldBeChecked = desired.Contains(name);
+            if (DisabledCheckboxChangeRequired(shouldBeChecked, isChecked, isDisabled))
+            {
+                disabledMismatches.Add(new DisabledCheckboxMismatch(name, shouldBeChecked));
+            }
+
+            if (isDisabled)
             {
                 continue;
             }
 
-            var isChecked = string.Equals(await checkbox.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal);
-            if (desired.Contains(name) != isChecked)
+            if (shouldBeChecked != isChecked)
             {
                 await checkbox.ClickAsync().ConfigureAwait(false);
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
-        return available;
+        return new CheckboxToggleResult(available, disabledMismatches);
     }
+
+    internal static bool DisabledCheckboxChangeRequired(bool shouldBeChecked, bool isChecked, bool isDisabled)
+        => isDisabled && shouldBeChecked != isChecked;
+
+    private sealed record CheckboxToggleResult(
+        HashSet<string> Available,
+        IReadOnlyList<DisabledCheckboxMismatch> DisabledMismatches);
+
+    private sealed record DisabledCheckboxMismatch(string Name, bool ShouldBeChecked);
 
     private async Task TrySetDateFieldsAsync(IPage page, RoadmapSettingsSnapshot roadmap, string viewName, CancellationToken cancellationToken)
     {

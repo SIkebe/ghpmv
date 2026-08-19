@@ -196,6 +196,21 @@ public class ViewUiLogicTests
         Assert.Null(ViewUiImporter.FieldSumValuesToApply(view));
     }
 
+    [Theory]
+    [InlineData(true, false, true, true)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, false, false)]
+    public void Disabled_checkbox_change_is_reported_only_when_state_cannot_match(
+        bool shouldBeChecked,
+        bool isChecked,
+        bool isDisabled,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            ViewUiImporter.DisabledCheckboxChangeRequired(shouldBeChecked, isChecked, isDisabled));
+
     [Fact]
     public void FixtureUiSnapshotFactory_creates_importable_standard_views_and_workflows()
     {
