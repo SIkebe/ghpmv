@@ -30,12 +30,6 @@ public sealed class ViewUiImporter
         _session = session;
     }
 
-    public ViewUiImporter(BrowserSession session, GitHubGraphQLClient client)
-        : this(session)
-    {
-        ArgumentNullException.ThrowIfNull(client);
-    }
-
     /// <summary>Invoked with a human-readable progress message per view.</summary>
     public Action<string>? OnProgress { get; set; }
 
