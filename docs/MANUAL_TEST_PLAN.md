@@ -606,13 +606,15 @@ human-readable category table と `verify-report.json` の両方に `StatusUpdat
 
 ### 7.5 Grouped Table / Roadmap Field sum の反復可能な手動 E2E
 
-このシナリオは 5.1 / 5.2 の標準 fixture を使用します。新規 fixture では `View 1` と `Fixture Roadmap` が grouped view として作成されるため、追加の手動 source 設定は不要です。既存 fixture を使う場合は、5.2 の `setup --fixture-ui --fixture-project <source-project-number>` を再実行し、次の source 状態を確認してから開始します。
+このシナリオは 5.1 / 5.2 の標準 fixture を使用します。新規 fixture では `View 1` と `Fixture Roadmap` が grouped view として作成されるため、追加の手動 source 設定は不要です。既存 fixture を使う場合は次の source 状態を確認してから開始します。古い fixture に対して `setup --fixture-ui --fixture-project` だけを再実行すると non-default View が重複し得るため、contract が古い場合は新しい標準 fixture を作成します。
+
+repository-local `ghpmv-e2e-validation` Skill の既存 `browser-e2e` round trip は、この節を別 scenario に分岐せず標準フロー内で実行します。fixture contract、snapshot、`View: Match`、目視、drift、repair、resource inventory、cleanup 同意を順に確認します。
 
 | View | Layout / grouping | Field sum |
 |---|---|---|
 | `View 1` | Table / Group by `Status` | `Count`, `Fixture Number`, `Fixture Number 2` |
 | `Fixture Roadmap` | Roadmap / Group by `Status` | `Fixture Number 2` |
-| `Fixture Board` | Board | `Fixture Number`（回帰確認） |
+| `Fixture Board` | Board / Group by `Status` | `Fixture Number`（回帰確認） |
 | `Fixture Empty Sums` | Table / Group by `Status` | 空 |
 
 1. **Browser-assisted export と snapshot 確認**
