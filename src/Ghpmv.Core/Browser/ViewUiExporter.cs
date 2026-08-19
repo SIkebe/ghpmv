@@ -76,6 +76,17 @@ public sealed class ViewUiExporter
             views.Add(view with { Ui = ui });
         }
 
+        try
+        {
+            var tabOrder = await ViewTabOrder.ReadAsync(page, cancellationToken).ConfigureAwait(false);
+            views = [.. ViewTabOrder.Apply(views, tabOrder)];
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            _warnings.Add($"view tab order could not be read — {exception.Message}");
+            views = [.. views.Select(view => view with { TabPosition = null })];
+        }
+
         return snapshot with { Views = views };
     }
 

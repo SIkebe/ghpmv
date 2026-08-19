@@ -66,7 +66,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Project-to-Team links | `ghpmv verify` + Team Projects / Manage access UI | `organization/slug` で識別。explicit collaborator とは別カテゴリ。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
-| Views | GraphQL verify + browser export/import + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、tab order。tab order の read/verify は API-only。 |
+| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、tab order。saved-tab orderのread/verifyにはbrowser automationが必要。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
 
 ### 2.2 対象外または warning 許容
@@ -589,7 +589,7 @@ dotnet run --project src/Ghpmv.Cli -- verify `
 
 `--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
-同じ verify を先に `--enable-browser-automation` / `--browser-profile` なしでも実行し、GraphQL POSITION による tab order が一致していることを確認します。API-only verify は UI-only 設定を未検証として扱いますが、tab order の差分は `View` category の error として報告できます。
+同じverifyを先に`--enable-browser-automation` / `--browser-profile`なしでも実行し、API-readableなView設定を確認します。API-only verifyではsaved-tab orderとUI-only設定は`View` categoryの`NotVerified`として扱われます。続くbrowser-assisted verifyでDOM tab orderを含む完全一致を確認します。
 
 source / target の repository 名、user login、または Team slug が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` / `--team-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator、linked Team は target 側の名前へ正規化して比較されます。生成されていない optional mapping の引数は外してください。
 
@@ -699,7 +699,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 | ID | 手順 | 期待結果 |
 |---|---|---|
-| N-1 | `--enable-browser-automation` なしで export/import | POSITION は snapshot に保存され verify で比較されるが、API-only import は既存 target の tab order 差分を修復せず warning にする。Views / Workflows UI-only 項目も warning または未移行として扱われる。 |
+| N-1 | `--enable-browser-automation` なしで export/import | API-only exportは`tabPosition: null`を保存する。browserで取得済みのtab orderを持つsnapshotのAPI-only importは未適用warning、API-only verifyは`NotVerified`として扱う。Views / Workflows UI-only項目もwarningまたは未移行として扱われる。 |
 | N-2 | `repository-mappings.csv` から fixture repo 行を削除して import | Issue / PR item が warning + skip され、Draft items は作成される。 |
 | N-3 | target token を source token に差し替えて import | 権限不足で失敗し、Project を壊さない。 |
 | N-4 | browser profile を間違える | ログイン / 権限エラーで失敗し、再ログイン案内が出る。 |
@@ -709,7 +709,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-8 | `team-mappings.csv` を存在しない Team に向けて import | Project 作成・metadata 更新より前に `unresolved` preflight error で停止する。 |
 | N-9 | Team read/maintainer 権限のない token、または admin access のない既存 Project で import | Team mutation の実行前に `permission` preflight error で停止する。 |
 | N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
-| N-11 | target UI で View tab を逆順にして API-only verify | `View` category と JSON report に `view tab order mismatch` が出る。続けて browser-assisted import を再実行すると順序が修復される。 |
+| N-11 | target UI で View tab を逆順にして browser-assisted verify | `View` categoryとJSON reportに`view tab order mismatch`が出る。続けてbrowser-assisted importを再実行すると順序が修復される。 |
 | N-12 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
 
 ---

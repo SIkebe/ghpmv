@@ -263,6 +263,46 @@ public class ViewUiLogicTests
         Assert.Equal(1, delays);
     }
 
+    [Theory]
+    [InlineData("/orgs/octo/projects/7/views/42", 42)]
+    [InlineData("/orgs/octo/projects/7/views/42?pane=info", 42)]
+    [InlineData("https://github.com/orgs/octo/projects/7/views/42", 42)]
+    public void ParseViewNumber_reads_saved_tab_href(string href, int expected)
+        => Assert.Equal(expected, ViewTabOrder.ParseViewNumber(href));
+
+    [Fact]
+    public void ApplyViewTabOrder_overrides_graphql_enumeration_order()
+    {
+        var table = View("Table", "TABLE_LAYOUT") with { Number = 1 };
+        var board = View("Board", "BOARD_LAYOUT") with { Number = 2 };
+        var roadmap = View("Roadmap", "ROADMAP_LAYOUT") with { Number = 3 };
+
+        var result = ViewTabOrder.Apply([table, board, roadmap], [3, 1, 2]);
+
+        Assert.Equal(
+            ["Roadmap", "Table", "Board"],
+            result.OrderBy(view => view.TabPosition).Select(view => view.Name));
+        Assert.Equal(1, result.Single(view => view.Name == "Table").TabPosition);
+        Assert.Equal(2, result.Single(view => view.Name == "Board").TabPosition);
+        Assert.Equal(0, result.Single(view => view.Name == "Roadmap").TabPosition);
+    }
+
+    [Fact]
+    public void ApplyViewTabOrder_rejects_an_incomplete_tab_strip()
+    {
+        var views =
+            new[]
+            {
+                View("Table", "TABLE_LAYOUT") with { Number = 1 },
+                View("Board", "BOARD_LAYOUT") with { Number = 2 },
+            };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ViewTabOrder.Apply(views, [1]));
+
+        Assert.Contains("exactly the Views returned by the API", exception.Message, StringComparison.Ordinal);
+    }
+
     // ----- verifier: Ui comparison (M6) -----
 
     [Fact]

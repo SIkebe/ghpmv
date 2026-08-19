@@ -206,8 +206,8 @@ public sealed record ViewSnapshot
     public required int Number { get; init; }
 
     /// <summary>
-    /// Zero-based tab position from the GraphQL View connection ordered by POSITION.
-    /// Null for schema-v1 snapshots written before tab-order support.
+    /// Zero-based saved-tab position captured from the Projects UI. Null when browser
+    /// automation was not used or when the tab strip could not be read.
     /// </summary>
     public int? TabPosition { get; init; }
 

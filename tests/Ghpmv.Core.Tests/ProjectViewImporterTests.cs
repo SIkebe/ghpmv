@@ -331,11 +331,7 @@ public class ProjectViewImporterTests
         var directory = Directory.CreateTempSubdirectory("ghpmv-view-position-warning-").FullName;
         try
         {
-            using var handler = new ViewHandler(directory)
-            {
-                ReturnCreatedViewAfterCreate = true,
-                CreatedViewFirst = true,
-            };
+            using var handler = new ViewHandler(directory);
             using var client = CreateClient(handler);
             var log = new ProjectImportLog();
             var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
@@ -352,44 +348,7 @@ public class ProjectViewImporterTests
                 TestContext.Current.CancellationToken);
 
             Assert.Contains(importer.Warnings, warning =>
-                warning.Contains("tab order differs", StringComparison.Ordinal)
-                && warning.Contains("browser automation", StringComparison.Ordinal));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Api_only_import_retries_an_incomplete_view_connection_before_comparing_order()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-view-position-retry-").FullName;
-        try
-        {
-            using var handler = new ViewHandler(directory)
-            {
-                ReturnCreatedViewAfterCreate = true,
-                IncompleteViewReadsAfterCreate = 1,
-            };
-            using var client = CreateClient(handler);
-            var log = new ProjectImportLog();
-            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
-            var firstTab = View(9, "Roadmap", "ROADMAP_LAYOUT", filter: null, visibleFields: [])
-                with { TabPosition = 0 };
-            var secondTab = View(2, "Table", "TABLE_LAYOUT", filter: null, visibleFields: [])
-                with { TabPosition = 1 };
-
-            await importer.ImportAsync(
-                [secondTab, firstTab],
-                "PVT_target",
-                new Dictionary<string, string>(),
-                ProjectImportOutcome.Created,
-                TestContext.Current.CancellationToken);
-
-            Assert.True(handler.ViewReadsAfterCreate >= 2);
-            Assert.DoesNotContain(importer.Warnings, warning =>
-                warning.Contains("tab order", StringComparison.Ordinal));
+                warning.Contains("tab order requires browser automation", StringComparison.Ordinal));
         }
         finally
         {
@@ -427,17 +386,9 @@ public class ProjectViewImporterTests
 
         public bool MissingField { get; init; }
 
-        public bool ReturnCreatedViewAfterCreate { get; init; }
-
-        public bool CreatedViewFirst { get; init; }
-
-        public int IncompleteViewReadsAfterCreate { get; init; }
-
         public int CreateCount { get; private set; }
 
         public bool PendingWasPresentAtCreate { get; private set; }
-
-        public int ViewReadsAfterCreate { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -450,27 +401,6 @@ public class ProjectViewImporterTests
 
             if (query.Contains("views(first:", StringComparison.Ordinal))
             {
-                if (CreateCount > 0 && ReturnCreatedViewAfterCreate)
-                {
-                    ViewReadsAfterCreate++;
-                    if (ViewReadsAfterCreate > IncompleteViewReadsAfterCreate)
-                    {
-                        return Json(CreatedViewFirst
-                            ? """
-                              {"data":{"node":{"views":{"nodes":[
-                                {"id":"PVTV_created","number":8,"name":"Table","layout":"TABLE_LAYOUT"},
-                                {"id":"PVTV_default","number":1,"name":"Roadmap","layout":"ROADMAP_LAYOUT"}
-                              ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                              """
-                            : """
-                              {"data":{"node":{"views":{"nodes":[
-                                {"id":"PVTV_default","number":1,"name":"Roadmap","layout":"ROADMAP_LAYOUT"},
-                                {"id":"PVTV_created","number":8,"name":"Table","layout":"TABLE_LAYOUT"}
-                              ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                              """);
-                    }
-                }
-
                 return Json(Resume
                     ? """
                       {"data":{"node":{"views":{"nodes":[

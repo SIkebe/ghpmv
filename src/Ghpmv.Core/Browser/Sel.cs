@@ -47,6 +47,11 @@ internal static class Sel
             $"[role='tab'][href$='/views/{number}'], [role='tab'][href*='/views/{number}?']").First;
     }
 
+    /// <summary>All saved View tabs in their current DOM order (excludes the New view control).</summary>
+    public static ILocator SavedViewTabs(IPage page)
+        => page.GetByRole(AriaRole.Navigation, new() { Name = "Select view", Exact = true })
+            .Locator("[role='tab'][href*='/views/']");
+
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { Name = "Save view", Exact = true });

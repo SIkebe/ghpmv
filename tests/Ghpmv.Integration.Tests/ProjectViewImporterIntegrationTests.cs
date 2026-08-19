@@ -8,9 +8,9 @@ namespace Ghpmv.Integration.Tests;
 
 /// <summary>
 /// Verifies the GraphQL-readable Project View import contract against the real API.
-/// This includes POSITION-based tab order reads, creation order, API-only warnings,
-/// and verification. Browser-only grouping, sorting, UI settings, and drag writes
-/// are intentionally out of scope.
+/// API-only coverage intentionally treats saved tab order as browser-only state.
+/// Browser-only grouping, sorting, UI settings, tab order, and drag writes are
+/// outside this project's scope.
 /// </summary>
 public class ProjectViewImporterIntegrationTests
 {
@@ -78,14 +78,13 @@ public class ProjectViewImporterIntegrationTests
     }
 
     [Fact]
-    public async Task Import_and_verify_use_graphql_tab_positions_while_api_only_update_warns()
+    public async Task Api_only_import_warns_for_browser_tab_order_and_export_leaves_it_uncaptured()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = IntegrationTestSettings.CreateClient(Token);
         var title = "ghpmv-view-position-test-" + Guid.NewGuid().ToString("N");
         var initial = PositionedSnapshot(title);
         var createLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        var updateLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
         try
         {
             var createImporter = new ProjectImporter(client)
@@ -93,59 +92,23 @@ public class ProjectViewImporterIntegrationTests
                 OperationLogDirectory = createLogDirectory,
             };
             var result = await createImporter.ImportAsync(initial, TargetOrg, cancellationToken);
-            Assert.DoesNotContain(createImporter.Warnings, warning =>
-                warning.Contains("tab order differs", StringComparison.Ordinal));
+            Assert.Contains(createImporter.Warnings, warning =>
+                warning.Contains("tab order requires browser automation", StringComparison.Ordinal));
 
-            var expectedInitialOrder = initial.Views
-                .OrderBy(view => view.TabPosition)
-                .Select(view => view.Name)
-                .ToArray();
-            var imported = await ExportUntilTabOrderMatchesAsync(
+            var imported = await ExportUntilViewsMatchAsync(
                 client,
                 result.ProjectNumber,
-                expectedInitialOrder,
+                initial.Views,
                 cancellationToken);
-            Assert.Equal(expectedInitialOrder, imported.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
-            Assert.Equal(
-                Enumerable.Range(0, expectedInitialOrder.Length).Select(position => (int?)position),
-                imported.Views.OrderBy(view => view.TabPosition).Select(view => view.TabPosition));
+            Assert.All(imported.Views, view => Assert.Null(view.TabPosition));
 
-            var reordered = initial with
-            {
-                Views = initial.Views.Select(view => view.Name switch
-                {
-                    "Position B" => view with { TabPosition = 0 },
-                    "Position A" => view with { TabPosition = 1 },
-                    "Position C" => view with { TabPosition = 2 },
-                    _ => throw new InvalidOperationException($"Unexpected View '{view.Name}'."),
-                }).ToList(),
-            };
-            var apiOnlyUpdate = new ProjectImporter(client)
-            {
-                OperationLogDirectory = updateLogDirectory,
-            };
-            await apiOnlyUpdate.ImportIntoAsync(
-                reordered,
-                TargetOrg,
-                result.ProjectNumber,
-                cancellationToken);
-
-            Assert.Contains(apiOnlyUpdate.Warnings, warning =>
-                warning.Contains("tab order differs", StringComparison.Ordinal)
-                && warning.Contains("browser automation", StringComparison.Ordinal));
-
-            var unchangedTarget = await ExportUntilTabOrderMatchesAsync(
-                client,
-                result.ProjectNumber,
-                expectedInitialOrder,
-                cancellationToken);
-            var report = ProjectVerifier.Compare(reordered, unchangedTarget);
+            var report = ProjectVerifier.Compare(initial, imported);
             Assert.Contains(report.Differences, difference =>
-                difference.Severity == VerifySeverity.Error
+                difference.Severity == VerifySeverity.Warning
                 && difference.Category == "View"
-                && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal)
-                && difference.Message.Contains("Position B, Position A, Position C", StringComparison.Ordinal)
-                && difference.Message.Contains("Position C, Position A, Position B", StringComparison.Ordinal));
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.Contains(report.Categories, category =>
+                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
         }
         finally
         {
@@ -155,7 +118,6 @@ public class ProjectViewImporterIntegrationTests
                 title,
                 CancellationToken.None);
             TryDeleteDirectory(createLogDirectory);
-            TryDeleteDirectory(updateLogDirectory);
         }
     }
 
@@ -247,34 +209,6 @@ public class ProjectViewImporterIntegrationTests
         }
 
         return snapshot ?? throw new InvalidOperationException("The imported project could not be exported.");
-    }
-
-    private static async Task<ProjectSnapshot> ExportUntilTabOrderMatchesAsync(
-        GitHubGraphQLClient client,
-        int projectNumber,
-        IReadOnlyList<string> expectedOrder,
-        CancellationToken cancellationToken)
-    {
-        var exporter = new ProjectExporter(client);
-        ProjectSnapshot? snapshot = null;
-        for (var attempt = 0; attempt < 10; attempt++)
-        {
-            if (attempt > 0)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
-            }
-
-            snapshot = await exporter.ExportAsync(TargetOrg, projectNumber, cancellationToken);
-            if (snapshot.Views
-                .OrderBy(view => view.TabPosition)
-                .Select(view => view.Name)
-                .SequenceEqual(expectedOrder, StringComparer.Ordinal))
-            {
-                return snapshot;
-            }
-        }
-
-        return snapshot ?? throw new InvalidOperationException("The imported View order could not be exported.");
     }
 
     private static void TryDeleteDirectory(string directory)

@@ -64,7 +64,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_captures_graphql_position_order_independently_of_view_number()
+    public async Task Api_export_does_not_claim_graphql_position_is_saved_tab_order()
     {
         using var handler = new StubHandler(
             MetadataResponse(
@@ -89,7 +89,7 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(["Roadmap", "Table"], snapshot.Views.Select(view => view.Name));
-        Assert.Equal([0, 1], snapshot.Views.Select(view => view.TabPosition));
+        Assert.All(snapshot.Views, view => Assert.Null(view.TabPosition));
         Assert.Contains(
             "views(first: 50, orderBy: { field: POSITION, direction: ASC })",
             handler.RequestBodies[0],
@@ -97,7 +97,7 @@ public class ProjectExporterTests
     }
 
     [Fact]
-    public async Task Export_paginates_position_ordered_views_without_resetting_tab_positions()
+    public async Task Export_paginates_views_without_claiming_tab_positions()
     {
         using var handler = new StubHandler(
             MetadataResponse(
@@ -125,7 +125,7 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(["First", "Second"], snapshot.Views.Select(view => view.Name));
-        Assert.Equal([0, 1], snapshot.Views.Select(view => view.TabPosition));
+        Assert.All(snapshot.Views, view => Assert.Null(view.TabPosition));
         Assert.Contains("\"after\":\"view-cursor\"", handler.RequestBodies[1], StringComparison.Ordinal);
         Assert.Contains("orderBy", handler.RequestBodies[1], StringComparison.Ordinal);
     }

@@ -98,11 +98,7 @@ internal sealed class ProjectViewImporter
 
         if (!BrowserEnrichmentPlanned)
         {
-            await WarnAboutUnappliedTabOrderAsync(
-                orderedSourceViews,
-                projectId,
-                viewNumbers,
-                cancellationToken).ConfigureAwait(false);
+            WarnAboutUnappliedTabOrder(orderedSourceViews);
         }
 
         return viewNumbers;
@@ -113,47 +109,14 @@ internal sealed class ProjectViewImporter
             .OrderBy(view => view.TabPosition ?? int.MaxValue)
             .ThenBy(view => view.Number);
 
-    private async Task WarnAboutUnappliedTabOrderAsync(
-        IReadOnlyList<ViewSnapshot> orderedSourceViews,
-        string projectId,
-        Dictionary<int, int> viewNumbers,
-        CancellationToken cancellationToken)
+    private void WarnAboutUnappliedTabOrder(ViewSnapshot[] orderedSourceViews)
     {
-        if (orderedSourceViews.Any(view => view.TabPosition is null))
+        if (orderedSourceViews.Length < 2 || orderedSourceViews.Any(view => view.TabPosition is null))
         {
             return;
         }
 
-        var expected = orderedSourceViews.Select(view => viewNumbers[view.Number]).ToList();
-        var importedNumbers = expected.ToHashSet();
-        List<int> actual = [];
-        for (var attempt = 0; attempt < 4; attempt++)
-        {
-            if (attempt > 0)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
-            }
-
-            actual = (await FetchViewsAsync(projectId, cancellationToken).ConfigureAwait(false))
-                .Where(view => importedNumbers.Contains(view.Number))
-                .Select(view => view.Number)
-                .ToList();
-            if (actual.Count == expected.Count)
-            {
-                break;
-            }
-        }
-
-        if (actual.Count < expected.Count)
-        {
-            Warn("view tab order could not be confirmed because the target View list remained incomplete; rerun verify after GitHub finishes updating the View connection");
-            return;
-        }
-
-        if (!expected.SequenceEqual(actual))
-        {
-            Warn("view tab order differs from the snapshot; public APIs cannot repair it, so rerun import with browser automation");
-        }
+        Warn("view tab order requires browser automation and was not applied");
     }
 
     private void ValidatePendingOperations(IReadOnlyList<ViewSnapshot> sourceViews, string projectId)

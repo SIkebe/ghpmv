@@ -25,7 +25,7 @@
 3. **Auto-add workflow は org にリポジトリが 1 つ以上ないと設定不可**("No repositories found")。import 側で前提チェックが必要
 4. Workflow 閲覧モードでも設定値(フィルター文字列・対象リポジトリ・Set value)が DOM に出る → **Edit を押さずに UI-export 可能**
 5. View 系の設定変更は SPA 内で「Unsaved changes」になり、明示保存が必要(タブ名変更は例外で即時保存)
-6. GraphQL read-back: `views(orderBy:{field:POSITION}) { number name layout }` / workflows { number name enabled } は UI 操作直後に反映される。tab D&D 後だけは importer が短時間 poll して最終順を確認する
+6. GraphQL read-backのView内容とWorkflow状態はUI操作後に反映されるが、`views(orderBy:{field:POSITION})`はsaved-tab DOM順と一致しない場合がある。実環境診断(2026-08-19)ではDOMが`Fixture Roadmap → View 1 → Fixture Board`、GraphQL POSITIONが`View 1 → Fixture Roadmap → Fixture Board`のまま60秒超乖離した。tab orderは`navigation "Select view"`内のsaved tab `href` DOM順を正とする
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 

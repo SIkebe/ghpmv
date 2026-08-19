@@ -22,7 +22,6 @@ public sealed class ViewUiImporter
     private static readonly string[] RoadmapDateSuffixes = [" start", " end"];
 
     private readonly BrowserSession _session;
-    private readonly GitHubGraphQLClient? _client;
     private readonly List<string> _warnings = [];
 
     public ViewUiImporter(BrowserSession session)
@@ -35,7 +34,6 @@ public sealed class ViewUiImporter
         : this(session)
     {
         ArgumentNullException.ThrowIfNull(client);
-        _client = client;
     }
 
     /// <summary>Invoked with a human-readable progress message per view.</summary>
@@ -162,9 +160,6 @@ public sealed class ViewUiImporter
         await ReorderTabsAsync(
             page,
             snapshot,
-            ownerLogin,
-            ownerType,
-            projectNumber,
             viewNumbers,
             cancellationToken).ConfigureAwait(false);
     }
@@ -172,20 +167,11 @@ public sealed class ViewUiImporter
     private async Task ReorderTabsAsync(
         IPage page,
         ProjectSnapshot snapshot,
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
         IReadOnlyDictionary<int, int> viewNumbers,
         CancellationToken cancellationToken)
     {
         if (snapshot.Views.Count < 2 || snapshot.Views.Any(view => view.TabPosition is null))
         {
-            return;
-        }
-
-        if (_client is null)
-        {
-            _warnings.Add("view tab order was captured but no GraphQL client was provided to the browser importer");
             return;
         }
 
@@ -204,9 +190,7 @@ public sealed class ViewUiImporter
         var desiredNumbers = desired.Select(number => number!.Value).ToList();
         var importedNumbers = desiredNumbers.ToHashSet();
         var currentNumbers = await ReadImportedTabOrderUntilCompleteAsync(
-            ownerLogin,
-            ownerType,
-            projectNumber,
+            page,
             importedNumbers,
             desiredNumbers.Count,
             cancellationToken).ConfigureAwait(false);
@@ -251,9 +235,7 @@ public sealed class ViewUiImporter
                 await PauseAsync(token).ConfigureAwait(false);
             },
             token => ReadImportedTabOrderAsync(
-                ownerLogin,
-                ownerType,
-                projectNumber,
+                page,
                 importedNumbers,
                 desiredNumbers,
                 token),
@@ -298,51 +280,36 @@ public sealed class ViewUiImporter
         return warnings;
     }
 
-    private Task<IReadOnlyList<int>> ReadImportedTabOrderUntilCompleteAsync(
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
+    private static Task<IReadOnlyList<int>> ReadImportedTabOrderUntilCompleteAsync(
+        IPage page,
         HashSet<int> importedNumbers,
         int expectedCount,
         CancellationToken cancellationToken)
         => PollImportedTabOrderAsync(
-            ownerLogin,
-            ownerType,
-            projectNumber,
+            page,
             importedNumbers,
             order => order.Count == expectedCount,
             cancellationToken);
 
-    private async Task<IReadOnlyList<int>> ReadImportedTabOrderAsync(
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
+    private static async Task<IReadOnlyList<int>> ReadImportedTabOrderAsync(
+        IPage page,
         HashSet<int> importedNumbers,
         IReadOnlyList<int> desiredNumbers,
         CancellationToken cancellationToken)
         => await PollImportedTabOrderAsync(
-            ownerLogin,
-            ownerType,
-            projectNumber,
+            page,
             importedNumbers,
             order => order.SequenceEqual(desiredNumbers),
             cancellationToken).ConfigureAwait(false);
 
-    private Task<IReadOnlyList<int>> PollImportedTabOrderAsync(
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
+    private static Task<IReadOnlyList<int>> PollImportedTabOrderAsync(
+        IPage page,
         HashSet<int> importedNumbers,
         Func<IReadOnlyList<int>, bool> completed,
         CancellationToken cancellationToken)
         => PollTabOrderAsync(
-            async token => (await FetchTargetTabsAsync(
-                ownerLogin,
-                ownerType,
-                projectNumber,
-                token).ConfigureAwait(false))
-                .Where(tab => importedNumbers.Contains(tab.Number))
-                .Select(tab => tab.Number)
+            async token => (await ViewTabOrder.ReadAsync(page, token).ConfigureAwait(false))
+                .Where(importedNumbers.Contains)
                 .ToList(),
             completed,
             token => Task.Delay(TimeSpan.FromMilliseconds(500), token),
@@ -374,29 +341,6 @@ public sealed class ViewUiImporter
         }
 
         return result;
-    }
-
-    private async Task<IReadOnlyList<TargetTab>> FetchTargetTabsAsync(
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
-        CancellationToken cancellationToken)
-    {
-        var ownerField = ownerType == ProjectOwnerType.User ? "user" : "organization";
-        var query = TargetTabOrderQueryTemplate.Replace("__OWNER__", ownerField, StringComparison.Ordinal);
-        var tabs = new List<TargetTab>();
-        await foreach (var node in _client!.QueryPaginatedAsync(
-            query,
-            new { login = ownerLogin, number = projectNumber, first = 50 },
-            ownerField + ".projectV2.views",
-            cancellationToken: cancellationToken).ConfigureAwait(false))
-        {
-            tabs.Add(new TargetTab(
-                node.GetProperty("number").GetInt32(),
-                node.GetProperty("name").GetString() ?? string.Empty));
-        }
-
-        return tabs;
     }
 
     internal static List<TabMove> BuildTabMovePlan(
@@ -487,8 +431,6 @@ public sealed class ViewUiImporter
             : number.ToString(CultureInfo.InvariantCulture)));
 
     internal sealed record TabMove(int ViewNumber, int AnchorViewNumber, bool PlaceBefore);
-
-    private sealed record TargetTab(int Number, string Name);
 
     // ----- settings -----
 
@@ -959,17 +901,4 @@ public sealed class ViewUiImporter
         return false;
     }
 
-    private const string TargetTabOrderQueryTemplate =
-        """
-        query($login: String!, $number: Int!, $first: Int!, $after: String) {
-          __OWNER__(login: $login) {
-            projectV2(number: $number) {
-              views(first: $first, after: $after, orderBy: { field: POSITION, direction: ASC }) {
-                nodes { number name }
-                pageInfo { hasNextPage endCursor }
-              }
-            }
-          }
-        }
-        """;
 }

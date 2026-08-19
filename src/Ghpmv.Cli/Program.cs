@@ -620,7 +620,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
-            var viewImporter = new ViewUiImporter(session, client)
+            var viewImporter = new ViewUiImporter(session)
             {
                 OnProgress = Console.Error.WriteLine,
             };
@@ -1333,7 +1333,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             org,
             projectNumber.Value,
             cancellationToken);
-        var viewImporter = new ViewUiImporter(fixtureUiSession, fixtureUiClient) { OnProgress = Console.Error.WriteLine };
+        var viewImporter = new ViewUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
         await viewImporter.EnrichAsync(
             snapshot,
             org,

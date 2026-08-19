@@ -246,7 +246,7 @@ public sealed class ProjectExporter
         int projectNumber,
         CancellationToken cancellationToken)
     {
-        var views = ParseViews(initialConnection, startPosition: 0);
+        var views = ParseViews(initialConnection);
         var connection = initialConnection;
         while (TryGetNextPageCursor(connection, out var after))
         {
@@ -255,7 +255,7 @@ public sealed class ProjectExporter
                 new { login = ownerLogin, number = projectNumber, first = 50, after },
                 cancellationToken).ConfigureAwait(false);
             connection = data.GetProperty(OwnerField).GetProperty("projectV2").GetProperty("views");
-            views.AddRange(ParseViews(connection, views.Count));
+            views.AddRange(ParseViews(connection));
         }
 
         return views;
@@ -433,7 +433,7 @@ public sealed class ProjectExporter
         return result;
     }
 
-    private static List<ViewSnapshot> ParseViews(JsonElement connection, int startPosition)
+    private static List<ViewSnapshot> ParseViews(JsonElement connection)
     {
         var views = new List<ViewSnapshot>();
         foreach (var node in connection.GetProperty("nodes").EnumerateArray())
@@ -441,7 +441,7 @@ public sealed class ProjectExporter
             views.Add(new ViewSnapshot
             {
                 Number = node.GetProperty("number").GetInt32(),
-                TabPosition = startPosition + views.Count,
+                TabPosition = null,
                 Name = node.GetProperty("name").GetString() ?? string.Empty,
                 Layout = node.GetProperty("layout").GetString() ?? string.Empty,
                 Filter = GetOptionalString(node, "filter"),

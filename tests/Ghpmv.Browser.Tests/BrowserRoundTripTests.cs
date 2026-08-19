@@ -275,13 +275,15 @@ public class BrowserRoundTripTests
                 UserMapping = userMapping,
             }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
             Assert.Contains(initialReport.Differences, difference =>
-                difference.Severity == VerifySeverity.Error
+                difference.Severity == VerifySeverity.Warning
                 && difference.Category == "View"
-                && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.Contains(initialReport.Categories, category =>
+                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
 
             var targetPage = await targetSession.GetPageAsync(cancellationToken);
             await targetPage.SetViewportSizeAsync(480, 1000);
-            var viewImporter = new ViewUiImporter(targetSession, targetClient);
+            var viewImporter = new ViewUiImporter(targetSession);
             await viewImporter.EnrichAsync(
                 snapshot,
                 TargetOrg,
@@ -297,9 +299,12 @@ public class BrowserRoundTripTests
                 RepositoryMapping = RepositoryMapping,
                 UserMapping = userMapping,
             }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.DoesNotContain(apiOnlyReport.Differences, difference =>
-                difference.Category == "View"
-                && difference.Message.Contains("tab order mismatch", StringComparison.Ordinal));
+            Assert.Contains(apiOnlyReport.Differences, difference =>
+                difference.Severity == VerifySeverity.Warning
+                && difference.Category == "View"
+                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
+            Assert.Contains(apiOnlyReport.Categories, category =>
+                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
 
             // Verify re-exports the target through GraphQL and its browser post-export hook.
             ProjectSnapshot? reExported = null;

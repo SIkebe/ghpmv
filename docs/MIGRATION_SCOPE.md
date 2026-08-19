@@ -65,7 +65,7 @@ View names, layouts, filters, and ordered visible fields are imported through th
 | Roadmap views | ✅ | Date fields, zoom level and markers are tested. |
 | View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
 | View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
-| View tab order | ✅ with browser automation | Export and verify read `views(orderBy: {field: POSITION})` through GraphQL. Browser-assisted import applies the minimum drag-and-drop moves after all View settings; API-only import reports an unrepaired difference as a warning. |
+| View tab order | ✅ with browser automation | The public GraphQL `POSITION` order can differ from the saved-tab order shown by GitHub. Browser-assisted export/verify read tab `href` values in DOM order, and browser-assisted import applies the minimum drag-and-drop moves after all View settings. API-only export leaves tab order uncaptured, API-only import warns when a snapshot contains it, and API-only verify marks it not verified. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 
 ## Workflows
@@ -85,7 +85,7 @@ Workflows require `--enable-browser-automation` because GitHub has no public API
 
 | Area | Supported? | Notes |
 |---|---:|---|
-| `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL View settings, including tab order, are always checked; `--enable-browser-automation` re-reads UI-only View / Workflow settings and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
+| `ghpmv verify` | ✅ | Compares the target project against the snapshot. GraphQL-readable View settings are always checked; `--enable-browser-automation` additionally re-reads saved-tab order, UI-only View / Workflow settings, and explicit collaborators. Supports category statuses, warning exit policy, and JSON reports. |
 | Resume after interruption | ✅ | Item and status-update import write target node IDs to `import-log.json` immediately. Reruns use those IDs rather than content matching, so legitimate repeated status bodies are preserved without duplication. An ambiguous Status Update create that did not persist its target ID keeps durable pending state and requires manual reconciliation instead of claiming a body/status/date match. |
 | Mapping CSV templates | ✅ | `export` writes repository, organization, Team, and user mapping templates without overwriting existing files. Team rows use `organization/slug` on both sides. |
 | Bulk export | ✅ | Omit `--project` to export every project owned by the organization/user into `<out>/<number>/`. |
