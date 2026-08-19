@@ -157,11 +157,30 @@ public sealed class ViewUiImporter
             }
         }
 
-        await ReorderTabsAsync(
-            page,
-            snapshot,
-            viewNumbers,
-            cancellationToken).ConfigureAwait(false);
+        await ApplyTabOrderRecoverablyAsync(
+            () => ReorderTabsAsync(
+                page,
+                snapshot,
+                viewNumbers,
+                cancellationToken),
+            _warnings).ConfigureAwait(false);
+    }
+
+    internal static async Task ApplyTabOrderRecoverablyAsync(
+        Func<Task> reorderAsync,
+        List<string> warnings)
+    {
+        ArgumentNullException.ThrowIfNull(reorderAsync);
+        ArgumentNullException.ThrowIfNull(warnings);
+
+        try
+        {
+            await reorderAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            warnings.Add($"view tab order could not be applied — {exception.Message}");
+        }
     }
 
     private async Task ReorderTabsAsync(

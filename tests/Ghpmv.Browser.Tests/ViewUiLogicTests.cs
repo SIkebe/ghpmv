@@ -239,6 +239,20 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public async Task Tab_reorder_read_failure_is_recoverable()
+    {
+        var warnings = new List<string>();
+
+        await ViewUiImporter.ApplyTabOrderRecoverablyAsync(
+            () => throw new PlaywrightException("forced DOM read failure"),
+            warnings);
+
+        var warning = Assert.Single(warnings);
+        Assert.Contains("view tab order could not be applied", warning, StringComparison.Ordinal);
+        Assert.Contains("forced DOM read failure", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Tab_order_poll_retries_an_incomplete_connection_until_all_mapped_views_are_visible()
     {
         var reads = new Queue<IReadOnlyList<int>>(
