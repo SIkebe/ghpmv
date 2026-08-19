@@ -553,7 +553,7 @@ public class ProjectVerifierTests
     }
 
     [Fact]
-    public void Graphql_view_position_order_is_compared_without_browser_automation()
+    public void Captured_view_tab_order_is_compared_when_both_snapshots_include_positions()
     {
         var baseline = BuildSnapshot();
         var table = baseline.Views[0] with { Number = 7, TabPosition = 0 };

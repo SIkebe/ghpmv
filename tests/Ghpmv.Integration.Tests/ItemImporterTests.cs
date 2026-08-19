@@ -340,7 +340,7 @@ public class ItemImporterTests
     }
 
     [Fact]
-    public async Task Pull_request_item_is_relinked_to_the_target_repository_with_its_number_preserved()
+    public async Task Pull_request_item_is_imported_from_identity_mapped_repository_with_number_preserved()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var suffix = Guid.NewGuid().ToString("N");
