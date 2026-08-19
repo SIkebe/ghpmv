@@ -60,8 +60,10 @@ internal static class ViewTabOrder
         }
 
         var path = Uri.TryCreate(href, UriKind.Absolute, out var absolute)
-            ? absolute.AbsolutePath
-            : href.Split('?', '#')[0];
+            && (string.Equals(absolute.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(absolute.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                ? absolute.AbsolutePath
+                : href.Split('?', '#')[0];
         var marker = "/views/";
         var markerIndex = path.LastIndexOf(marker, StringComparison.Ordinal);
         if (markerIndex < 0)
