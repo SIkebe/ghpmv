@@ -555,10 +555,15 @@ public sealed class ViewUiImporter
             return null;
         }
 
-        var controlIsAvailable = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+        return FieldSumControlExpected(view) ? view.Ui.FieldSum ?? [] : null;
+    }
+
+    internal static bool FieldSumControlExpected(ViewSnapshot view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        return string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
             || view.GroupByFields.Count > 0
             && (view.Layout is "TABLE_LAYOUT" or "ROADMAP_LAYOUT");
-        return controlIsAvailable ? view.Ui.FieldSum ?? [] : null;
     }
 
     private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
@@ -757,11 +762,7 @@ public sealed class ViewUiImporter
         HashSet<string> desired,
         CancellationToken cancellationToken)
     {
-        var checkboxes = overlay.GetByRole(AriaRole.Menuitemcheckbox);
-        if (await checkboxes.CountAsync().ConfigureAwait(false) == 0)
-        {
-            checkboxes = overlay.GetByRole(AriaRole.Option);
-        }
+        var checkboxes = Sel.CheckboxOptions(overlay);
 
         var available = new HashSet<string>(StringComparer.Ordinal);
         var disabledMismatches = new List<DisabledCheckboxMismatch>();

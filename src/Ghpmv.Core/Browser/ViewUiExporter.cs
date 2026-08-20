@@ -55,7 +55,7 @@ public sealed class ViewUiExporter
         {
             page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view settings page could not be opened — {exception.Message}");
             return snapshot with
@@ -126,6 +126,7 @@ public sealed class ViewUiExporter
             page,
             menu,
             "Field sum",
+            ViewUiImporter.FieldSumControlExpected(view),
             cancellationToken).ConfigureAwait(false);
 
         RoadmapSettingsSnapshot? roadmap = null;
@@ -169,11 +170,17 @@ public sealed class ViewUiExporter
         IPage page,
         ILocator menu,
         string label,
+        bool required,
         CancellationToken cancellationToken)
     {
         var item = Sel.ConfigurationMenuItem(menu, label);
         if (await item.CountAsync().ConfigureAwait(false) == 0)
         {
+            if (required)
+            {
+                throw new InvalidOperationException($"'{label}' control is not available for this grouped view");
+            }
+
             return null;
         }
 
@@ -183,8 +190,13 @@ public sealed class ViewUiExporter
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
 
         var values = new List<string>();
-        var checkboxes = overlay.GetByRole(AriaRole.Menuitemcheckbox);
+        var checkboxes = Sel.CheckboxOptions(overlay);
         var count = await checkboxes.CountAsync().ConfigureAwait(false);
+        if (count == 0)
+        {
+            throw new InvalidOperationException($"'{label}' menu contains no checkable entries");
+        }
+
         for (var index = 0; index < count; index++)
         {
             var checkbox = checkboxes.Nth(index);
@@ -203,7 +215,7 @@ public sealed class ViewUiExporter
         }
 
         await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
-        return values.Count == 0 ? null : values;
+        return values;
     }
 
     /// <summary>

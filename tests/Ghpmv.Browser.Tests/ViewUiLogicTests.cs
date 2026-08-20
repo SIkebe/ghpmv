@@ -197,6 +197,26 @@ public class ViewUiLogicTests
     }
 
     [Theory]
+    [InlineData("TABLE_LAYOUT", true, true)]
+    [InlineData("ROADMAP_LAYOUT", true, true)]
+    [InlineData("BOARD_LAYOUT", false, true)]
+    [InlineData("TABLE_LAYOUT", false, false)]
+    [InlineData("ROADMAP_LAYOUT", false, false)]
+    [InlineData("UNKNOWN_LAYOUT", true, false)]
+    public void Field_sum_control_availability_depends_on_layout_and_grouping(
+        string layout,
+        bool grouped,
+        bool expected)
+    {
+        var view = View("View", layout) with
+        {
+            GroupByFields = grouped ? ["Status"] : [],
+        };
+
+        Assert.Equal(expected, ViewUiImporter.FieldSumControlExpected(view));
+    }
+
+    [Theory]
     [InlineData(true, false, true, true)]
     [InlineData(false, true, true, true)]
     [InlineData(true, true, true, false)]

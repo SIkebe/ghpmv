@@ -95,7 +95,7 @@ Important limitations:
 ## E2E カバレッジ強化で確定した追加知見(2026-07-06)
 
 1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映するため、import は board のとき Swimlanes メニューで適用する
-2. **Field sum は Board と grouped Table / Roadmap 共通のチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。親 menu の accessible name は "Field sum: Count and Fixture Number" のように値を含むが、3 件以上では `1 more` に省略されるため、export は子 menu を開いて checked entry を全件読む。Count は uncheck 可能。Table / Roadmap では未 grouping の間は項目自体が無い
+2. **Field sum は Board と grouped Table / Roadmap 共通のチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。親 menu の accessible name は "Field sum: Count and Fixture Number" のように値を含むが、3 件以上では `1 more` に省略されるため、export は子 menu を開いて checked entry を全件読む。submenu が存在して全 entry が unchecked なら `fieldSum=[]`、expected control または checkable entry を取得できなければ View UI 未取得 warning とする。Count は uncheck 可能。Table / Roadmap では未 grouping の間は項目自体が無い
 3. **UI のリスト値は散文形式**: "A and B" / "A, B, and C"(カンマ区切りとは限らない)→ ParseListValue は `,` と `" and "` の両方で分割する
 4. **Fields オーバーレイのエントリーは `option` ロール + aria-checked**(Field sum / Markers の `menuitemcheckbox` とは異なる)→ チェックボックス走査は両ロール対応が必要(ToggleCheckboxesAsync 対応済み)
 5. **Roadmap の親 menu には表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Markers / Field sum の子 menu。子 menu の checkbox 操作は最後に開いた menu へ scope し、親 menu の表示設定を誤操作しない。menuitem テキスト "Markers: <値>" にはマーカーだけが出る

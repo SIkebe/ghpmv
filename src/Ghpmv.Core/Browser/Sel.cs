@@ -35,6 +35,10 @@ internal static class Sel
     public static ILocator ConfigurationMenuItem(ILocator menu, string label)
         => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = new Regex($"^{Regex.Escape(label)}:") });
 
+    /// <summary>Checkable entries in a View configuration child menu.</summary>
+    public static ILocator CheckboxOptions(ILocator menu)
+        => menu.GetByRole(AriaRole.Menuitemcheckbox).Or(menu.GetByRole(AriaRole.Option));
+
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
