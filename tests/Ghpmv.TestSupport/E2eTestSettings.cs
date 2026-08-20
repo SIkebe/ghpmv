@@ -570,6 +570,8 @@ public sealed record E2eEndpointSettings
 {
     public string Organization { get; init; } = "";
 
+    public bool? OrganizationAdministrator { get; init; }
+
     public bool? ProjectsEnabled { get; init; }
 
     public bool? PrivateRepositoryCreationAllowed { get; init; }

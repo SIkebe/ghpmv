@@ -455,6 +455,8 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 - source / target browser login、collaborator login、EMUを含むuser mapping
 - fixture preparation、GEIまたはfixture-seedのrepository preparation mode
 - GEI source / target repository、visibility、token owner login、role status
+- source / target account の Organization administrator 確認
+- source / target の Projects 有効化と private repository 作成 policy 確認
 - PATおよびbrowser stateを保持する**環境変数名**
 
 自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
@@ -469,7 +471,7 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 
 同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
 
-設定済みでも、実resource作成の説明と同意、Organization administrator / GEI roleの現在状態、PAT permission / approval、warning許容、cleanup同意は省略しない。特に`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
+settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、endpoint の `organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、値が有効なら同じ内容を対話用質問で再確認しない。`false` または `null` が選択経路の必須条件を満たさない場合だけ、その不足を示して停止または一問で確認する。実resource作成前の影響説明、PAT type / permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
 
 ## Step 1: 確認範囲を決める
 
@@ -493,15 +495,15 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 | `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile を準備せず、browser option をすべて外して実行する。 |
 | `browser-e2e` | 2-10 | Step 2 は restore + build だけ実行する。Step 5 は source fixture の作成または既存 fixture contract の確認として必ず通り、browser profile、field-sum coverage、fixture / GEI / browser enrichment を含む full flow を実行する。 |
 
-`api-only` または `browser-e2e` では、既存 source Project を使うか fixture を作るかを一問で確認し、`fixture preparation` として記録する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
+`api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
 `browser-e2e` の fixture preparation 質問では、既存 round-trip が grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が required Number fields と 4 Views を決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
 
-同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
+同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
 GEI は GitHub.com source と GHEC with data residency source の両方を扱う。data-residency sourceでは`gh gei migrate-repo --github-source-api-url <source-api-url>`、data-residency targetでは`--target-api-url <target-api-url> --target-uploads-url <target-uploads-url>`を使う。source / target endpointを取り違えたり、source hostをGitHub.comとして偽って続行してはならない。
 
-`GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
+`GEI` を選んだ場合は、settings の `gei.sourceRole` と `gei.targetRole` を `GEI source / destination role status` として記録し、設定済みなら質問しない。設定がない側だけ、token owner の現在または予定している organization role を次の三択で確認する。
 
 1. Organization owner
 2. Migrator（適用済み）
@@ -511,9 +513,9 @@ GEI は GitHub.com source と GHEC with data residency source の両方を扱う
 
 GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用する。標準fixtureはsourceでorganization Issue Fieldを作成し、target importでも同じIssue Fieldを作成するため、GitHubの[Create issue field for an organization](https://docs.github.com/en/rest/orgs/issue-fields#create-issue-field-for-an-organization)仕様上、対応する`SOURCE_TOKEN` / `TARGET_TOKEN`のauthenticated userは各organizationのadministratorでなければならない。Migrator roleやclassic PATの`admin:org` scopeだけではadministrator roleを代替できない。
 
-`fixture preparation=create`ではsource ghpmv token/browser accountがsource organization administratorかを、`api-only` / `browser-e2e`ではtarget ghpmv token/browser accountがtarget organization administratorかを一人ずつ確認する。未適用または不明ならPAT作成・入力、Browser login、permission preflightへ進まない。administrator accountへ切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
+`fixture preparation=create`ではsource endpoint の `organizationAdministrator=true` を、`api-only` / `browser-e2e`ではtarget endpoint の `organizationAdministrator=true` を必須とする。settings で true なら質問せず記録する。false または null ならPAT作成・入力、Browser login、permission preflightへ進まず、administrator accountへ切り替えるかを一問で確認する。切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
 
-標準fixture経路では、source organizationでprivate repository作成がpolicy上許可されProjectsが有効であること、target organizationでもProjectsが有効であることを一問ずつ確認する。未確認ならPAT入力へ進まない。既存Project経路ではsource resourceを作成しないためrepository creation policyを質問せず、export後のsnapshotに応じてtarget側のIssue Field、collaborator、visibility、linked repository権限だけを要求する。
+標準fixture経路では、source endpoint の `privateRepositoryCreationAllowed=true` と `projectsEnabled=true`、target endpoint の `projectsEnabled=true` を必須とする。settings で true なら質問しない。false または null なら不足項目だけを一問で確認し、未確認のままPAT入力へ進まない。既存Project経路ではsource resourceを作成しないためrepository creation policyを要求せず、export後のsnapshotに応じてtarget側のIssue Field、collaborator、visibility、linked repository権限だけを要求する。
 
 `read-only`、`api-only`、`browser-e2e` では、host / account 値を次の順で一問ずつ確認する。
 
@@ -855,7 +857,7 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 - Grouping field: `Status`
 - expected FieldSum: session state の fixture contract 表
 
-`fixture preparation=existing` の source Project がこの contract を満たすとユーザーが判断するかを、resource を変更しないことを明記した一つの質問で確認する。source Project number が settings から確定済みなら再質問しない。未確定なら別の一問で確認する。ここでは browser UI の一致を自己申告で合格にせず、Step 6 の snapshot inspection が成功するまで `browser-e2e field-sum status=fixture-pending` のままにする。
+`fixture preparation=existing` の source Project number が settings から確定済みなら質問しない。未確定ならProject numberだけを一問で確認する。contract は Step 6 の snapshot inspection が機械判定するため、ユーザーへ自己申告を求めず、それまで `browser-e2e field-sum status=fixture-pending` のままにする。
 
 source organization を確定した後、validation run ごとに `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成し、以後 source / target の resource 名で共用する。
 

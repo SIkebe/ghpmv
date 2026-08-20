@@ -9,6 +9,10 @@
     // Project と fixture repository を所有する Organization の login です。表示名ではありません。
     "organization": "gpm-source",
 
+    // source token / browser account がOrganization administratorかを記録します。
+    // true / false、未確認ならnullです。標準fixtureのIssue Field作成にはtrueが必要です。
+    "organizationAdministrator": null,
+
     // OrganizationでGitHub Projectsが有効かを記録します。true / false、未確認ならnullです。
     "projectsEnabled": null,
 
@@ -41,6 +45,10 @@
   // import、verify、および一時 Project 作成先となる GitHub 環境です。
   "target": {
     "organization": "gpm-target",
+
+    // target token / browser account がOrganization administratorかを記録します。
+    // 標準fixture snapshotのIssue Field importにはtrueが必要です。
+    "organizationAdministrator": null,
 
     // import先Projectを作成できるよう、target OrganizationでProjectsが有効かを記録します。
     "projectsEnabled": null,

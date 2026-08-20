@@ -20,6 +20,7 @@ public class E2eTestSettingsTests
               "schemaVersion": 1,
               "source": {
                 "organization": "source-org",
+                "organizationAdministrator": true,
                 "projectsEnabled": true,
                 "privateRepositoryCreationAllowed": false,
                 "apiBaseUrl": "https://api.github.com/graphql",
@@ -31,6 +32,7 @@ public class E2eTestSettingsTests
               },
               "target": {
                 "organization": "target-org",
+                "organizationAdministrator": false,
                 "projectsEnabled": null,
                 "privateRepositoryCreationAllowed": true,
                 "apiBaseUrl": "https://api.example.ghe.com/graphql",
@@ -85,6 +87,8 @@ public class E2eTestSettingsTests
             var result = E2eTestSettings.Load(path);
 
             Assert.Equal("example.ghe.com", new Uri(result.Target.WebBaseUrl).Host);
+            Assert.True(result.Source.OrganizationAdministrator);
+            Assert.False(result.Target.OrganizationAdministrator);
             Assert.True(result.Source.ProjectsEnabled);
             Assert.False(result.Source.PrivateRepositoryCreationAllowed);
             Assert.Null(result.Target.ProjectsEnabled);

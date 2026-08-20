@@ -141,6 +141,10 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
+        "organizationAdministrator": {
+          "type": ["boolean", "null"],
+          "description": "Whether the configured ghpmv token/browser identity is an organization administrator; null when not yet confirmed."
+        },
         "projectsEnabled": {
           "type": ["boolean", "null"],
           "description": "Whether GitHub Projects is enabled for the organization; null when not yet confirmed."
