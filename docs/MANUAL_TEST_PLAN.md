@@ -496,6 +496,20 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - linked Team がある場合は `team-mappings.csv` が生成され、source 値は `organization/slug` になっている。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 - 各 View の `tabPosition` が 0 から始まる source UI 順で保存され、view `number` 順とは独立している。
+- `snapshot.json` の View UI 設定が 5.2 の標準 fixture と一致する。
+  - `View 1`: `fieldSum=["Count","Fixture Number","Fixture Number 2"]`
+  - `Fixture Board`: `fieldSum=["Fixture Number"]`
+  - `Fixture Roadmap`: `fieldSum=["Fixture Number 2"]`
+  - `Fixture Empty Sums`: `fieldSum=[]`
+
+3 件以上の Field sum は GitHub UI で `1 more` と省略されますが、snapshot には実フィールド名が全件必要です。既存の snapshot 確認に次を追加し、別 export は実行しません。
+
+```powershell
+$snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
+$snapshot.views |
+  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums') |
+  Select-Object name, groupByFields, @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } }
+```
 
 ### 7.2 Mapping CSV を補完
 
@@ -568,7 +582,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 出力された target Project URL と project number を控えます。
 
-stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。同じ snapshot directory と `--project-number <target-project-number>` で再実行し、`created=0`、`already-complete=5` となり、UI の履歴件数が増えないことも確認します。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。本文が同じ Status Update が複数あっても内容で統合されず、snapshot の各 sequence が1件ずつ残ることが合格条件です。
+stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。再実行確認は 7.4 の Field sum drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
 
 template 化は import の最終書き込み段です。stderr で Items / Status Updates / API View / browser View enrichment・tab order / Workflows の完了後に `Marking the target project as a template as the final import stage...` が出ることを確認します。Organization の **Projects → Templates** と Create project ダイアログで target Project がテンプレートとして表示されることも確認します。
 
@@ -609,124 +623,14 @@ OK: the target project matches the snapshot.
 
 human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれ、`Project: Match` に template 属性の一致が反映されることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
 
-### 7.5 Grouped Table / Roadmap Field sum の反復可能な手動 E2E
+Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
 
-このシナリオは 5.1 / 5.2 の標準 fixture を使用します。新規 fixture では `View 1` と `Fixture Roadmap` が grouped view として作成されるため、追加の手動 source 設定は不要です。既存 fixture を使う場合は次の source 状態を確認してから開始します。古い fixture に対して `setup --fixture-ui --fixture-project` だけを再実行すると non-default View が重複し得るため、contract が古い場合は新しい標準 fixture を作成します。
+1. 初回 verify で `View: Match` を確認し、`View 1` / `Fixture Roadmap` の Field sum menu と group header、および `Fixture Empty Sums` に sum がないことを 8.4 と同時に目視します。
+2. target の `View 1` で `Fixture Number 2` だけを解除して保存し、同じ verify command を再実行します。非ゼロ終了と `view 'View 1': field sum mismatch` を確認します。
+3. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence と Field sum の復元を同時に確認します。
+4. 7.4 の verify をもう一度実行し、`View: Match`、`Fixture Number 2` の復元、4 fixture Views が各 1 件だけ存在することを確認します。
 
-repository-local `ghpmv-e2e-validation` Skill の既存 `browser-e2e` round trip は、この節を別 scenario に分岐せず標準フロー内で実行します。fixture contract、snapshot、`View: Match`、目視、drift、repair、resource inventory、cleanup 同意を順に確認します。
-
-| View | Layout / grouping | Field sum |
-|---|---|---|
-| `View 1` | Table / Group by `Status` | `Count`, `Fixture Number`, `Fixture Number 2` |
-| `Fixture Roadmap` | Roadmap / Group by `Status` | `Fixture Number 2` |
-| `Fixture Board` | Board / Group by `Status` | `Fixture Number`（回帰確認） |
-| `Fixture Empty Sums` | Table / Group by `Status` | 空 |
-
-1. **Browser-assisted export と snapshot 確認**
-
-   7.1 の export command を実行します。
-
-   ```powershell
-   dotnet run --project src/Ghpmv.Cli -- export `
-     --org $env:GHPMV_SOURCE_ORG `
-     --project <source-project-number> `
-     --out $env:GHPMV_SNAPSHOT_DIR `
-     --token $env:GHPMV_SOURCE_TOKEN `
-     --enable-browser-automation `
-     --browser-profile source `
-     --no-update-check
-   ```
-
-   `snapshot.json` が complete selection を保持していることを確認します。3 件以上の選択を GitHub UI が `1 more` と省略表示しても、snapshot には実フィールド名が全件入ることが合格条件です。
-
-   ```powershell
-   $snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
-   $table = $snapshot.views | Where-Object name -eq 'View 1'
-   $roadmap = $snapshot.views | Where-Object name -eq 'Fixture Roadmap'
-   $board = $snapshot.views | Where-Object name -eq 'Fixture Board'
-   $empty = $snapshot.views | Where-Object name -eq 'Fixture Empty Sums'
-
-   $table.ui.fieldSum   # Count, Fixture Number, Fixture Number 2
-   $roadmap.ui.fieldSum # Fixture Number 2
-   $board.ui.fieldSum   # Fixture Number
-   @($empty.ui.fieldSum).Count # 0
-   ```
-
-2. **Disposable target への import**
-
-   7.2 の mapping CSV を補完し、毎回一意な title で新しい target Project を作成します。
-
-   ```powershell
-   dotnet run --project src/Ghpmv.Cli -- import `
-     --org $env:GHPMV_TARGET_ORG `
-     --in $env:GHPMV_SNAPSHOT_DIR `
-     --token $env:GHPMV_TARGET_TOKEN `
-     --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
-     --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
-     --org-mapping "$env:GHPMV_SNAPSHOT_DIR/organization-mappings.csv" `
-     --team-mapping "$env:GHPMV_SNAPSHOT_DIR/team-mappings.csv" `
-     --enable-browser-automation `
-     --browser-profile target `
-     --project-title "ghpmv-field-sum-e2e-$(Get-Date -Format yyyyMMdd-HHmmss)" `
-     --no-update-check
-   ```
-
-   生成された `<target-project-number>` と Project URL を実施記録へ残します。存在しない optional mapping file の引数は 7.2 の規則どおり外します。
-
-3. **Browser-assisted verify と目視確認**
-
-   ```powershell
-   dotnet run --project src/Ghpmv.Cli -- verify `
-     --org $env:GHPMV_TARGET_ORG `
-     --project <target-project-number> `
-     --in $env:GHPMV_SNAPSHOT_DIR `
-     --token $env:GHPMV_TARGET_TOKEN `
-     --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
-     --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
-     --org-mapping "$env:GHPMV_SNAPSHOT_DIR/organization-mappings.csv" `
-     --team-mapping "$env:GHPMV_SNAPSHOT_DIR/team-mappings.csv" `
-     --enable-browser-automation `
-     --browser-profile target `
-     --report-json "$env:GHPMV_SNAPSHOT_DIR/field-sum-verify.json" `
-     --no-update-check
-   ```
-
-   `OK: the target project matches the snapshot.` と `View: Match` を確認します。target の `View 1` / `Fixture Roadmap` を reload し、View menu の Field sum selection と各 group header の合計表示が source と一致することを目視確認します。`Fixture Empty Sums` は group header に Count/Number sum が表示されないことも確認します。
-
-4. **Target drift の検出**
-
-   target の `View 1` で **View → Field sum** を開き、`Fixture Number 2` を解除して View を保存します。同じ verify command を再実行し、非ゼロ終了、`View` category の mismatch、および次の形式の具体的な差分を確認します。
-
-   ```text
-   view 'View 1': field sum mismatch (source [Count, Fixture Number, Fixture Number 2], target [Count, Fixture Number])
-   ```
-
-   実際の選択順によりリスト順が異なる場合でも、source/target の field 名が差分に含まれ、`field sum mismatch` として報告されることが合格条件です。
-
-5. **Import 再実行による復元と idempotence**
-
-   同じ snapshot directory と target Project に対して再実行します。
-
-   ```powershell
-   dotnet run --project src/Ghpmv.Cli -- import `
-     --org $env:GHPMV_TARGET_ORG `
-     --project-number <target-project-number> `
-     --in $env:GHPMV_SNAPSHOT_DIR `
-     --token $env:GHPMV_TARGET_TOKEN `
-     --repo-mapping "$env:GHPMV_SNAPSHOT_DIR/repository-mappings.csv" `
-     --user-mapping "$env:GHPMV_SNAPSHOT_DIR/user-mappings.csv" `
-     --org-mapping "$env:GHPMV_SNAPSHOT_DIR/organization-mappings.csv" `
-     --team-mapping "$env:GHPMV_SNAPSHOT_DIR/team-mappings.csv" `
-     --enable-browser-automation `
-     --browser-profile target `
-     --no-update-check
-   ```
-
-   もう一度 verify を実行し、`View: Match` へ戻ることを確認します。target UI では `View 1` の `Fixture Number 2` が復元され、4 つの fixture View が各 1 件だけ存在し、Field や View が重複していないことを確認します。
-
-6. **証跡記録と cleanup**
-
-   11 の実施記録に source/target View 名、上記 CLI command、最初の verify 結果、drift verify 結果、再 import 後 verify 結果を記録します。各 group header と Field sum menu の screenshot、または screenshot を保存できない場合は確認した表示内容を `Manual UI differences` に記録します。記録後、10 の標準 cleanup に従って `ghpmv-field-sum-e2e-*` target Project を削除します。
+この統合により追加実行は drift verify、修復用の再 import、最終 verify の 3 command だけです。証跡は 11、削除は 10 の既存手順へまとめます。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
