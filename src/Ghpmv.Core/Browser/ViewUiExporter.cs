@@ -55,7 +55,7 @@ public sealed class ViewUiExporter
         {
             page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             _warnings.Add($"view settings page could not be opened — {exception.Message}");
             return snapshot with
@@ -75,7 +75,7 @@ public sealed class ViewUiExporter
             {
                 ui = await ReadViewUiAsync(page, ownerLogin, ownerType, projectNumber, view, cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
                 _warnings.Add($"view '{view.Name}': UI settings could not be read — {exception.Message}");
             }

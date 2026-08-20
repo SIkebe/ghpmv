@@ -731,6 +731,11 @@ public sealed class ViewUiImporter
                 overlay,
                 new HashSet<string>(values, StringComparer.Ordinal),
                 cancellationToken).ConfigureAwait(false);
+            if (result.Available.Count == 0)
+            {
+                _warnings.Add($"view '{viewName}': {label} menu contains no checkable entries");
+            }
+
             foreach (var value in values.Where(value => !result.Available.Contains(value)))
             {
                 _warnings.Add($"view '{viewName}': {label} value '{value}' is not available on the target");
