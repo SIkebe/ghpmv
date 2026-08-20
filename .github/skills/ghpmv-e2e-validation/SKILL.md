@@ -222,7 +222,7 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 | Step 7 fixture seed | target seed Project（title / number / URL）と target repository（owner/name / URL） |
 | Step 9 import | imported target Project（title / number / URL） |
 
-Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
+Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
 
 Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、UI observation、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
 
@@ -321,7 +321,58 @@ $global:LASTEXITCODE = 0
 
 ### Repository cleanup commands
 
-repository ごとに次の 3 command を別々に送る。`pre-existing` entry には送らない。
+`created` repository がある場合は、最終 cleanup choices を表示する前に「repository も削除する意図があるか」を一問で確認する。削除しない回答なら repository entry を `retained` とし、Project だけの cleanup choices を表示する。削除する回答なら、次の credential を準備して permission preflight を通過してから、repository を含む最終 cleanup choices を表示する。
+
+- fixture repository + classic PAT: 該当 side の token に `delete_repo` があること
+- fixture repository + fine-grained PAT: 対象 repository が選択され、Administration: write、organization approval が Active であること
+- GEI target repository + destination token owner が organization owner: destination classic PAT に `delete_repo` があること
+- GEI target repository + destination token owner が Migrator: target organization owner の一時 classic PAT を `GHPMV_TARGET_CLEANUP_TOKEN` に準備し、`delete_repo` を付けること
+
+現在の classic PAT に `delete_repo` がない場合や、fine-grained PAT に対象 repository の Administration: write がない場合も、source は `GHPMV_SOURCE_CLEANUP_TOKEN`、target は `GHPMV_TARGET_CLEANUP_TOKEN` という一時 credential を使う。該当 host の classic PAT 作成 URL、organization owner / repository admin role、`delete_repo` scope、SSO authorization を示し、Step 4 と同じ一-token secure-input 手順で次を送る。
+
+```powershell
+$cleanupSecureToken = Read-Host "<cleanup-env-var> for <owner-login> on <cleanup-host> (classic PAT with delete_repo for repository cleanup)" -AsSecureString; [Environment]::SetEnvironmentVariable('<cleanup-env-var>', [System.Net.NetworkCredential]::new("", $cleanupSecureToken).Password, 'Process'); if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('<cleanup-env-var>'))) { Remove-Item "Env:<cleanup-env-var>" -ErrorAction SilentlyContinue; Write-Output "GHPMV_REPOSITORY_CLEANUP_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_REPOSITORY_CLEANUP_TOKEN_READY:<token-prompt-id>" }
+```
+
+repository entry ごとに、削除用 token と permission を次の一 command で preflight する。`<cleanup-token-type>` は `classic` / `fine-grained`、fine-grained の `<administration-write-confirmed>` は作成 URL、repository selection、Active approval を確認した場合だけ `$true` に置き換える。
+
+```powershell
+function Stop-RepositoryCleanupPreflight([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryCleanupPreflight 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupAdministrationWriteConfirmed = <administration-write-confirmed>
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupPreflightResponse = gh api @cleanupHostArguments --include 'repos/<owner>/<repository>' 2>&1
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryCleanupPreflight 'Repository cleanup permission preflight failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupPreflightText = $cleanupPreflightResponse | Out-String
+$cleanupBodyMatch = [regex]::Match($cleanupPreflightText, '(?s)\{.*\}\s*$')
+if (!$cleanupBodyMatch.Success) { Stop-RepositoryCleanupPreflight 'Repository cleanup preflight returned no JSON body.'; return }
+$cleanupRepository = $cleanupBodyMatch.Value | ConvertFrom-Json
+if ($cleanupRepository.full_name -ne '<owner>/<repository>' -or $cleanupRepository.permissions.admin -ne $true) {
+    Stop-RepositoryCleanupPreflight 'Cleanup identity does not have effective repository admin access.'
+    return
+}
+if ('<cleanup-token-type>' -eq 'classic') {
+    $scopeMatch = [regex]::Match($cleanupPreflightText, '(?im)^x-oauth-scopes:\s*(.+)$')
+    $scopes = if ($scopeMatch.Success) { @($scopeMatch.Groups[1].Value -split ',' | ForEach-Object Trim) } else { @() }
+    if ('delete_repo' -notin $scopes) { Stop-RepositoryCleanupPreflight 'Classic cleanup PAT is missing delete_repo.'; return }
+}
+elseif (!$cleanupAdministrationWriteConfirmed) {
+    Stop-RepositoryCleanupPreflight 'Fine-grained cleanup PAT Administration: write and Active approval were not confirmed.'
+    return
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_PERMISSION_READY'
+$global:LASTEXITCODE = 0
+```
+
+preflight が失敗したら repository 削除を選択肢に出さず `retained` とし、権限を広げるかどうかを別ターンで確認する。成功後、repository ごとに次の 3 command を別々に送る。`pre-existing` entry には送らない。
 
 1. **full name / URL を inventory と照合する**
 
@@ -657,9 +708,9 @@ GEI でこれから新規作成する target repository は `TARGET_TOKEN` 作�
 | token / 経路 | 必要な scope |
 |---|---|
 | source: 既存 Project の export | `read:project`。private repository の item / linked repository を読む場合は `repo` も追加。 |
-| source: `setup --fixture` + export | `repo`, `project`, `admin:org`。fixture が organization Issue Field を作成するため `admin:org` が必要。 |
+| source: `setup --fixture` + export | `repo`, `project`, `admin:org`。この run が作る fixture repository を cleanup する場合は `delete_repo` も準備する。fixture が organization Issue Field を作成するため `admin:org` が必要。 |
 | target: 既存または GEI 後 repository への import / verify | `project`, `read:org`。snapshot に organization Issue Field がある場合は `admin:org`、private target repository の item / linked repository 解決または Issue Field 値の書き込みには `repo` も追加。 |
-| target: fixture seed + import / verify | `repo`, `project`, `admin:org`。 |
+| target: fixture seed + import / verify | `repo`, `project`, `admin:org`。この run が作る fixture repository を cleanup する場合は `delete_repo` も準備する。 |
 
 Organization が要求する場合は classic PAT を SSO authorize する。
 
@@ -694,8 +745,8 @@ source / destination の role status が `migrator-pending` の間は、次の s
 | GEI token | token owner の role | 必要な classic PAT scope |
 |---|---|---|
 | source | Organization owner または source organization の migrator | `admin:org`, `repo` |
-| destination | Organization owner | `repo`, `admin:org`, `workflow` |
-| destination | destination organization の migrator | `repo`, `read:org`, `workflow` |
+| destination | Organization owner | `repo`, `admin:org`, `workflow`。migrated repository を cleanup する場合は `delete_repo` も追加。 |
+| destination | destination organization の migrator | `repo`, `read:org`, `workflow`。Migrator role だけでは repository 削除権限を保証しないため、cleanup には target organization owner の別 credential を使う。 |
 
 同じ classic PAT を `ghpmv` と GEI で再利用する場合は、該当する scope の和集合が必要になる。不要な `admin:org` を `ghpmv` 専用 token に追加させない。
 
@@ -1406,8 +1457,18 @@ if (!(Test-Path -LiteralPath $driftReportPath)) { Stop-FieldSumDriftCheck "Drift
 $driftReport = Get-Content -LiteralPath $driftReportPath -Raw | ConvertFrom-Json
 $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
-if ($driftViewCategories.Count -ne 1 -or $driftViewCategories[0].status -ne 'Mismatch' -or $fieldSumDifferences.Count -eq 0) {
-    Stop-FieldSumDriftCheck 'Verify failed, but not with the expected View field sum mismatch for View 1.'
+$nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
+$unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
+    $_.category -ne 'View' -and $_.status -notin @('Match', 'NotApplicable')
+})
+if ($driftViewCategories.Count -ne 1 -or
+    $driftViewCategories[0].status -ne 'Mismatch' -or
+    $fieldSumDifferences.Count -ne 1 -or
+    $nonInfoDifferences.Count -ne 1 -or
+    $nonInfoDifferences[0].category -ne 'View' -or
+    $nonInfoDifferences[0].message -ne $fieldSumDifferences[0].message -or
+    $unexpectedCategoryStatuses.Count -ne 0) {
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly the expected View 1 field-sum mismatch.'
     return
 }
 Write-Output $fieldSumDifferences.message
