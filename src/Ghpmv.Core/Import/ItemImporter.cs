@@ -39,6 +39,12 @@ public sealed class ItemImporter
     public Action<string>? OnProgress { get; set; }
 
     /// <summary>
+    /// Reapplies field values for items already recorded as complete. Existing-project
+    /// updates use this because field option reconciliation can replace option IDs.
+    /// </summary>
+    public bool ReapplyCompletedFieldValues { get; init; }
+
+    /// <summary>
     /// Imports all snapshot items into the project identified by <paramref name="target"/>.
     /// The resume log is read from and written to <paramref name="logDirectory"/>.
     /// </summary>
@@ -97,7 +103,8 @@ public sealed class ItemImporter
             }
 
             if (log.ItemStates.TryGetValue(stateKey, out var completedState)
-                && completedState.FieldValuesApplied)
+                && completedState.FieldValuesApplied
+                && !ReapplyCompletedFieldValues)
             {
                 if (completedState.PositionApplied && completedState.ArchiveApplied)
                 {
@@ -110,6 +117,24 @@ public sealed class ItemImporter
                     resumed++;
                 }
                 continue;
+            }
+
+            if (ReapplyCompletedFieldValues
+                && item.IsArchived
+                && completedState is { ArchiveApplied: true })
+            {
+                if (await IsItemArchivedAsync(completedState.TargetItemId, cancellationToken).ConfigureAwait(false))
+                {
+                    OnProgress?.Invoke($"{prefix} {label}: temporarily unarchiving before reapplying field values.");
+                    await UnarchiveItemAsync(
+                        target.ProjectId,
+                        completedState.TargetItemId,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                completedState.ArchiveApplied = false;
+                completedState.ArchiveError = null;
+                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
             }
 
             OnProgress?.Invoke($"{prefix} Importing or resuming {label}...");
@@ -1114,6 +1139,27 @@ public sealed class ItemImporter
         return node.ValueKind == JsonValueKind.Object
             && node.TryGetProperty("isArchived", out var archived)
             && archived.GetBoolean();
+    }
+
+    private async Task UnarchiveItemAsync(
+        string projectId,
+        string itemId,
+        CancellationToken cancellationToken)
+    {
+        await _client.MutationAsync(
+            "unarchiveProjectV2Item",
+            """
+            mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+              unarchiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
+                item { id }
+              }
+            }
+            """,
+            new { projectId, itemId },
+            MutationRetryPolicy.Idempotent,
+            target: itemId,
+            requiredResultPath: "item.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private static string BuildItemStateKey(ItemSnapshot item)

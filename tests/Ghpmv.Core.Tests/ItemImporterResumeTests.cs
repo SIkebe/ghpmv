@@ -261,6 +261,46 @@ public class ItemImporterResumeTests
     }
 
     [Fact]
+    public async Task Existing_project_update_reapplies_completed_field_values_without_recreating_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-reapply-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage: "");
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var result = await new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            }.ImportAsync(snapshot, target, directory, cancellationToken);
+
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(2, handler.FieldMutationCount);
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            Assert.Equal(0, result.Created);
+            Assert.Equal(1, result.Resumed);
+            Assert.Equal(0, result.AlreadyComplete);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_field_mapping_remains_resumable()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -611,6 +651,8 @@ public class ItemImporterResumeTests
         int failureAttempt = 1,
         bool archivedAfterFailure = false) : HttpMessageHandler
     {
+        private bool _isArchived = archivedAfterFailure;
+
         public int CreateMutationCount { get; private set; }
 
         public int FieldMutationCount { get; private set; }
@@ -618,6 +660,8 @@ public class ItemImporterResumeTests
         public int PositionMutationCount { get; private set; }
 
         public int ArchiveMutationCount { get; private set; }
+
+        public int UnarchiveMutationCount { get; private set; }
 
         public List<string?> PositionAfterIds { get; } = [];
 
@@ -665,17 +709,28 @@ public class ItemImporterResumeTests
                     : Json("""{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""");
             }
 
+            if (query.Contains("unarchiveProjectV2Item", StringComparison.Ordinal))
+            {
+                UnarchiveMutationCount++;
+                _isArchived = false;
+                return Json("""{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
+            }
+
             if (query.Contains("archiveProjectV2Item", StringComparison.Ordinal))
             {
                 ArchiveMutationCount++;
-                return ShouldFail("archive", ArchiveMutationCount)
-                    ? Error()
-                    : Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
+                if (ShouldFail("archive", ArchiveMutationCount))
+                {
+                    return Error();
+                }
+
+                _isArchived = true;
+                return Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
             }
 
             if (query.Contains("... on ProjectV2Item { isArchived }", StringComparison.Ordinal))
             {
-                return archivedAfterFailure
+                return _isArchived
                     ? Json("""{"data":{"node":{"isArchived":true}}}""")
                     : Json("""{"data":{"node":{"isArchived":false}}}""");
             }

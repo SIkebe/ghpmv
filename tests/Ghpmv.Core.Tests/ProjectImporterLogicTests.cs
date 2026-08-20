@@ -21,6 +21,38 @@ public class ProjectImporterLogicTests
         => Assert.Equal(expected, ProjectImporter.ShouldUpdateVisibility(currentPublic, desiredPublic));
 
     [Fact]
+    public void Matching_select_options_are_not_rewritten()
+    {
+        SingleSelectOptionSnapshot[] source =
+        [
+            new() { Id = "source-todo", Name = "Todo", Color = "GRAY", Description = null },
+            new() { Id = "source-done", Name = "Done", Color = "GREEN", Description = "Completed" },
+        ];
+        SingleSelectOptionSnapshot[] target =
+        [
+            new() { Id = "target-todo", Name = "Todo", Color = "GRAY", Description = null },
+            new() { Id = "target-done", Name = "Done", Color = "GREEN", Description = "Completed" },
+        ];
+
+        Assert.False(ProjectImporter.ShouldUpdateSelectOptions(source, target));
+    }
+
+    [Fact]
+    public void Changed_select_option_metadata_is_rewritten()
+    {
+        SingleSelectOptionSnapshot[] source =
+        [
+            new() { Id = "source-todo", Name = "Todo", Color = "GRAY", Description = null },
+        ];
+        SingleSelectOptionSnapshot[] target =
+        [
+            new() { Id = "target-todo", Name = "Todo", Color = "BLUE", Description = null },
+        ];
+
+        Assert.True(ProjectImporter.ShouldUpdateSelectOptions(source, target));
+    }
+
+    [Fact]
     public void Existing_project_update_requires_viewer_update_permission()
     {
         var exception = Assert.Throws<InvalidOperationException>(

@@ -33,6 +33,22 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
+    /// <summary>
+    /// Creates the standard fixture UI snapshot with the deliberate field-sum drift
+    /// used by the browser E2E negative test.
+    /// </summary>
+    public static ProjectSnapshot CreateFieldSumDrift(string repositoryName = "fixture-repo")
+    {
+        var snapshot = Create(repositoryName);
+        return snapshot with
+        {
+            Views = snapshot.Views.Select(view =>
+                string.Equals(view.Name, "View 1", StringComparison.Ordinal)
+                    ? view with { Ui = view.Ui! with { FieldSum = ["Count", "Fixture Number"] } }
+                    : view).ToList(),
+        };
+    }
+
     private static IReadOnlyList<FieldSnapshot> CreateFields() =>
     [
         new FieldSnapshot { Name = "Title", DataType = "TITLE" },

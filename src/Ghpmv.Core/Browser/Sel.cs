@@ -58,10 +58,14 @@ internal static class Sel
 
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Save view", Exact = true });
+        => page.GetByRole(AriaRole.Button, new() { Name = "Save view", Exact = true }).Last;
 
     /// <summary>Confirmation alertdialog ("Save display options for &lt;view&gt;?", D0).</summary>
-    public static ILocator SaveConfirmDialog(IPage page) => page.GetByRole(AriaRole.Alertdialog);
+    public static ILocator SaveConfirmDialog(IPage page) => page.GetByRole(AriaRole.Alertdialog).Last;
+
+    /// <summary>Status exposed while the current View has client-side changes that are not saved.</summary>
+    public static ILocator UnsavedChangesStatus(IPage page)
+        => page.GetByRole(AriaRole.Status, new() { Name = "Unsaved changes", Exact = true }).Last;
 
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)

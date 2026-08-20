@@ -260,6 +260,44 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void FixtureUiSnapshotFactory_field_sum_drift_only_changes_View_1_field_sum()
+    {
+        var expected = FixtureUiSnapshotFactory.Create("fixture-repo");
+        var drifted = FixtureUiSnapshotFactory.CreateFieldSumDrift("fixture-repo");
+
+        Assert.Equal(expected.Views.Count, drifted.Views.Count);
+        foreach (var view in expected.Views)
+        {
+            var actual = Assert.Single(drifted.Views, candidate => candidate.Name == view.Name);
+            Assert.Equal(view.Number, actual.Number);
+            Assert.Equal(view.TabPosition, actual.TabPosition);
+            Assert.Equal(view.Layout, actual.Layout);
+            Assert.Equal(view.Filter, actual.Filter);
+            Assert.Equal(view.GroupByFields, actual.GroupByFields);
+            Assert.Equal(view.SortByFields, actual.SortByFields);
+            Assert.Equal(view.VerticalGroupByFields, actual.VerticalGroupByFields);
+            Assert.Equal(view.VisibleFields, actual.VisibleFields);
+            Assert.Equal(view.Ui!.SliceBy, actual.Ui!.SliceBy);
+            if (view.Name == "View 1")
+            {
+                Assert.Equal(["Count", "Fixture Number"], actual.Ui.FieldSum);
+            }
+            else
+            {
+                Assert.Equal(view.Ui.FieldSum, actual.Ui.FieldSum);
+            }
+
+            Assert.Equal(view.Ui.Roadmap?.StartField, actual.Ui.Roadmap?.StartField);
+            Assert.Equal(view.Ui.Roadmap?.TargetField, actual.Ui.Roadmap?.TargetField);
+            Assert.Equal(view.Ui.Roadmap?.Zoom, actual.Ui.Roadmap?.Zoom);
+            if (view.Ui.Roadmap is not null)
+            {
+                Assert.Equal(view.Ui.Roadmap.Markers, actual.Ui.Roadmap!.Markers);
+            }
+        }
+    }
+
+    [Fact]
     public void Tab_move_plan_is_empty_when_order_already_matches()
         => Assert.Empty(ViewUiImporter.BuildTabMovePlan([1, 2, 3], [1, 2, 3]));
 

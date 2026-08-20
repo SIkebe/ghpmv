@@ -83,7 +83,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、UI observation、drift report、repair report |
+| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -183,7 +183,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | target host type / web URL / API / uploads URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com`, `https://uploads.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 | browser-e2e field-sum contract | 下記の View / field 名と期待値 |
-| browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `ui-observed`, `drift-detected`, `repair-match` |
+| browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `drift-detected`, `repair-match` |
 | resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
 
 `browser-e2e` の既存 round-trip は次の field-sum contract も常に検証する。別 scenario には分岐させず、settings に重複保存しない。
@@ -204,7 +204,7 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 - fixture 作成・期待値記録: 既存 Step 5
 - `snapshot.json` / mapping の追加 assertion: 既存 Step 6 の同じ export 結果
 - target import assertion: 既存 Step 9 の同じ target Project
-- category Match / UI 目視: 既存 Step 10 と通常の目視チェック
+- category Match: 既存 Step 10 の browser-assisted verify
 - deliberate drift: 既存 target 上の negative-test phase
 - repair: Status Updates、View order、Team link などの idempotence を確認する同じ `--project-number` re-import
 - 最終 verify、証跡、cleanup: 既存 report、resource inventory、cleanup consent
@@ -224,7 +224,7 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 
 Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
 
-Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、UI observation、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
+Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
 
 1. `この run が作成した一覧内の Project / repository をすべて削除する`
 2. `target 側の一時 resource だけ削除し、source fixture は再利用のため残す`
@@ -1410,21 +1410,41 @@ $global:LASTEXITCODE = 0
 
 `GHPMV_BROWSER_VIEW_MATCH` と command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-view-match` とする。View の warning、`PartialMatch`、`NotVerified` は、overall status が許容可能でも `browser-e2e` の成功にしない。
 
-### Browser field-sum observation
+### Browser field-sum machine check
 
-初回 `View: Match` 後、target Project URL と確認対象を示し、対話用質問ツールで一問ずつ目視結果を確認する。複数 View を一つの質問にまとめない。
+初回 `View: Match` は browser-assisted exporter が target の各 View を Playwright で再読し、次を source snapshot と機械比較した結果である。
 
-1. `View 1` を reload し、Group by が `Status`、Field sum menu が `Count`, `Fixture Number`, `Fixture Number 2`、各 group header に同じ 3 種類の sum が表示されることを確認する。
-2. `Fixture Roadmap` を reload し、Group by が `Status`、Field sum menu が `Fixture Number 2`、各 group header にその sum が表示されることを確認する。
-3. `Fixture Empty Sums` を reload し、group header に Count / Number sum が表示されないことを確認する。
+- `View 1`: layout、Group by=`Status`、Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
+- `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
+- `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
+- `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
 
-各質問の choices は `表示が期待値と一致する` と `表示が一致しない` にする。不一致、Cancel、Skipped なら現在の View 名と観察内容を blocked state に記録し、drift を作らず停止する。3 件すべて一致した場合だけ観察内容を実施記録に残し、`browser-e2e field-sum status=ui-observed` とする。
+このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。group header の数値描画は、移行された設定と item field values から GitHub が生成する派生 UI であり、通常の ghpmv E2E の必須判定には含めない。GitHub UI 自体の描画回帰を調査する場合だけ、明示的な追加依頼として screenshot または Playwright DOM assertion を行う。
 
 ### Deliberate drift と repair
 
-目視確認後、target の `View 1` で **View → Field sum** を開き、`Fixture Number 2` だけを解除して **Save view** で保存するよう一つの質問カードで案内する。choices は `Fixture Number 2 を解除して保存した` と `drift を作成せず停止する` にする。後者または Cancel / Skipped なら pause し、verify command を送らない。
+初回の機械的な `View: Match` 後、同じ terminal で Playwright による deliberate drift command を送る。ユーザーへ手動変更を依頼しない。
 
-保存済みの回答後、同じ terminal で次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、`field sum mismatch` が存在する場合だけ semantic success とする。
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-sum-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --fixture-repo <target-repository-short-name> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、同じ terminal で次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、`field sum mismatch` が存在する場合だけ semantic success とする。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1554,7 +1574,7 @@ Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_SUM_REPAIR_MATCH` と command exit code 0 を確認してから、`View 1` の Field sum menu と group header に `Fixture Number 2` が復元されたこと、4 fixture Views が各 1 件だけ存在することを別々の質問で確認する。すべて一致した場合だけ `browser-e2e field-sum status=repair-match` とする。
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_SUM_REPAIR_MATCH` と command exit code 0 を確認した場合、browser-assisted verify が `View 1` の Field sum 復元と4 fixture Viewの一致を機械確認済みなので、追加の対話用質問を行わず `browser-e2e field-sum status=repair-match` とする。
 
 `browser-e2e` は `repair-match` まで到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
@@ -1582,7 +1602,7 @@ target が data residency の場合は repair import / verify にも初回と同
 - source / target Project URL または番号
 - export / import result
 - verify overall / category result
-- browser-e2e の field-sum snapshot / initial Match / UI observation / drift / repair result
+- browser-e2e の field-sum snapshot / initial Match / drift / repair result
 - 許容した warning
 - resource inventory の各 name / URL / cleanup 状態と snapshot directory
 

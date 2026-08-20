@@ -932,9 +932,16 @@ public sealed class ProjectImporter
                     && (field.DataType == "SINGLE_SELECT"
                         || (field.DataType == "MULTI_SELECT" && selectOptions.Count > 0)))
                 {
-                    OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                        $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
-                    await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
+                    if (ShouldUpdateSelectOptions(selectOptions, target.Options))
+                    {
+                        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                            $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
+                        await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        OnProgress?.Invoke($"Options of existing field '{field.Name}' already match; skipping.");
+                    }
                 }
                 else if (field.DataType == "ITERATION")
                 {
@@ -2347,7 +2354,7 @@ public sealed class ProjectImporter
         var typeName = node.TryGetProperty("__typename", out var typeElement)
             ? typeElement.GetString() ?? "ProjectV2Field"
             : "ProjectV2Field";
-        return new TargetField(id, name, string.Empty, typeName);
+        return new TargetField(id, name, string.Empty, typeName, null);
     }
 
     /// <summary>
@@ -2384,6 +2391,28 @@ public sealed class ProjectImporter
     internal static bool ShouldUpdateVisibility(bool currentPublic, bool desiredPublic)
         => currentPublic != desiredPublic;
 
+    internal static bool ShouldUpdateSelectOptions(
+        IReadOnlyList<SingleSelectOptionSnapshot> source,
+        IReadOnlyList<SingleSelectOptionSnapshot>? target)
+    {
+        if (target is null || source.Count != target.Count)
+        {
+            return true;
+        }
+
+        for (var index = 0; index < source.Count; index++)
+        {
+            if (!string.Equals(source[index].Name, target[index].Name, StringComparison.Ordinal)
+                || !string.Equals(source[index].Color, target[index].Color, StringComparison.Ordinal)
+                || !string.Equals(source[index].Description, target[index].Description, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     internal static void ValidateProjectUpdatePermission(bool viewerCanUpdate, int projectNumber)
     {
         if (!viewerCanUpdate)
@@ -2418,7 +2447,12 @@ public sealed class ProjectImporter
         string SourceSlug,
         string TargetSlug);
 
-    private sealed record TargetField(string Id, string Name, string DataType, string TypeName);
+    private sealed record TargetField(
+        string Id,
+        string Name,
+        string DataType,
+        string TypeName,
+        IReadOnlyList<SingleSelectOptionSnapshot>? Options);
 
     private sealed record TargetIssueField(
         string Id,
@@ -2465,17 +2499,32 @@ public sealed class ProjectImporter
 
             FieldIds[name] = id;
 
+            IReadOnlyList<SingleSelectOptionSnapshot>? optionSnapshots = null;
             if ((node.TryGetProperty("options", out var options)
                     || node.TryGetProperty("multiSelectOptions", out options))
                 && options.ValueKind == JsonValueKind.Array)
             {
                 var map = new Dictionary<string, string>(StringComparer.Ordinal);
+                var snapshots = new List<SingleSelectOptionSnapshot>();
                 foreach (var option in options.EnumerateArray())
                 {
-                    map[option.GetProperty("name").GetString() ?? string.Empty] = option.GetProperty("id").GetString() ?? string.Empty;
+                    var optionId = option.GetProperty("id").GetString() ?? string.Empty;
+                    var optionName = option.GetProperty("name").GetString() ?? string.Empty;
+                    map[optionName] = optionId;
+                    snapshots.Add(new SingleSelectOptionSnapshot
+                    {
+                        Id = optionId,
+                        Name = optionName,
+                        Color = option.TryGetProperty("color", out var color) ? color.GetString() ?? string.Empty : string.Empty,
+                        Description = option.TryGetProperty("description", out var description)
+                            && description.ValueKind != JsonValueKind.Null
+                                ? description.GetString()
+                                : null,
+                    });
                 }
 
                 OptionIds[name] = map;
+                optionSnapshots = snapshots;
             }
 
             if (node.TryGetProperty("configuration", out var configuration) && configuration.ValueKind == JsonValueKind.Object)
@@ -2492,7 +2541,7 @@ public sealed class ProjectImporter
                 IterationIds[name] = map;
             }
 
-            return new TargetField(id, name, dataType, typeName);
+            return new TargetField(id, name, dataType, typeName, optionSnapshots);
         }
 
         public void RegisterIssueField(TargetIssueField field)
@@ -2557,8 +2606,8 @@ public sealed class ProjectImporter
                 nodes {
                   __typename
                   ... on ProjectV2FieldCommon { id name dataType }
-                  ... on ProjectV2SingleSelectField { options { id name } }
-                  ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
+                  ... on ProjectV2SingleSelectField { options { id name color description } }
+                  ... on ProjectV2MultiSelectField { multiSelectOptions { id name color description } }
                   ... on ProjectV2IterationField {
                     configuration {
                       iterations { id title }
@@ -2594,8 +2643,8 @@ public sealed class ProjectImporter
           nodes(ids: $ids) {
             __typename
             ... on ProjectV2FieldCommon { id name }
-            ... on ProjectV2SingleSelectField { options { id name } }
-            ... on ProjectV2MultiSelectField { multiSelectOptions { id name } }
+            ... on ProjectV2SingleSelectField { options { id name color description } }
+            ... on ProjectV2MultiSelectField { multiSelectOptions { id name color description } }
             ... on ProjectV2IterationField {
               configuration {
                 iterations { id title }

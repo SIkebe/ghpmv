@@ -160,6 +160,40 @@ public sealed class ViewUiImporter
             _warnings).ConfigureAwait(false);
     }
 
+    /// <summary>Applies and saves only the complete Field sum selection for one target View.</summary>
+    public async Task ApplyFieldSumAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        string viewName,
+        IReadOnlyList<string> fieldSum,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
+        ArgumentNullException.ThrowIfNull(fieldSum);
+
+        OnProgress?.Invoke($"Applying field-sum drift for view '{viewName}'...");
+        try
+        {
+            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, viewName, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            _warnings.Add($"view '{viewName}': field-sum drift could not be applied — {exception.Message}");
+        }
+    }
+
     internal static async Task ApplyTabOrderRecoverablyAsync(
         Func<Task> reorderAsync,
         List<string> warnings)
@@ -471,6 +505,10 @@ public sealed class ViewUiImporter
                 view.Name,
                 cancellationToken).ConfigureAwait(false);
         }
+
+        // Grouped Table/Roadmap views do not reliably expose Field sum until the
+        // grouping change has been persisted and the View has reloaded.
+        await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
 
         if (isBoard && view.VerticalGroupByFields.Count > 0)
         {
@@ -866,22 +904,24 @@ public sealed class ViewUiImporter
 
     private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
     {
-        // D0: the "Save view" button lives inside the View menu overlay, so the menu
-        // must be (re-)opened first. With no unsaved changes the button is absent.
-        var save = Sel.SaveViewButton(page);
-        if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
-        {
-            await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
-            await PauseAsync(cancellationToken).ConfigureAwait(false);
-        }
+        // D0: the "Save view" button lives inside the View menu overlay. Close any
+        // child menu first so clicking View opens the parent configuration menu.
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
 
-        if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
+        var save = Sel.SaveViewButton(page);
+        try
+        {
+            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5_000 }).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
             return; // No unsaved changes.
         }
 
-        await save.First.ClickAsync().ConfigureAwait(false);
+        await save.ClickAsync().ConfigureAwait(false);
 
         // D0: saving raises a confirmation alertdialog "Save display options for <view>?".
         var confirm = Sel.SaveConfirmDialog(page);
@@ -889,13 +929,29 @@ public sealed class ViewUiImporter
         {
             await confirm.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
             await confirm.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true }).First.ClickAsync().ConfigureAwait(false);
+            await confirm.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 10_000 }).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             // No confirmation dialog appeared; the save applied directly.
         }
 
+        // GitHub clears the local dirty state before the save request is fully durable.
+        // Give the request time to complete before navigation can cancel it, then reload
+        // so the following checks and next View operate on server-persisted state.
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        if (await save.CountAsync().ConfigureAwait(false) > 0
+            && await save.IsVisibleAsync().ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("the View still exposes Save view after the save completed");
+        }
+
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
     }
 
     // ----- helpers -----
