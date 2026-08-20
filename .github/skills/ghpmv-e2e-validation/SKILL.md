@@ -197,6 +197,20 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
 
+## Feature checkpoint の実行時間最小化
+
+Issue ごとの機能検証を追加するときも、user-facing scenario selector や独立した full round trip を増やさない。次へ統合する。
+
+- fixture 作成・期待値記録: 既存 Step 5
+- `snapshot.json` / mapping の追加 assertion: 既存 Step 6 の同じ export 結果
+- target import assertion: 既存 Step 9 の同じ target Project
+- category Match / UI 目視: 既存 Step 10 と通常の目視チェック
+- deliberate drift: 既存 target 上の negative-test phase
+- repair: Status Updates、View order、Team link などの idempotence を確認する同じ `--project-number` re-import
+- 最終 verify、証跡、cleanup: 既存 report、resource inventory、cleanup consent
+
+追加の disposable target または native command は、fresh/existing、REST/browser、権限境界、destructive preview など、既存 command では別 code path を証明できない場合だけ許可する。追加理由と検証対象を明記し、resource inventory と cleanup に含める。同じ snapshot、mapping、target、verify command を再利用できる場合は複製しない。
+
 ## Resource inventory と cleanup
 
 実 resource を作成する command の成功直後に、次を `resource inventory` へ追加する。既存 resource は `pre-existing` として参照記録だけを残し、cleanup 対象にしない。
