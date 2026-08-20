@@ -500,7 +500,7 @@ dotnet run --project src/Ghpmv.Cli -- export `
   - `View 1`: `fieldSum=["Count","Fixture Number","Fixture Number 2"]`
   - `Fixture Board`: `fieldSum=["Fixture Number"]`
   - `Fixture Roadmap`: `fieldSum=["Fixture Number 2"]`
-  - `Fixture Empty Sums`: `fieldSum=[]`
+  - `Fixture Empty Sums`: `fieldSum` property は省略（未選択は exporter 内で `null`、JSON は null property を省略）
 
 3 件以上の Field sum は GitHub UI で `1 more` と省略されますが、snapshot には実フィールド名が全件必要です。既存の snapshot 確認に次を追加し、別 export は実行しません。
 

@@ -222,15 +222,176 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 | Step 7 fixture seed | target seed Project（title / number / URL）と target repository（owner/name / URL） |
 | Step 9 import | imported target Project（title / number / URL） |
 
-Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加してから停止する。
+Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
 
-Step 10 と `browser-e2e` の field-sum drift / repair が完了したら、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。選択肢は次のように resource への影響を含める。
+Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、UI observation、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
 
 1. `この run が作成した一覧内の Project / repository をすべて削除する`
 2. `target 側の一時 resource だけ削除し、source fixture は再利用のため残す`
 3. `一時 resource をすべて残し、削除せず URL を完了報告へ記録する`
 
 同意前に delete command を送らない。削除を選んだ場合は選択範囲を reverse creation order で一 resource ずつ削除し、各 command の sentinel / exit code と read-back を確認して `deleted` へ更新する。削除対象の title / owner / name / number が inventory と一致しなければ停止する。残す entry は `retained` とし、後から削除できるよう URL を報告する。
+
+### Project cleanup commands
+
+削除同意後、Project ごとに次の 3 command を別々の一意な command ID で送る。placeholder は inventory の実値へ置き換える。`<cleanup-token-env-var>` は side に対応する ghpmv token、`<cleanup-host>` は `github.com` または tenant host、`<owner-type>` は `organization` / `user`。
+
+1. **照合して node ID を保持する**
+
+```powershell
+function Stop-ProjectCleanup([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectCleanup 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupQuery = if ('<owner-type>' -eq 'organization') {
+    'query($login:String!,$number:Int!){organization(login:$login){projectV2(number:$number){id number title url}}}'
+} else {
+    'query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){id number title url}}}'
+}
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupResponseText = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number>
+    if ($LASTEXITCODE -ne 0) { Stop-ProjectCleanup 'Project cleanup lookup failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupResponse = $cleanupResponseText | ConvertFrom-Json
+$cleanupProject = if ('<owner-type>' -eq 'organization') { $cleanupResponse.data.organization.projectV2 } else { $cleanupResponse.data.user.projectV2 }
+if ($null -eq $cleanupProject) { Stop-ProjectCleanup 'Inventory Project was not found before deletion.'; return }
+if ($cleanupProject.number -ne <project-number> -or $cleanupProject.title -ne '<escaped-project-title>' -or $cleanupProject.url -ne '<project-url>') {
+    Stop-ProjectCleanup 'Live Project identity does not match the cleanup inventory.'
+    return
+}
+$global:GHPMV_CLEANUP_PROJECT_ID = $cleanupProject.id
+Write-Output ("GHPMV_CLEANUP_PROJECT_CONFIRMED:{0}" -f $cleanupProject.url)
+$global:LASTEXITCODE = 0
+```
+
+2. **照合済み Project を削除する**
+
+```powershell
+function Stop-ProjectDelete([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+if ([string]::IsNullOrWhiteSpace($global:GHPMV_CLEANUP_PROJECT_ID)) { Stop-ProjectDelete 'No confirmed Project node ID is available.'; return }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectDelete 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    gh api @cleanupHostArguments graphql -f query='mutation($projectId:ID!){deleteProjectV2(input:{projectId:$projectId}){clientMutationId}}' -F projectId=$global:GHPMV_CLEANUP_PROJECT_ID
+    if ($LASTEXITCODE -ne 0) { Stop-ProjectDelete 'Project deletion failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+Write-Output 'GHPMV_CLEANUP_PROJECT_DELETED'
+$global:LASTEXITCODE = 0
+```
+
+3. **同じ owner / number が存在しないことを read-back する**
+
+```powershell
+function Stop-ProjectReadBack([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectReadBack 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupQuery = if ('<owner-type>' -eq 'organization') {
+    'query($login:String!,$number:Int!){organization(login:$login){projectV2(number:$number){id}}}'
+} else {
+    'query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){id}}}'
+}
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupReadBackText = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number>
+    if ($LASTEXITCODE -ne 0) { Stop-ProjectReadBack 'Project cleanup read-back failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupReadBack = $cleanupReadBackText | ConvertFrom-Json
+$remainingProject = if ('<owner-type>' -eq 'organization') { $cleanupReadBack.data.organization.projectV2 } else { $cleanupReadBack.data.user.projectV2 }
+if ($null -ne $remainingProject) { Stop-ProjectReadBack 'Project still exists after deletion.'; return }
+Remove-Variable GHPMV_CLEANUP_PROJECT_ID -Scope Global -ErrorAction SilentlyContinue
+Write-Output 'GHPMV_CLEANUP_PROJECT_ABSENT'
+$global:LASTEXITCODE = 0
+```
+
+### Repository cleanup commands
+
+repository ごとに次の 3 command を別々に送る。`pre-existing` entry には送らない。
+
+1. **full name / URL を inventory と照合する**
+
+```powershell
+function Stop-RepositoryCleanup([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryCleanup 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupRepositoryText = gh api @cleanupHostArguments 'repos/<owner>/<repository>'
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryCleanup 'Repository cleanup lookup failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupRepository = $cleanupRepositoryText | ConvertFrom-Json
+if ($cleanupRepository.full_name -ne '<owner>/<repository>' -or $cleanupRepository.html_url -ne '<repository-url>') {
+    Stop-RepositoryCleanup 'Live repository identity does not match the cleanup inventory.'
+    return
+}
+Write-Output ("GHPMV_CLEANUP_REPOSITORY_CONFIRMED:{0}" -f $cleanupRepository.html_url)
+$global:LASTEXITCODE = 0
+```
+
+2. **照合済み repository を削除する**
+
+```powershell
+function Stop-RepositoryDelete([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryDelete 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    gh api @cleanupHostArguments --method DELETE 'repos/<owner>/<repository>'
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryDelete 'Repository deletion failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_DELETED'
+$global:LASTEXITCODE = 0
+```
+
+3. **HTTP 404 を read-back する**
+
+```powershell
+function Stop-RepositoryReadBack([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryReadBack 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupRepositoryReadBack = gh api @cleanupHostArguments 'repos/<owner>/<repository>' 2>&1
+    $cleanupRepositoryReadBackExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupRepositoryReadBackText = $cleanupRepositoryReadBack | Out-String
+if ($cleanupRepositoryReadBackExitCode -eq 0 -or $cleanupRepositoryReadBackText -notmatch 'HTTP 404') {
+    Stop-RepositoryReadBack 'Repository read-back did not confirm HTTP 404.'
+    return
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_ABSENT'
+$global:LASTEXITCODE = 0
+```
 
 ## E2E settings の読み込み
 
@@ -1216,6 +1377,7 @@ function Stop-FieldSumDriftCheck([string]$Message) {
     $global:LASTEXITCODE = 1
 }
 $driftReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-drift-report.json'
+Remove-Item -LiteralPath $driftReportPath -ErrorAction SilentlyContinue
 $previousGhpmvToken = $env:GHPMV_TOKEN
 $previousGitHubToken = $env:GITHUB_TOKEN
 $driftNativeExitCode = 0
