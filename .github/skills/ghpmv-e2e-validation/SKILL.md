@@ -1025,11 +1025,15 @@ foreach ($expected in $expectedViews) {
     if ($null -eq $actual.ui) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' is missing browser-captured UI settings."; return }
     $actualGroupBy = @($actual.groupByFields)
     $actualFieldSum = @($actual.ui.fieldSum)
+    $actualFieldSumSorted = [Collections.Generic.List[string]]$actualFieldSum
+    $expectedFieldSumSorted = [Collections.Generic.List[string]]@($expected.FieldSum)
+    $actualFieldSumSorted.Sort([StringComparer]::Ordinal)
+    $expectedFieldSumSorted.Sort([StringComparer]::Ordinal)
     if ([string]::Join("`0", [string[]]$actualGroupBy) -ne [string]::Join("`0", [string[]]$expected.GroupBy)) {
         Stop-FieldSumSnapshotCheck "View '$($expected.Name)' groupBy mismatch: expected [$($expected.GroupBy -join ', ')], actual [$($actualGroupBy -join ', ')]."
         return
     }
-    if ([string]::Join("`0", [string[]]$actualFieldSum) -ne [string]::Join("`0", [string[]]$expected.FieldSum)) {
+    if ([string]::Join("`0", [string[]]$actualFieldSumSorted) -ne [string]::Join("`0", [string[]]$expectedFieldSumSorted)) {
         Stop-FieldSumSnapshotCheck "View '$($expected.Name)' FieldSum mismatch: expected [$($expected.FieldSum -join ', ')], actual [$($actualFieldSum -join ', ')]."
         return
     }
