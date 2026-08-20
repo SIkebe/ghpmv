@@ -314,7 +314,7 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
 
 `GHPMV_TEST_ORG` に作る基準プロジェクト(セットアップスクリプトは可能な限り GraphQL、View/Workflow 部分は初回手動 + 本ツール自身でのブートストラップ):
 
-- フィールド: Status(custom option 4 つ、色・説明付き)/ Priority(single-select)/ Estimate(number)/ Start・End(date)/ Sprint(iteration, 2 週間, 完了済み 1 + 未来 2)/ Notes(text)
+- フィールド: Status(Todo / In Progress / Done)/ Fixture Text(text)/ Fixture Number・Fixture Number 2(number)/ Fixture Date(date)/ Fixture Select(single-select)/ Fixture Sprint(iteration, 2 週間)/ Fixture Areas(project multi-select)/ Fixture Teams(organization multi-select Issue Field)
 - Views(§3.1 の V-1〜V-10 を網羅):
   1. "View 1" — grouped Table, filter, sort, Slice by, Field sum=[Count, Fixture Number, Fixture Number 2]
   2. "Fixture Board" — Board, Column by, swimlane, Field sum=[Fixture Number]
