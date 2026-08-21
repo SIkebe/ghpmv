@@ -417,7 +417,7 @@ gh repo view "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
 
 存在する場合は、別名にするか cleanup してから進めます。
 
-destination organization または enterprise に repository ruleset がある場合は、各 ruleset の bypass list に **Repository migrations** を追加し、mode を **Exempt** にします。既定の **Always allow** のままでは migration push の評価が timeout する可能性があります。詳細は [Setting ruleset bypasses for repository migrations](https://docs.github.com/en/enterprise-cloud@latest/migrations/troubleshooting/setting-ruleset-bypasses-for-repository-migrations) を参照してください。
+destination organization または enterprise に repository ruleset がある場合は、各 ruleset の bypass list に **Repository migrations** を追加し、mode を **Exempt** にします。確認結果をsettingsの`gei.repositoryMigrationsBypass`へ`exempt`、applicable rulesetがなければ`not-applicable`として記録します。`unconfirmed`のままGEIを開始しません。既定の **Always allow** のままでは migration push の評価が timeout する可能性があります。詳細は [Setting ruleset bypasses for repository migrations](https://docs.github.com/en/enterprise-cloud@latest/migrations/troubleshooting/setting-ruleset-bypasses-for-repository-migrations) を参照してください。
 
 ### 6.2 GEI migration を queue / 実行
 

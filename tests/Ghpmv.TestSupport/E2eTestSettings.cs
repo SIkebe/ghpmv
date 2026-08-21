@@ -209,6 +209,12 @@ public sealed partial record E2eTestSettings
                 $"{sourceName}: gei.targetRole must be owner, migrator-active, or migrator-pending.");
         }
 
+        if (Gei.RepositoryMigrationsBypass is not ("exempt" or "not-applicable" or "unconfirmed"))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: gei.repositoryMigrationsBypass must be exempt, not-applicable, or unconfirmed.");
+        }
+
         if (Execution.FixturePreparation is not ("existing" or "create"))
         {
             throw new InvalidDataException(
@@ -658,6 +664,8 @@ public sealed record E2eGeiSettings
     public string SourceRole { get; init; } = "owner";
 
     public string TargetRole { get; init; } = "owner";
+
+    public string RepositoryMigrationsBypass { get; init; } = "unconfirmed";
 }
 
 public sealed record E2eExecutionSettings

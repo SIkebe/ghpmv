@@ -16,7 +16,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 ## 最重要原則
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
-2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付ける。resource 名など安全な推奨値を生成できる項目は、推奨値を最初の choice として `(Recommended)` を付け、別名は質問カードの自由入力で受け付ける。推奨値を安全に決められない login、organization、既存 repository 名などだけ choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
+2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付ける。validation run が新規作成する Project / repository 名は run ID から安全に自動生成し、質問しない。推奨値を安全に決められない login、organization、既存 repository 名などだけ choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
 3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
@@ -35,6 +35,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT や token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
 19. **terminal canvas と shell tool を混同しない。** readiness を確認した `token execution terminal` への入力は、その terminal instance の `send_terminal_input` action だけで行う。`powershell`、`task`、別 process の shell tool で同じ command を実行してはならない。terminal canvas を開いて出力を読めた時点で「agent が terminal に直接入力できる」と扱い、command を本文へ貼ってユーザーに再実行させる fallback へ切り替えない。
 20. **`hidden prompt` という語をユーザーへ表示しない。** PAT 入力時は「右側のターミナルに PAT 入力欄を表示します。入力中の文字は画面に表示されません」と説明する。内部 marker、sentinel、env var の実装説明ではなく、いま入力する PAT の用途と Enter を押す操作だけを案内する。
+21. **Browser login の完了を自動監視する。** login command 送信後は同じ terminal output を5〜10秒間隔で読み、今回の sentinel または5分 timeoutまで監視を継続する。sentinel未到達のまま「待機中です」と返してturnを終了したり、`したよ`などの返信をユーザーへ要求したりしない。
 
 ## 実行 session と terminal ownership
 
@@ -73,7 +74,7 @@ terminal 出力取得 action で、今回送信した `<command-id>` と完全�
 
 session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
-browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。送信後は5〜10秒間隔で同じ terminal output を読み、command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことをagent自身が確認して次へ進む。まだ出力が変化していない場合も5分timeoutまでは監視を継続し、ユーザー返信待ちへ切り替えない。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
 | Step / 処理 | agent が自動確認するもの |
 |---|---|
@@ -455,6 +456,7 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 - source / target browser login、collaborator login、EMUを含むuser mapping
 - fixture preparation、GEIまたはfixture-seedのrepository preparation mode
 - GEI source / target repository、visibility、token owner login、role status
+- Repository migrations ruleset bypass status
 - source / target account の Organization administrator 確認
 - source / target の Projects 有効化と private repository 作成 policy 確認
 - PATおよびbrowser stateを保持する**環境変数名**
@@ -471,7 +473,7 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 
 同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
 
-settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、endpoint の `organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、値が有効なら同じ内容を対話用質問で再確認しない。`false` または `null` が選択経路の必須条件を満たさない場合だけ、その不足を示して停止または一問で確認する。実resource作成前の影響説明、PAT type / permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
+settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、`gei.repositoryMigrationsBypass`、endpoint の `organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、値が有効なら同じ内容を対話用質問で再確認しない。`false`、`null`、`unconfirmed` が選択経路の必須条件を満たさない場合は不足を示して停止し、確認質問で補完しない。実resource作成前の影響説明、PAT type / permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
 
 ## Step 1: 確認範囲を決める
 
@@ -861,12 +863,12 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 source organization を確定した後、validation run ごとに `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成し、以後 source / target の resource 名で共用する。
 
-source fixture title と repository name は一つずつ確認するが、空の自由入力カードにしない。次の推奨値を各質問カードの最初の choice として表示し、choice label には `(Recommended)` を付ける。
+source fixture title と repository name は run ID から自動決定し、質問しない。
 
 - fixture title: `ghpmv E2E source <run-id>`
 - repository name: `ghpmv-e2e-source-<run-id>`
 
-質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
+実resource作成前の説明で自動決定した実値を明記する。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
 
 fixture title と repository name は PowerShell の single-quoted argument として渡す。ユーザーが別名を入力した場合は、値に含まれる `'` を `''` に置換してから single quotes で囲む。未 quote の値を command に展開しない。
 
@@ -1077,7 +1079,9 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 
 この経路へ入る前にsource / target hostと記録済みAPI URLを再確認する。data-residency sourceでは`--github-source-api-url`、data-residency targetでは`--target-api-url`と`--target-uploads-url`を必ず含める。
 
-`docs/MANUAL_TEST_PLAN.md` の §6 で role と ruleset を確認する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
+settings の `gei.repositoryMigrationsBypass` を確認する。`exempt` または `not-applicable` なら質問せず進む。`unconfirmed` なら、destination の applicable ruleset で **Repository migrations** bypass を **Exempt** にするか、applicable rulesetがないことをsettingsへ記録するまで停止する。既定の **Always allow** のまま進めない。
+
+`fixture preparation=create` では source repository に `ghpmv-e2e-source-<run-id>`、target repository に `ghpmv-e2e-target-<run-id>` を自動使用し、名前を質問しない。`fixture preparation=existing` の場合だけ settings の `gei.sourceRepository` / `gei.targetRepository` を使う。実resource作成前の説明には解決済みの full name を表示する。
 
 `gh gei migrate-repo --help` で extension の現在の引数を確認した後、選択topologyに応じて次を設定する。
 
@@ -1149,12 +1153,12 @@ downloadable migration log は完了後 24 時間以内に保存する。target 
 
 `ghpmv` 自体の短時間デモ用であり、GEI の検証にはならず、補助 Project が一つ増えることを説明してから実行する。
 
-target seed title と repository name も空の自由入力カードにしない。Step 5 で生成した run ID があれば同じ値を使う。`fixture preparation` が `existing` で Step 5 をスキップしたなど run ID がまだない場合は、ここで `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成して記録する。次の推奨値を各質問カードの最初の choice として `(Recommended)` 付きで表示する。
+target seed title と repository name もrun IDから自動決定し、質問しない。Step 5 で生成した run ID があれば同じ値を使う。`fixture preparation` が `existing` で Step 5 をスキップしたなど run ID がまだない場合は、ここで `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成して記録する。
 
 - target seed title: `ghpmv E2E target seed <run-id>`
 - target repository name: `ghpmv-e2e-target-<run-id>`
 
-別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
+実resource作成前の説明で自動決定した実値を明記する。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
 
 target seed title と repository name も `'` を `''` に置換したうえで PowerShell single-quoted argument として渡す。
 

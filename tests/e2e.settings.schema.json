@@ -53,7 +53,8 @@
         "sourceTokenOwnerLogin",
         "targetTokenOwnerLogin",
         "sourceRole",
-        "targetRole"
+        "targetRole",
+        "repositoryMigrationsBypass"
       ],
       "properties": {
         "sourceRepository": { "$ref": "#/$defs/repositoryName" },
@@ -70,7 +71,11 @@
         "sourceTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "targetTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "sourceRole": { "$ref": "#/$defs/geiRole" },
-        "targetRole": { "$ref": "#/$defs/geiRole" }
+        "targetRole": { "$ref": "#/$defs/geiRole" },
+        "repositoryMigrationsBypass": {
+          "enum": ["exempt", "not-applicable", "unconfirmed"],
+          "description": "Whether applicable rulesets exempt Repository migrations, no applicable ruleset exists, or the state is not confirmed."
+        }
       }
     },
     "execution": {

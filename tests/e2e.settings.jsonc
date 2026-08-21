@@ -130,7 +130,11 @@
     // owner、migrator-active、migrator-pending のいずれかです。
     // migrator-pending は role 付与前なので、GEI 実行可能とは扱いません。
     "sourceRole": "owner",
-    "targetRole": "owner"
+    "targetRole": "owner",
+
+    // exempt: applicable rulesetでRepository migrations bypassがExempt。
+    // not-applicable: applicable rulesetなし。未確認ならunconfirmedで、GEI実行前に停止します。
+    "repositoryMigrationsBypass": "unconfirmed"
   },
 
   // E2E の resource 準備方法です。安全確認や削除同意を省略する設定ではありません。

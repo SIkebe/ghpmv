@@ -71,7 +71,8 @@ public class E2eTestSettingsTests
                 "sourceTokenOwnerLogin": "source-owner",
                 "targetTokenOwnerLogin": "target-owner",
                 "sourceRole": "migrator-active",
-                "targetRole": "owner"
+                "targetRole": "owner",
+                "repositoryMigrationsBypass": "exempt"
               },
               "execution": {
                 "fixturePreparation": "existing",
@@ -95,6 +96,7 @@ public class E2eTestSettingsTests
             Assert.True(result.Target.PrivateRepositoryCreationAllowed);
             Assert.Equal("gei-target", result.Gei.TargetRepository);
             Assert.Equal("migrator-active", result.Gei.SourceRole);
+            Assert.Equal("exempt", result.Gei.RepositoryMigrationsBypass);
             Assert.Equal("octocat_contoso", result.Users.ToMappingDictionary()["octocat"]);
         }
         finally
@@ -119,6 +121,22 @@ public class E2eTestSettingsTests
         var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
 
         Assert.Contains("environment variable name, not a token value", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_rejects_unknown_repository_migrations_bypass_status()
+    {
+        var settings = new E2eTestSettings
+        {
+            Gei = new E2eGeiSettings
+            {
+                RepositoryMigrationsBypass = "always-allow",
+            },
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
+
+        Assert.Contains("gei.repositoryMigrationsBypass", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
