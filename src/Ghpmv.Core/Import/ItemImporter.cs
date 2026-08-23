@@ -121,7 +121,7 @@ public sealed class ItemImporter
 
             if (ReapplyCompletedFieldValues
                 && item.IsArchived
-                && completedState is { ArchiveApplied: true })
+                && completedState is not null)
             {
                 if (await IsItemArchivedAsync(completedState.TargetItemId, cancellationToken).ConfigureAwait(false))
                 {
