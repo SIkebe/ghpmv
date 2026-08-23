@@ -216,6 +216,73 @@ public class ViewUiLogicTests
         Assert.Equal(expected, ViewUiImporter.FieldSumControlExpected(view));
     }
 
+    [Fact]
+    public void Persistence_check_accepts_saved_grouping_slice_and_unordered_field_sums()
+    {
+        var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                SliceBy = "Fixture Select",
+                FieldSum = ["Count", "Fixture Number"],
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: "Status",
+            ColumnBy: null,
+            SliceBy: "Fixture Select",
+            FieldSumAvailable: true,
+            FieldSum: ["Fixture Number", "Count"]);
+
+        Assert.Empty(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+    }
+
+    [Fact]
+    public void Persistence_check_reports_grouping_slice_and_field_sum_loss()
+    {
+        var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                SliceBy = "Fixture Select",
+                FieldSum = ["Count", "Fixture Number"],
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: null,
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: false,
+            FieldSum: []);
+
+        var differences = ViewUiImporter.CollectPersistenceDifferences(view, persisted);
+
+        Assert.Contains(differences, difference => difference.StartsWith("grouping expected", StringComparison.Ordinal));
+        Assert.Contains(differences, difference => difference.StartsWith("slice-by expected", StringComparison.Ordinal));
+        Assert.Contains(differences, difference => difference == "field-sum control is unavailable");
+        Assert.Equal(3, differences.Count);
+    }
+
+    [Fact]
+    public void Persistence_check_reports_board_column_loss()
+    {
+        var view = View("Board", "BOARD_LAYOUT", groupBy: ["Status"]) with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+            Ui = new ViewUiSnapshot { FieldSum = ["Fixture Number"] },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: "Status",
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: true,
+            FieldSum: ["Fixture Number"]);
+
+        var difference = Assert.Single(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+
+        Assert.StartsWith("column-by expected", difference, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(true, false, true, true)]
     [InlineData(false, true, true, true)]

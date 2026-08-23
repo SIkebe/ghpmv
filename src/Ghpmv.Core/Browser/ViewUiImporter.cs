@@ -12,6 +12,8 @@ namespace Ghpmv.Core.Browser;
 /// </summary>
 public sealed class ViewUiImporter
 {
+    private const int ViewPersistenceAttempts = 3;
+
     private static readonly AriaRole[] OptionRoles =
     [
         AriaRole.Menuitemradio,
@@ -142,8 +144,7 @@ public sealed class ViewUiImporter
                     projectNumber,
                     string.Create(CultureInfo.InvariantCulture, $"views/{targetNumber}"));
                 await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-                await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
-                await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+                await ApplyAndVerifyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
@@ -603,6 +604,181 @@ public sealed class ViewUiImporter
             || view.GroupByFields.Count > 0
             && (view.Layout is "TABLE_LAYOUT" or "ROADMAP_LAYOUT");
     }
+
+    private async Task ApplyAndVerifyBrowserOnlySettingsAsync(
+        IPage page,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> differences = [];
+        for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+        {
+            var warningStart = _warnings.Count;
+            await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+
+            var persisted = await ReadPersistedSettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            differences = CollectPersistenceDifferences(view, persisted);
+            if (differences.Count == 0)
+            {
+               return;
+            }
+
+            if (attempt < ViewPersistenceAttempts)
+            {
+               _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+               OnProgress?.Invoke(
+                   $"View '{view.Name}' did not persist all browser settings; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+               await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+               await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var difference in differences)
+        {
+            _warnings.Add(
+               $"view '{view.Name}': {difference} did not persist after {ViewPersistenceAttempts} attempts");
+        }
+    }
+
+    private static async Task<PersistedViewSettings> ReadPersistedSettingsAsync(
+        IPage page,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var groupingLabel = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+               ? "Swimlanes"
+               : "Group by";
+            var groupBy = await ReadMenuValueAsync(menu, groupingLabel).ConfigureAwait(false);
+            var columnBy = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+               ? await ReadMenuValueAsync(menu, "Column by").ConfigureAwait(false)
+               : null;
+            var sliceBy = view.Ui is null
+               ? null
+               : await ReadMenuValueAsync(menu, "Slice by").ConfigureAwait(false);
+
+            var expectedFieldSum = FieldSumValuesToApply(view);
+            if (expectedFieldSum is null)
+            {
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
+            }
+
+            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
+            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            {
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
+            }
+
+            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            var checkedValues = await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
+            return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string?> ReadMenuValueAsync(ILocator menu, string label)
+    {
+        var item = Sel.ConfigurationMenuItem(menu, label);
+        return await item.CountAsync().ConfigureAwait(false) == 0
+            ? null
+            : ViewUiExporter.ParseMenuValue(await item.First.InnerTextAsync().ConfigureAwait(false));
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadCheckedValuesAsync(ILocator overlay)
+    {
+        var values = new List<string>();
+        var options = Sel.CheckboxOptions(overlay);
+        var count = await options.CountAsync().ConfigureAwait(false);
+        for (var index = 0; index < count; index++)
+        {
+            var option = options.Nth(index);
+            if (!string.Equals(
+                   await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                   "true",
+                   StringComparison.Ordinal))
+            {
+               continue;
+            }
+
+            if (ViewUiExporter.NormalizeUiText(await option.InnerTextAsync().ConfigureAwait(false)) is { } value)
+            {
+               values.Add(value);
+            }
+        }
+
+        return values;
+    }
+
+    internal static IReadOnlyList<string> CollectPersistenceDifferences(
+        ViewSnapshot expected,
+        PersistedViewSettings actual)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(actual);
+
+        var differences = new List<string>();
+        var expectedGroupBy = expected.GroupByFields.Count == 0
+            ? null
+            : expected.GroupByFields[0];
+        if (!string.Equals(expectedGroupBy, actual.GroupBy, StringComparison.Ordinal))
+        {
+            differences.Add($"grouping expected '{FormatValue(expectedGroupBy)}', actual '{FormatValue(actual.GroupBy)}'");
+        }
+
+        if (string.Equals(expected.Layout, "BOARD_LAYOUT", StringComparison.Ordinal))
+        {
+            var expectedColumnBy = expected.VerticalGroupByFields.Count == 0
+                ? null
+                : expected.VerticalGroupByFields[0];
+            if (!string.Equals(expectedColumnBy, actual.ColumnBy, StringComparison.Ordinal))
+            {
+               differences.Add($"column-by expected '{FormatValue(expectedColumnBy)}', actual '{FormatValue(actual.ColumnBy)}'");
+            }
+        }
+
+        if (expected.Ui is not null
+            && !string.Equals(expected.Ui.SliceBy, actual.SliceBy, StringComparison.Ordinal))
+        {
+            differences.Add($"slice-by expected '{FormatValue(expected.Ui.SliceBy)}', actual '{FormatValue(actual.SliceBy)}'");
+        }
+
+        if (FieldSumValuesToApply(expected) is { } expectedFieldSum)
+        {
+            if (!actual.FieldSumAvailable)
+            {
+               differences.Add("field-sum control is unavailable");
+            }
+            else if (!SetEquals(expectedFieldSum, actual.FieldSum))
+            {
+               differences.Add(
+                   $"field-sum expected [{string.Join(", ", expectedFieldSum)}], actual [{string.Join(", ", actual.FieldSum)}]");
+            }
+        }
+
+        return differences;
+    }
+
+    private static bool SetEquals(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
+        => expected.Count == actual.Count
+            && expected.ToHashSet(StringComparer.Ordinal).SetEquals(actual);
+
+    private static string FormatValue(string? value) => value ?? "none";
+
+    internal sealed record PersistedViewSettings(
+        string? GroupBy,
+        string? ColumnBy,
+        string? SliceBy,
+        bool FieldSumAvailable,
+        IReadOnlyList<string> FieldSum);
 
     private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
         => await TrySetSingleAsync(page, label, [value], value, viewName, cancellationToken).ConfigureAwait(false);

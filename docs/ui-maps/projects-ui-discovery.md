@@ -36,6 +36,7 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 3. Table と Roadmap でも複数 Number field を同時に checked にでき、空集合へ戻せる。3 件以上の選択時、親 menu の summary は `Count, Probe Number 1, 1 more` のように省略されるため、export は summary text を parse せず子 menu の checked entry を全件読む
 4. Roadmap では親の View menu に `Truncate titles` / `Show date fields` の checkbox も残る。Field sum / Markers の同期は page 全体ではなく、最後に開いた子 menu へ scope しないと無関係な表示設定を変更する
 5. Table / Roadmap とも変更後は `button "Save view"` が表示され、`alertdialog "Save display options for <view>?"` の `button "Save"` で確定する。既存の 2 段階保存フローと同じ
+6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
