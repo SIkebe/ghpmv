@@ -714,7 +714,9 @@ public sealed class ViewUiImporter
             var overlay = Sel.OpenMenu(page);
             await overlay.WaitForAsync().ConfigureAwait(false);
             var checkedValues = await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
-            return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
+            return checkedValues is null
+                ? new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, [])
+                : new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
         }
         finally
         {
@@ -755,11 +757,16 @@ public sealed class ViewUiImporter
             : ViewUiExporter.ParseMenuValue(await item.First.InnerTextAsync().ConfigureAwait(false));
     }
 
-    private static async Task<IReadOnlyList<string>> ReadCheckedValuesAsync(ILocator overlay)
+    private static async Task<IReadOnlyList<string>?> ReadCheckedValuesAsync(ILocator overlay)
     {
         var values = new List<string>();
         var options = Sel.CheckboxOptions(overlay);
         var count = await options.CountAsync().ConfigureAwait(false);
+        if (count == 0)
+        {
+            return null;
+        }
+
         for (var index = 0; index < count; index++)
         {
             var option = options.Nth(index);

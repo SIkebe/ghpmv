@@ -222,11 +222,11 @@ public sealed class ItemImporter
                         if (await IsItemArchivedAsync(itemId, cancellationToken).ConfigureAwait(false))
                         {
                             OnProgress?.Invoke($"{prefix} {label}: temporarily unarchiving before reapplying field values.");
+                            temporarilyUnarchived = true;
                             await UnarchiveItemAsync(
                                 target.ProjectId,
                                 itemId,
                                 cancellationToken).ConfigureAwait(false);
-                            temporarilyUnarchived = true;
                         }
 
                         itemState.ArchiveApplied = false;

@@ -226,6 +226,7 @@ public class ViewUiLogicTests
     public void Field_sum_persistence_match_rejects_unavailable_or_incomplete_state()
     {
         Assert.False(ViewUiImporter.FieldSumMatches(["Count"], null));
+        Assert.False(ViewUiImporter.FieldSumMatches([], null));
         Assert.False(ViewUiImporter.FieldSumMatches(
             ["Count", "Fixture Number"],
             ["Count"]));
