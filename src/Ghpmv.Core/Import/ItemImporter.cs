@@ -119,24 +119,7 @@ public sealed class ItemImporter
                 continue;
             }
 
-            if (ReapplyCompletedFieldValues
-                && item.IsArchived
-                && completedState is not null)
-            {
-                if (await IsItemArchivedAsync(completedState.TargetItemId, cancellationToken).ConfigureAwait(false))
-                {
-                    OnProgress?.Invoke($"{prefix} {label}: temporarily unarchiving before reapplying field values.");
-                    await UnarchiveItemAsync(
-                        target.ProjectId,
-                        completedState.TargetItemId,
-                        cancellationToken).ConfigureAwait(false);
-                }
-
-                completedState.ArchiveApplied = false;
-                completedState.ArchiveError = null;
-                await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
-            }
-
+            var temporarilyUnarchived = false;
             OnProgress?.Invoke($"{prefix} Importing or resuming {label}...");
             var hasPendingDraft = log.PendingDrafts.ContainsKey(key);
             var hasPendingContent = log.PendingContents.ContainsKey(key);
@@ -230,6 +213,29 @@ public sealed class ItemImporter
                 log.PendingContents.Remove(key);
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
 
+                if (ReapplyCompletedFieldValues && completedState is not null)
+                {
+                    itemState.FieldValuesApplied = false;
+                    itemState.FieldValuesError = null;
+                    if (item.IsArchived)
+                    {
+                        if (await IsItemArchivedAsync(itemId, cancellationToken).ConfigureAwait(false))
+                        {
+                            OnProgress?.Invoke($"{prefix} {label}: temporarily unarchiving before reapplying field values.");
+                            await UnarchiveItemAsync(
+                                target.ProjectId,
+                                itemId,
+                                cancellationToken).ConfigureAwait(false);
+                            temporarilyUnarchived = true;
+                        }
+
+                        itemState.ArchiveApplied = false;
+                        itemState.ArchiveError = null;
+                    }
+
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                }
+
                 itemState.FieldValuesApplied = await ApplyFieldValuesAsync(
                     item,
                     itemId,
@@ -242,6 +248,17 @@ public sealed class ItemImporter
                     ? null
                     : "One or more field values could not be applied; resume will retry this stage.";
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                if (temporarilyUnarchived)
+                {
+                    await RestoreTemporaryArchiveAsync(
+                        target.ProjectId,
+                        itemState,
+                        log,
+                        logDirectory,
+                        cancellationToken).ConfigureAwait(false);
+                    temporarilyUnarchived = false;
+                }
+
                 if (completedState is null && !resumedPendingOperation)
                 {
                     created++;
@@ -257,6 +274,31 @@ public sealed class ItemImporter
             }
             catch (Exception exception)
             {
+                if (temporarilyUnarchived && completedState is not null)
+                {
+                    try
+                    {
+                        await RestoreTemporaryArchiveAsync(
+                            target.ProjectId,
+                            completedState,
+                            log,
+                            logDirectory,
+                            CancellationToken.None).ConfigureAwait(false);
+                        temporarilyUnarchived = false;
+                    }
+                    catch (Exception restoreException)
+                    {
+                        completedState.FieldValuesError = exception.Message;
+                        completedState.ArchiveApplied = false;
+                        completedState.ArchiveError = restoreException.Message;
+                        await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                        throw new AggregateException(
+                            $"{label}: field replay failed and the original archived state could not be restored.",
+                            exception,
+                            restoreException);
+                    }
+                }
+
                 if (!resumedPendingOperation
                     && (log.PendingDrafts.Remove(key) | log.PendingContents.Remove(key)))
                 {
@@ -1090,13 +1132,7 @@ public sealed class ItemImporter
             {
                 await _client.MutationAsync(
                     "archiveProjectV2Item",
-                    """
-                    mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
-                      archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
-                        item { id }
-                      }
-                    }
-                    """,
+                    ArchiveItemMutation,
                     new { projectId, itemId = state.TargetItemId },
                     MutationRetryPolicy.Idempotent,
                     target: state.TargetItemId,
@@ -1161,6 +1197,46 @@ public sealed class ItemImporter
             requiredResultPath: "item.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
+
+    private async Task RestoreTemporaryArchiveAsync(
+        string projectId,
+        ImportItemState state,
+        ImportLog log,
+        string logDirectory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _client.MutationAsync(
+                "archiveProjectV2Item",
+                ArchiveItemMutation,
+                new { projectId, itemId = state.TargetItemId },
+                MutationRetryPolicy.Idempotent,
+                target: state.TargetItemId,
+                requiredResultPath: "item.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitHubGraphQLException)
+        {
+            if (!await IsItemArchivedAsync(state.TargetItemId, cancellationToken).ConfigureAwait(false))
+            {
+                throw;
+            }
+        }
+
+        state.ArchiveApplied = true;
+        state.ArchiveError = null;
+        await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+    }
+
+    private const string ArchiveItemMutation =
+        """
+        mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+          archiveProjectV2Item(input: { projectId: $projectId, itemId: $itemId, clientMutationId: $clientMutationId }) {
+            item { id }
+          }
+        }
+        """;
 
     private static string BuildItemStateKey(ItemSnapshot item)
     {
