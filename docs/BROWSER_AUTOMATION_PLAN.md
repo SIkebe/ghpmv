@@ -154,6 +154,7 @@ internal static class Sel
 | V-2 | Table + group-by | 任意フィールド 1 つ(Status/Single-select/Iteration など) |
 | V-3 | Table + sort | export は複数キーを保持。v1 browser import が適用するのは先頭キーのみ |
 | V-4 | Table / Board / Roadmap + Field sum | grouped Table / Roadmap と Board で Count、複数 Number field、空集合を complete-set 同期 |
+| V-5 | Group-header Field sum rendering | standard fixture の grouped Table / Roadmap を reload し、visible Count / Number aggregates を DOM assertion |
 | V-5 | Board | Column by(Status / 任意 single-select / iteration) |
 | V-6 | Board + swimlane | Group by(横帯)との組み合わせ |
 | V-7 | Roadmap | Dates(date フィールド対 or iteration)、Zoom(Month/Quarter/Year)、Markers |

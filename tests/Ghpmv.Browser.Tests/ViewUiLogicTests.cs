@@ -232,6 +232,31 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Rendered_field_sum_observation_accepts_count_and_numeric_labels()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "View 1");
+
+        FieldSumRenderingObserver.ValidateObservation(
+            view,
+            ["Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0"],
+            ["Fixture Number: 3.14", "Fixture Number 2: 0"]);
+    }
+
+    [Fact]
+    public void Rendered_field_sum_observation_rejects_missing_numeric_label()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "Fixture Roadmap");
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FieldSumRenderingObserver.ValidateObservation(
+                view,
+                ["Todo 2"],
+                []));
+
+        Assert.Contains("Fixture Number 2", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Persistence_check_accepts_saved_grouping_slice_and_unordered_field_sums()
     {
         var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with

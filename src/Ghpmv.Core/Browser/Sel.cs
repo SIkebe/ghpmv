@@ -67,6 +67,14 @@ internal static class Sel
     public static ILocator UnsavedChangesStatus(IPage page)
         => page.GetByRole(AriaRole.Status, new() { Name = "Unsaved changes", Exact = true }).Last;
 
+    /// <summary>Visible grouped Table/Roadmap header contents containing count and aggregate labels.</summary>
+    public static ILocator GroupHeaderContents(IPage page)
+        => page.Locator("[class*='group-header-module__groupHeaderContent']:visible");
+
+    /// <summary>Visible numeric Field sum labels rendered inside grouped Table/Roadmap headers.</summary>
+    public static ILocator GroupHeaderAggregateLabels(IPage page)
+        => page.Locator("[class*='aggregate-labels-module__Label']:visible");
+
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)
         => page.GetByRole(AriaRole.Dialog, new() { Name = "Select date fields" });

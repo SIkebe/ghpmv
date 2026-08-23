@@ -36,6 +36,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 19. **terminal canvas と shell tool を混同しない。** readiness を確認した `token execution terminal` への入力は、その terminal instance の `send_terminal_input` action だけで行う。`powershell`、`task`、別 process の shell tool で同じ command を実行してはならない。terminal canvas を開いて出力を読めた時点で「agent が terminal に直接入力できる」と扱い、command を本文へ貼ってユーザーに再実行させる fallback へ切り替えない。
 20. **`hidden prompt` という語をユーザーへ表示しない。** PAT 入力時は「右側のターミナルに PAT 入力欄を表示します。入力中の文字は画面に表示されません」と説明する。内部 marker、sentinel、env var の実装説明ではなく、いま入力する PAT の用途と Enter を押す操作だけを案内する。
 21. **Browser login の完了を自動監視する。** login command 送信後は同じ terminal output を5〜10秒間隔で読み、今回の sentinel または5分 timeoutまで監視を継続する。sentinel未到達のまま「待機中です」と返してturnを終了したり、`したよ`などの返信をユーザーへ要求したりしない。
+22. **待機は短い polling に限定する。** terminal output の更新待ちに別 process の `Start-Sleep` が必要な場合も1回5〜10秒までとし、各回の直後に同じ terminal の出力を再読する。30 / 60 / 90 / 120 / 180秒などの固定 sleep、command の想定所要時間を丸ごと sleep する処理、sentinel確認後も残る sleep は禁止する。runtime が即時 read を許す場合は `Start-Sleep` を使わず `read_terminal_output` を再実行する。
 
 ## 実行 session と terminal ownership
 
@@ -72,6 +73,8 @@ $global:LASTEXITCODE = 0; & { <command> }; $ghpmvInvocationSucceeded = $?; $ghpm
 
 terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として同じ instance の出力監視だけを継続し、ユーザーへ完了報告を求めず、command を再送しない。sentinel を確認した場合だけ in-flight state を clear して次の command へ進む。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
 
+polling 間隔を作るための `Start-Sleep` は前項の上限を守り、必ず `read_terminal_output` 一回と対にする。例えば90秒かかる可能性がある command でも90秒 sleepを一回送らず、最初の出力 read後に必要な場合だけ5〜10秒 sleep → readを繰り返す。sentinelが早く出た場合は直ちに次へ進む。
+
 session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
 browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。送信後は5〜10秒間隔で同じ terminal output を読み、command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことをagent自身が確認して次へ進む。まだ出力が変化していない場合も5分timeoutまでは監視を継続し、ユーザー返信待ちへ切り替えない。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
@@ -84,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、drift report、repair report |
+| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、rendered-header DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -1434,9 +1437,27 @@ $global:LASTEXITCODE = 0
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
 
-このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。ただし Issue #62 の acceptance criteria にある派生描画の確認は別 checkpoint として一度だけ実行する。初回 `View: Match` 後に target の `View 1` と `Fixture Roadmap` を reload し、各 group header に設定済みの Field sum label と数値が表示されていることを目視確認する。menu は再確認しない。確認結果は screenshot path または簡潔な observation として execution record に残す。
+このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。Issue #62 の派生描画 checkpoint も、初回 `View: Match` 後に次の Playwright command で自動検証する。ユーザーへ browser reload や自己申告を求めない。
 
-agent が browser 表示を直接観測できない場合だけ、target Project URL と対象 View 名を示し、一つの対話用質問で `View 1` と `Fixture Roadmap` の両方を確認してもらう。確認できた場合だけ `browser-e2e field-sum status=target-render-observed` として deliberate drift へ進む。表示欠落、値欠落、Cancel / Skipped は成功扱いせず pause する。この checkpoint は GitHub の派生描画確認に限定し、既に機械検証済みの Group by / Field sum selection の自己申告を求めない。
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-sum-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で検査する。両 View の `Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=2`、command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-render-observed` として deliberate drift へ進む。欠落は非ゼロ終了にし、対話用質問で補完しない。
 
 ### Deliberate drift と repair
 
@@ -1619,7 +1640,7 @@ target が data residency の場合は repair import / verify にも初回と同
 - source / target Project URL または番号
 - export / import result
 - verify overall / category result
-- browser-e2e の field-sum snapshot / initial Match / drift / repair result
+- browser-e2e の field-sum snapshot / initial Match / rendered-header DOM check / drift / repair result
 - 許容した warning
 - resource inventory の各 name / URL / cleanup 状態と snapshot directory
 
