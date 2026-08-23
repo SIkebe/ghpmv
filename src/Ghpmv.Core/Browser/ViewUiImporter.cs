@@ -1175,7 +1175,9 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-            return; // No unsaved changes.
+            throw new InvalidOperationException(
+                "the View has unsaved changes but Save view is unavailable",
+                exception);
         }
 
         await save.ClickAsync().ConfigureAwait(false);

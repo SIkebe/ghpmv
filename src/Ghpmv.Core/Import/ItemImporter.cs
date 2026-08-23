@@ -268,7 +268,7 @@ public sealed class ItemImporter
                     resumed++;
                 }
             }
-            catch (AmbiguousMutationResultException)
+            catch (AmbiguousMutationResultException) when (!temporarilyUnarchived)
             {
                 throw;
             }
@@ -1216,7 +1216,7 @@ public sealed class ItemImporter
                 requiredResultPath: "item.id",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-        catch (GitHubGraphQLException)
+        catch (Exception exception) when (exception is GitHubGraphQLException or AmbiguousMutationResultException)
         {
             if (!await IsItemArchivedAsync(state.TargetItemId, cancellationToken).ConfigureAwait(false))
             {
