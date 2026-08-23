@@ -186,8 +186,11 @@ public sealed class ViewUiImporter
                 projectNumber,
                 string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, viewName, cancellationToken).ConfigureAwait(false);
-            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            await ApplyAndVerifyFieldSumAsync(
+                page,
+                viewName,
+                fieldSum,
+                cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
@@ -641,6 +644,40 @@ public sealed class ViewUiImporter
         }
     }
 
+    private async Task ApplyAndVerifyFieldSumAsync(
+        IPage page,
+        string viewName,
+        IReadOnlyList<string> fieldSum,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? persisted = null;
+        for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+        {
+            var warningStart = _warnings.Count;
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, viewName, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            persisted = await ReadPersistedFieldSumAsync(page, cancellationToken).ConfigureAwait(false);
+            if (FieldSumMatches(fieldSum, persisted))
+            {
+                return;
+            }
+
+            if (attempt < ViewPersistenceAttempts)
+            {
+                _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+                OnProgress?.Invoke(
+                    $"View '{viewName}' did not persist the Field sum selection; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+                await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _warnings.Add(
+            $"view '{viewName}': field-sum expected [{string.Join(", ", fieldSum)}], "
+            + $"actual [{(persisted is null ? "unavailable" : string.Join(", ", persisted))}] "
+            + $"did not persist after {ViewPersistenceAttempts} attempts");
+    }
+
     private static async Task<PersistedViewSettings> ReadPersistedSettingsAsync(
         IPage page,
         ViewSnapshot view,
@@ -678,6 +715,31 @@ public sealed class ViewUiImporter
             await overlay.WaitForAsync().ConfigureAwait(false);
             var checkedValues = await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
             return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>?> ReadPersistedFieldSumAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
+            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            {
+                return null;
+            }
+
+            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            return await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
         }
         finally
         {
@@ -770,6 +832,11 @@ public sealed class ViewUiImporter
     private static bool SetEquals(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
         => expected.Count == actual.Count
             && expected.ToHashSet(StringComparer.Ordinal).SetEquals(actual);
+
+    internal static bool FieldSumMatches(
+        IReadOnlyList<string> expected,
+        IReadOnlyList<string>? actual)
+        => actual is not null && SetEquals(expected, actual);
 
     private static string FormatValue(string? value) => value ?? "none";
 

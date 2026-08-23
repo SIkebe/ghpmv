@@ -217,6 +217,21 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Field_sum_persistence_match_is_order_independent()
+        => Assert.True(ViewUiImporter.FieldSumMatches(
+            ["Count", "Fixture Number"],
+            ["Fixture Number", "Count"]));
+
+    [Fact]
+    public void Field_sum_persistence_match_rejects_unavailable_or_incomplete_state()
+    {
+        Assert.False(ViewUiImporter.FieldSumMatches(["Count"], null));
+        Assert.False(ViewUiImporter.FieldSumMatches(
+            ["Count", "Fixture Number"],
+            ["Count"]));
+    }
+
+    [Fact]
     public void Persistence_check_accepts_saved_grouping_slice_and_unordered_field_sums()
     {
         var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
