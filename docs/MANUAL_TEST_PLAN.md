@@ -625,10 +625,11 @@ human-readable category table と `verify-report.json` の両方に `StatusUpdat
 
 Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
 
-1. 初回 browser-assisted verify で `View: Match` を確認します。Group by、Field sum menu の完全な選択集合、空集合は Playwright capture と verifier が機械比較するため、同じ内容を目視しません。group header の数値描画は GitHub が設定と item values から生成する派生 UI であり、通常 E2E の必須判定外です。
-2. `ghpmv setup --fixture-field-sum-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` で Playwright が `View 1` の `Fixture Number 2` だけを解除・保存し、同じ verify command を再実行します。非ゼロ終了と `view 'View 1': field sum mismatch` を確認します。
-3. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence と Field sum の復元を同時に確認します。
-4. 7.4 の browser-assisted verify をもう一度実行し、`View: Match` により `Fixture Number 2` の復元と4 fixture Viewsの一致を機械確認します。
+1. 初回 browser-assisted verify で `View: Match` を確認します。Group by、Field sum menu の完全な選択集合、空集合は Playwright capture と verifier が機械比較するため、同じ内容を目視しません。
+2. Issue #62 の派生描画 checkpoint として、target の `View 1` と `Fixture Roadmap` を reload し、各 group header に設定済みの Field sum label と数値が表示されていることを一度だけ目視確認します。menu 選択は再確認しません。screenshot path または簡潔な observation を 11 の execution record に残します。
+3. `ghpmv setup --fixture-field-sum-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` で Playwright が `View 1` の `Fixture Number 2` だけを解除・保存し、同じ verify command を再実行します。非ゼロ終了と `view 'View 1': field sum mismatch` を確認します。
+4. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence と Field sum の復元を同時に確認します。
+5. 7.4 の browser-assisted verify をもう一度実行し、`View: Match` により `Fixture Number 2` の復元と4 fixture Viewsの一致を機械確認します。
 
 この統合により追加実行は drift verify、修復用の再 import、最終 verify の 3 command だけです。証跡は 11、削除は 10 の既存手順へまとめます。
 

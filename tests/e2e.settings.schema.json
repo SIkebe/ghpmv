@@ -53,8 +53,7 @@
         "sourceTokenOwnerLogin",
         "targetTokenOwnerLogin",
         "sourceRole",
-        "targetRole",
-        "repositoryMigrationsBypass"
+        "targetRole"
       ],
       "properties": {
         "sourceRepository": { "$ref": "#/$defs/repositoryName" },

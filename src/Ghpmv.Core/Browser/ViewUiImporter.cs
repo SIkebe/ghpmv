@@ -1080,6 +1080,20 @@ public sealed class ViewUiImporter
 
     private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
     {
+        var unsavedChanges = Sel.UnsavedChangesStatus(page);
+        try
+        {
+            await unsavedChanges.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 750,
+            }).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            return;
+        }
+
         // D0: the "Save view" button lives inside the View menu overlay. Close any
         // child menu first so clicking View opens the parent configuration menu.
         await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
@@ -1089,7 +1103,7 @@ public sealed class ViewUiImporter
         var save = Sel.SaveViewButton(page);
         try
         {
-            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 5_000 }).ConfigureAwait(false);
+            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 1_000 }).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {

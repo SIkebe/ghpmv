@@ -184,7 +184,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | target host type / web URL / API / uploads URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com`, `https://uploads.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 | browser-e2e field-sum contract | 下記の View / field 名と期待値 |
-| browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `drift-detected`, `repair-match` |
+| browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
 
 `browser-e2e` の既存 round-trip は次の field-sum contract も常に検証する。別 scenario には分岐させず、settings に重複保存しない。
@@ -1434,7 +1434,9 @@ $global:LASTEXITCODE = 0
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
 
-このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。group header の数値描画は、移行された設定と item field values から GitHub が生成する派生 UI であり、通常の ghpmv E2E の必須判定には含めない。GitHub UI 自体の描画回帰を調査する場合だけ、明示的な追加依頼として screenshot または Playwright DOM assertion を行う。
+このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。ただし Issue #62 の acceptance criteria にある派生描画の確認は別 checkpoint として一度だけ実行する。初回 `View: Match` 後に target の `View 1` と `Fixture Roadmap` を reload し、各 group header に設定済みの Field sum label と数値が表示されていることを目視確認する。menu は再確認しない。確認結果は screenshot path または簡潔な observation として execution record に残す。
+
+agent が browser 表示を直接観測できない場合だけ、target Project URL と対象 View 名を示し、一つの対話用質問で `View 1` と `Fixture Roadmap` の両方を確認してもらう。確認できた場合だけ `browser-e2e field-sum status=target-render-observed` として deliberate drift へ進む。表示欠落、値欠落、Cancel / Skipped は成功扱いせず pause する。この checkpoint は GitHub の派生描画確認に限定し、既に機械検証済みの Group by / Field sum selection の自己申告を求めない。
 
 ### Deliberate drift と repair
 
@@ -1591,7 +1593,7 @@ $global:LASTEXITCODE = 0
 
 target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_SUM_REPAIR_MATCH` と command exit code 0 を確認した場合、browser-assisted verify が `View 1` の Field sum 復元と4 fixture Viewの一致を機械確認済みなので、追加の対話用質問を行わず `browser-e2e field-sum status=repair-match` とする。
 
-`browser-e2e` は `repair-match` まで到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
+`browser-e2e` は `target-render-observed` と `repair-match` の両方へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
 ## Troubleshooting
 
