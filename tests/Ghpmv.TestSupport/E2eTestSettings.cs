@@ -346,6 +346,12 @@ public sealed partial record E2eTestSettings
             endpoint.TokenEnvironmentVariable,
             $"{propertyName}.tokenEnvironmentVariable",
             sourceName);
+        if (endpoint.TokenType is not null
+            && endpoint.TokenType is not ("classic" or "fine-grained"))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.tokenType must be classic, fine-grained, or null.");
+        }
     }
 
     private static void ValidateFixture(E2eFixtureDefinition fixture, string propertyName, string sourceName)
@@ -593,6 +599,8 @@ public sealed record E2eEndpointSettings
     public string BrowserStateEnvironmentVariable { get; init; } = "GHPMV_BROWSER_STATE";
 
     public string TokenEnvironmentVariable { get; init; } = "GHPMV_TEST_TOKEN";
+
+    public string? TokenType { get; init; }
 }
 
 public sealed record E2eFixtureSettings

@@ -29,6 +29,7 @@ public class E2eTestSettingsTests
                 "browserProfile": "source",
                 "browserStateEnvironmentVariable": "SOURCE_STATE",
                 "tokenEnvironmentVariable": "SOURCE_TOKEN",
+                "tokenType": "fine-grained",
               },
               "target": {
                 "organization": "target-org",
@@ -40,7 +41,8 @@ public class E2eTestSettingsTests
                 "uploadsBaseUrl": "https://uploads.example.ghe.com",
                 "browserProfile": "target",
                 "browserStateEnvironmentVariable": "TARGET_STATE",
-                "tokenEnvironmentVariable": "TARGET_TOKEN"
+                "tokenEnvironmentVariable": "TARGET_TOKEN",
+                "tokenType": "classic"
               },
               "fixtures": {
                 "integration": {
@@ -89,7 +91,9 @@ public class E2eTestSettingsTests
 
             Assert.Equal("example.ghe.com", new Uri(result.Target.WebBaseUrl).Host);
             Assert.True(result.Source.OrganizationAdministrator);
+            Assert.Equal("fine-grained", result.Source.TokenType);
             Assert.False(result.Target.OrganizationAdministrator);
+            Assert.Equal("classic", result.Target.TokenType);
             Assert.True(result.Source.ProjectsEnabled);
             Assert.False(result.Source.PrivateRepositoryCreationAllowed);
             Assert.Null(result.Target.ProjectsEnabled);
@@ -137,6 +141,24 @@ public class E2eTestSettingsTests
         var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
 
         Assert.Contains("gei.repositoryMigrationsBypass", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_rejects_unknown_endpoint_token_type()
+    {
+        var settings = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                BrowserProfile = "source",
+                TokenType = "oauth-app",
+            },
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
+
+        Assert.Contains("source.tokenType", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

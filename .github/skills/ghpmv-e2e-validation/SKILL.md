@@ -306,15 +306,21 @@ $cleanupQuery = if ('<owner-type>' -eq 'organization') {
 $previousCleanupToken = $env:GH_TOKEN
 try {
     $env:GH_TOKEN = $cleanupToken
-    $cleanupReadBackText = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number>
-    if ($LASTEXITCODE -ne 0) { Stop-ProjectReadBack 'Project cleanup read-back failed.'; return }
+    $cleanupReadBackOutput = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number> 2>&1
+    $cleanupReadBackExitCode = $LASTEXITCODE
 }
 finally {
     if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
 }
-$cleanupReadBack = $cleanupReadBackText | ConvertFrom-Json
-$remainingProject = if ('<owner-type>' -eq 'organization') { $cleanupReadBack.data.organization.projectV2 } else { $cleanupReadBack.data.user.projectV2 }
-if ($null -ne $remainingProject) { Stop-ProjectReadBack 'Project still exists after deletion.'; return }
+$cleanupReadBackText = $cleanupReadBackOutput | Out-String
+$expectedNotFound = $cleanupReadBackExitCode -ne 0 -and
+    $cleanupReadBackText -match ('Could not resolve to a ProjectV2 with the number ' + [regex]::Escape('<project-number>'))
+if (!$expectedNotFound) {
+    if ($cleanupReadBackExitCode -ne 0) { Stop-ProjectReadBack 'Project cleanup read-back failed with an unexpected error.'; return }
+    $cleanupReadBack = $cleanupReadBackText | ConvertFrom-Json
+    $remainingProject = if ('<owner-type>' -eq 'organization') { $cleanupReadBack.data.organization.projectV2 } else { $cleanupReadBack.data.user.projectV2 }
+    if ($null -ne $remainingProject) { Stop-ProjectReadBack 'Project still exists after deletion.'; return }
+}
 Remove-Variable GHPMV_CLEANUP_PROJECT_ID -Scope Global -ErrorAction SilentlyContinue
 Write-Output 'GHPMV_CLEANUP_PROJECT_ABSENT'
 $global:LASTEXITCODE = 0
@@ -459,9 +465,10 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 - Repository migrations ruleset bypass status
 - source / target account の Organization administrator 確認
 - source / target の Projects 有効化と private repository 作成 policy 確認
+- source / target の ghpmv PAT type (`classic` / `fine-grained`)
 - PATおよびbrowser stateを保持する**環境変数名**
 
-自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
+自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、`classic` / `fine-grained` 以外の `tokenType`、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
 
 `browser-e2e`で`users.sourceBrowserLogin`と`users.targetBrowserLogin`が両方とも非空なら、source / target browser accountが同一か別かを質問しない。account identityは正規化した`webBaseUrl` hostとbrowser loginの組で機械判定する。同じhostでloginがcase-insensitiveに一致する場合だけ同一account、hostまたはloginが異なる場合は別accountとして記録する。どちらかのloginが空の場合だけ不足しているloginを一件ずつ質問し、両方確定後に同じ規則で判定する。
 
@@ -471,9 +478,11 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 
 このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。
 
+settings の `source.tokenType` / `target.tokenType` が `classic` または `fine-grained` なら、対応する ghpmv token type として記録し、同じ PAT type を質問しない。`null` または省略時だけ、選択経路で必要になった side を一件ずつ質問する。GEI source / destination credential は引き続き classic 固定であり、endpoint の `tokenType` を GEI credentialへ流用しない。
+
 同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
 
-settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、`gei.repositoryMigrationsBypass`、endpoint の `organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、値が有効なら同じ内容を対話用質問で再確認しない。`false`、`null`、`unconfirmed` が選択経路の必須条件を満たさない場合は不足を示して停止し、確認質問で補完しない。実resource作成前の影響説明、PAT type / permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
+settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、`gei.repositoryMigrationsBypass`、endpoint の `tokenType`、`organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、値が有効なら同じ内容を対話用質問で再確認しない。`false`、`null`、`unconfirmed` が選択経路の必須条件を満たさない場合は不足を示して停止し、確認質問で補完しない。実resource作成前の影響説明、選択済み PAT type に必要な permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
 
 ## Step 1: 確認範囲を決める
 
@@ -618,13 +627,13 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 | `api-only` / `browser-e2e` + `fixture-seed` | `SOURCE_TOKEN`, `TARGET_TOKEN` |
 | `api-only` / `browser-e2e` + `GEI` | `SOURCE_TOKEN`, `TARGET_TOKEN`, `GHPMV_GEI_SOURCE_TOKEN`, `GHPMV_GEI_TARGET_TOKEN` |
 
-`SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用で、ユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
+`SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用である。settings の対応する `tokenType` が有効ならその値を採用して質問せず、未設定の side だけユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
 
 secure input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
 
 `fixture preparation=create`では標準fixtureのcapabilityが既知なので、上記全inventoryを一つのphaseで準備する。`fixture preparation=existing`ではsnapshot内容がexportまで未確定のため、最初のphaseでは`SOURCE_TOKEN`だけを作成・入力する。Step 6の`requirements`結果を確認した後、`TARGET_TOKEN`とGEI tokenのtype / role / permission / URLを確定し、残りのsecure inputを同じterminalで行う。snapshot未確認のままtargetへ過剰なroleやpermissionを要求しない。
 
-**PAT の入力を求める前に、現在のphaseに必要な権限を classic / fine-grained の両方で提示する。** 現在phaseの token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
+**PAT の入力を求める前に、現在のphaseで選択済みの token type に必要な権限を提示する。** token type が未設定で質問が必要な場合は、選択前に classic / fine-grained の差を示す。現在phaseの token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。settings だけで必要な token type がすべて確定した場合は PAT type 質問を挟まず、Step 3 完了後の同じ turn で token plan と作成 URL を表示して readiness question へ進む。最後の token type 回答で URL 生成に必要な値がすべて揃った場合も、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
 
 token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。標準fixtureの`SOURCE_TOKEN` / `TARGET_TOKEN`のroleは`organization administrator`、GEI tokenのroleは別途確認したownerまたはmigrator statusを表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、現在phaseの全PATの準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
 
@@ -1029,15 +1038,15 @@ foreach ($expected in $expectedViews) {
     if ($null -eq $actual.ui) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' is missing browser-captured UI settings."; return }
     $actualGroupBy = @($actual.groupByFields)
     $actualFieldSum = @($actual.ui.fieldSum)
-    $actualFieldSumSorted = [Collections.Generic.List[string]]$actualFieldSum
-    $expectedFieldSumSorted = [Collections.Generic.List[string]]@($expected.FieldSum)
-    $actualFieldSumSorted.Sort([StringComparer]::Ordinal)
-    $expectedFieldSumSorted.Sort([StringComparer]::Ordinal)
-    if ([string]::Join("`0", [string[]]$actualGroupBy) -ne [string]::Join("`0", [string[]]$expected.GroupBy)) {
+    $expectedGroupBy = @($expected.GroupBy)
+    $expectedFieldSum = @($expected.FieldSum)
+    $groupByDifference = @(Compare-Object -ReferenceObject $expectedGroupBy -DifferenceObject $actualGroupBy -CaseSensitive)
+    if ($actualGroupBy.Count -ne $expectedGroupBy.Count -or $groupByDifference.Count -ne 0) {
         Stop-FieldSumSnapshotCheck "View '$($expected.Name)' groupBy mismatch: expected [$($expected.GroupBy -join ', ')], actual [$($actualGroupBy -join ', ')]."
         return
     }
-    if ([string]::Join("`0", [string[]]$actualFieldSumSorted) -ne [string]::Join("`0", [string[]]$expectedFieldSumSorted)) {
+    $fieldSumDifference = @(Compare-Object -ReferenceObject $expectedFieldSum -DifferenceObject $actualFieldSum -CaseSensitive)
+    if ($actualFieldSum.Count -ne $expectedFieldSum.Count -or $fieldSumDifference.Count -ne 0) {
         Stop-FieldSumSnapshotCheck "View '$($expected.Name)' FieldSum mismatch: expected [$($expected.FieldSum -join ', ')], actual [$($actualFieldSum -join ', ')]."
         return
     }

@@ -189,6 +189,11 @@
         "tokenEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
           "description": "Must not match either endpoint's browserStateEnvironmentVariable."
+        },
+        "tokenType": {
+          "type": ["string", "null"],
+          "enum": ["classic", "fine-grained", null],
+          "description": "PAT type used by ghpmv for this endpoint. When null or omitted, the interactive validation workflow asks."
         }
       }
     },

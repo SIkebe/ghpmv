@@ -39,7 +39,10 @@
 
     // fixture 作成と export に使用する PAT を保持する環境変数名です。
     // PAT の値そのものは絶対にこの設定ファイルへ書きません。
-    "tokenEnvironmentVariable": "GHPMV_SOURCE_TOKEN"
+    "tokenEnvironmentVariable": "GHPMV_SOURCE_TOKEN",
+
+    // classic / fine-grained。nullならE2E validation開始時に質問します。
+    "tokenType": null
   },
 
   // import、verify、および一時 Project 作成先となる GitHub 環境です。
@@ -64,7 +67,10 @@
     "uploadsBaseUrl": null,
     "browserProfile": "target",
     "browserStateEnvironmentVariable": "GHPMV_TARGET_BROWSER_STATE",
-    "tokenEnvironmentVariable": "GHPMV_TARGET_TOKEN"
+    "tokenEnvironmentVariable": "GHPMV_TARGET_TOKEN",
+
+    // classic / fine-grained。nullならE2E validation開始時に質問します。
+    "tokenType": null
   },
 
   // 既存の自動テストが参照する共有 fixture です。
