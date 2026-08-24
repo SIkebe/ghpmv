@@ -1598,7 +1598,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories Field,Item,View `
+      --categories Field,View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
@@ -1670,6 +1670,7 @@ data residency の target option と optional mapping は初回 import と同じ
 $repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.json'
 $previousGhpmvToken = $env:GHPMV_TOKEN
 $previousGitHubToken = $env:GITHUB_TOKEN
+$repairNativeExitCode = 0
 try {
     $env:GHPMV_TOKEN = $env:TARGET_TOKEN
     Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
@@ -1680,16 +1681,19 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories Field,View `
+      --categories Field,Item,View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
       --report-json $repairReportPath
+    $repairNativeExitCode = $LASTEXITCODE
 }
 finally {
     if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
     if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
 }
+$global:GHPMV_REPAIR_VERIFY_EXIT_CODE = $repairNativeExitCode
+$global:LASTEXITCODE = 0
 ```
 
 続けて report 自体を検査する。
@@ -1705,14 +1709,25 @@ $repairReport = Get-Content -LiteralPath $repairReportPath -Raw | ConvertFrom-Js
 $repairFieldCategories = @($repairReport.categories | Where-Object category -eq 'Field')
 $repairItemCategories = @($repairReport.categories | Where-Object category -eq 'Item')
 $repairViewCategories = @($repairReport.categories | Where-Object category -eq 'View')
+$repairItemDifferences = @($repairReport.differences | Where-Object category -eq 'Item')
+$expectedDraftMessage = "draft '<escaped-initial-check-draft-title>' exists only in the target"
+$expectedDraftDifferences = @($repairItemDifferences | Where-Object message -eq $expectedDraftMessage)
+$unexpectedItemDifferences = @($repairItemDifferences | Where-Object message -ne $expectedDraftMessage)
 if ($repairFieldCategories.Count -ne 1 -or $repairFieldCategories[0].status -ne 'Match' -or
-    $repairItemCategories.Count -ne 1 -or $repairItemCategories[0].status -ne 'Match' -or
+    $repairItemCategories.Count -ne 1 -or $repairItemCategories[0].status -ne 'Mismatch' -or
     $repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
-    Stop-FieldSumRepairCheck "Repaired Field, Item, and View categories must be Match; Field=$($repairFieldCategories.status -join ', ') Item=$($repairItemCategories.status -join ', ') View=$($repairViewCategories.status -join ', ')."
+    Stop-FieldSumRepairCheck "Repaired Field/View must be Match and Item must contain only the retained draft mismatch; Field=$($repairFieldCategories.status -join ', ') Item=$($repairItemCategories.status -join ', ') View=$($repairViewCategories.status -join ', ')."
     return
 }
-$repairDifferences = @($repairReport.differences | Where-Object category -in @('Field', 'Item', 'View'))
-if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/Item/View still has differences: $($repairDifferences.message -join '; ')"; return }
+$repairDifferences = @($repairReport.differences | Where-Object category -in @('Field', 'View'))
+if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/View still has differences: $($repairDifferences.message -join '; ')"; return }
+if ($global:GHPMV_REPAIR_VERIFY_EXIT_CODE -eq 0 -or
+    $expectedDraftDifferences.Count -ne 1 -or
+    $unexpectedItemDifferences.Count -ne 0) {
+    Stop-FieldSumRepairCheck "Repair Item verification must fail only for the inventoried functional-check draft; actual: $($repairItemDifferences.message -join '; ')"
+    return
+}
+Write-Output 'GHPMV_ITEM_VALUES_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_DEFAULT_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
@@ -1737,7 +1752,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、repair verifyの`Item: Match`で既存item valuesが不変だった場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、`GHPMV_ITEM_VALUES_REPAIR_MATCH`が既知のinventory draft以外にItem差分がないことを証明した場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
 
 `browser-e2e` は field-defaultの`new-draft-observed` / `repair-match` と field-sumの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
