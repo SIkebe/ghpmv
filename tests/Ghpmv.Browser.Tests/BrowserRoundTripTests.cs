@@ -201,11 +201,12 @@ public class BrowserRoundTripTests
                 Assert.Empty(targetViewExporter.Warnings);
                 Assert.Empty(targetWorkflowExporter.Warnings);
                 Assert.Empty(targetCollaboratorExporter.Warnings);
-                Assert.DoesNotContain(matchReport.Differences, difference =>
-                    difference.Category is VerifyCategories.Field
-                        or VerifyCategories.View
-                        or VerifyCategories.Workflow
-                        or VerifyCategories.Collaborator);
+                Assert.Equal(
+                    VerifyCategories.All,
+                    matchReport.Categories.Select(category => category.Category));
+                Assert.All(
+                    matchReport.Categories,
+                    category => Assert.Equal(VerifyStatus.Match, category.Status));
                 var target = Assert.IsType<ProjectSnapshot>(reExported);
                 AssertRoundTrippedViews(snapshot, target);
                 AssertRoundTrippedWorkflows(snapshot, target);
