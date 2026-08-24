@@ -5,7 +5,7 @@ using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Browser;
 
-/// <summary>Functionally verifies fixture defaults by creating and removing one target draft.</summary>
+/// <summary>Functionally verifies fixture defaults by creating a target draft.</summary>
 public sealed class FieldDefaultFixtureObserver
 {
     private readonly GitHubGraphQLClient _client;
@@ -18,14 +18,26 @@ public sealed class FieldDefaultFixtureObserver
 
     public Action<string>? OnProgress { get; set; }
 
-    public async Task ValidateStandardFixtureAsync(
+    public Task<FieldDefaultFixtureCheckResult> ValidateStandardFixtureAsync(
         string organization,
         int projectNumber,
+        CancellationToken cancellationToken = default)
+        => ValidateStandardFixtureAsync(
+            organization,
+            projectNumber,
+            cleanupDraft: true,
+            cancellationToken);
+
+    public async Task<FieldDefaultFixtureCheckResult> ValidateStandardFixtureAsync(
+        string organization,
+        int projectNumber,
+        bool cleanupDraft,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(organization);
         var expected = FixtureUiSnapshotFactory.Create();
         var title = $"ghpmv-default-check-{Guid.NewGuid():N}";
+        OnProgress?.Invoke($"Creating field-default check draft '{title}'...");
         var projectId = await ResolveProjectIdAsync(organization, projectNumber, cancellationToken)
             .ConfigureAwait(false);
         string? itemId = null;
@@ -55,6 +67,7 @@ public sealed class FieldDefaultFixtureObserver
                 .GetProperty("id")
                 .GetString()
                 ?? throw new GitHubGraphQLException("The field-default check draft returned no item id.");
+            OnProgress?.Invoke($"Field-default check draft created: id={itemId} title='{title}'");
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
             while (true)
@@ -70,7 +83,11 @@ public sealed class FieldDefaultFixtureObserver
                     ValidateDraftDefaults(expected.Fields, draft);
                     OnProgress?.Invoke(
                         $"Fixture field defaults verified on new draft '{title}': fields={expected.Fields.Count(field => field.DefaultValue is not null)}");
-                    return;
+                    return new FieldDefaultFixtureCheckResult
+                    {
+                        ItemId = itemId,
+                        Title = title,
+                    };
                 }
 
                 if (DateTimeOffset.UtcNow >= deadline)
@@ -84,24 +101,51 @@ public sealed class FieldDefaultFixtureObserver
         }
         finally
         {
-            var cleanupIds = itemId is not null
-                ? [itemId]
-                : await FindMatchingDraftItemIdsAsync(projectId, title, CancellationToken.None)
-                    .ConfigureAwait(false);
-            foreach (var cleanupId in cleanupIds)
+            if (cleanupDraft)
             {
-                await DeleteAndConfirmDraftAsync(projectId, cleanupId, title).ConfigureAwait(false);
-            }
+                var cleanupIds = itemId is not null
+                    ? [itemId]
+                    : await FindMatchingDraftItemIdsAsync(projectId, title, CancellationToken.None)
+                        .ConfigureAwait(false);
+                foreach (var cleanupId in cleanupIds)
+                {
+                    await DeleteAndConfirmDraftAsync(projectId, cleanupId, title).ConfigureAwait(false);
+                }
 
-            var remaining = await FindMatchingDraftItemIdsAsync(
-                projectId,
-                title,
-                CancellationToken.None).ConfigureAwait(false);
-            if (remaining.Count > 0)
-            {
-                ThrowCleanupFailure(title);
+                var remaining = await FindMatchingDraftItemIdsAsync(
+                    projectId,
+                    title,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (remaining.Count > 0)
+                {
+                    ThrowCleanupFailure(title);
+                }
             }
         }
+    }
+
+    public async Task DeleteDraftAsync(
+        string organization,
+        int projectNumber,
+        string itemId,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(organization);
+        ArgumentException.ThrowIfNullOrWhiteSpace(itemId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        var projectId = await ResolveProjectIdAsync(organization, projectNumber, cancellationToken)
+            .ConfigureAwait(false);
+        var matchingIds = await FindMatchingDraftItemIdsAsync(projectId, title, cancellationToken)
+            .ConfigureAwait(false);
+        if (!matchingIds.Contains(itemId, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Field-default check draft identity mismatch: item '{itemId}' does not have title '{title}'.");
+        }
+
+        await DeleteAndConfirmDraftAsync(projectId, itemId, title).ConfigureAwait(false);
+        OnProgress?.Invoke($"Field-default check draft deleted: id={itemId} title='{title}'");
     }
 
     internal static void ValidateDraftDefaults(
@@ -248,4 +292,11 @@ public sealed class FieldDefaultFixtureObserver
     private static void ThrowCleanupFailure(string title)
         => throw new InvalidOperationException(
             $"The field-default check draft '{title}' still exists after cleanup.");
+}
+
+public sealed record FieldDefaultFixtureCheckResult
+{
+    public required string ItemId { get; init; }
+
+    public required string Title { get; init; }
 }

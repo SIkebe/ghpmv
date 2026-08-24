@@ -163,15 +163,12 @@ public sealed class FieldDefaultUiImporter
 
         var save = Sel.SaveFieldSettingsButton(page);
         await save.WaitForAsync().ConfigureAwait(false);
-        if (await save.IsEnabledAsync().ConfigureAwait(false))
+        await save.ClickAsync().ConfigureAwait(false);
+        await Sel.FieldDefaultControl(page).WaitForAsync(new()
         {
-            await save.ClickAsync().ConfigureAwait(false);
-            await Sel.FieldDefaultControl(page).WaitForAsync(new()
-            {
-                State = WaitForSelectorState.Hidden,
-                Timeout = 10_000,
-            }).ConfigureAwait(false);
-        }
+            State = WaitForSelectorState.Hidden,
+            Timeout = 10_000,
+        }).ConfigureAwait(false);
 
         await FieldDefaultUiExporter.OpenFieldSettingsAsync(
             page,

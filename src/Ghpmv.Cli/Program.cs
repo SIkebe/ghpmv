@@ -1123,6 +1123,14 @@ var fixtureFieldDefaultDriftOption = new Option<bool>("--fixture-field-default-d
 {
     Description = "Apply deliberate Text, Number, and Single-select default drift to an existing fixture Project.",
 };
+var fixtureFieldDefaultCleanupItemOption = new Option<string?>("--fixture-field-default-cleanup-item")
+{
+    Description = "Delete this field-default check draft item after explicit cleanup consent.",
+};
+var fixtureFieldDefaultCleanupTitleOption = new Option<string?>("--fixture-field-default-cleanup-title")
+{
+    Description = "Title of the field-default check draft selected for cleanup.",
+};
 var fixtureOption = new Option<bool>("--fixture")
 {
     Description = "Create the standard API-backed test fixture repository/project.",
@@ -1173,6 +1181,8 @@ setupCommand.Options.Add(fixtureFieldSumDriftOption);
 setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultDriftOption);
+setupCommand.Options.Add(fixtureFieldDefaultCleanupItemOption);
+setupCommand.Options.Add(fixtureFieldDefaultCleanupTitleOption);
 setupCommand.Options.Add(fixtureOrgOption);
 setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
@@ -1207,7 +1217,8 @@ setupCommand.Validators.Add(result =>
         && !result.GetValue(fixtureFieldSumDriftOption)
         && !result.GetValue(fixtureFieldSumRenderCheckOption)
         && !result.GetValue(fixtureFieldDefaultCheckOption)
-        && !result.GetValue(fixtureFieldDefaultDriftOption))
+        && !result.GetValue(fixtureFieldDefaultDriftOption)
+        && result.GetValue(fixtureFieldDefaultCleanupItemOption) is null)
     {
         return;
     }
@@ -1215,7 +1226,8 @@ setupCommand.Validators.Add(result =>
     if ((result.GetValue(fixtureFieldSumDriftOption)
             || result.GetValue(fixtureFieldSumRenderCheckOption)
             || result.GetValue(fixtureFieldDefaultCheckOption)
-            || result.GetValue(fixtureFieldDefaultDriftOption))
+            || result.GetValue(fixtureFieldDefaultDriftOption)
+            || result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null)
         && (result.GetValue(fixtureOption) || result.GetValue(fixtureUiOption)))
     {
         result.AddError("Fixture checks and drift operations cannot be combined with --fixture or --fixture-ui.");
@@ -1227,10 +1239,17 @@ setupCommand.Validators.Add(result =>
         result.GetValue(fixtureFieldSumRenderCheckOption),
         result.GetValue(fixtureFieldDefaultCheckOption),
         result.GetValue(fixtureFieldDefaultDriftOption),
+        result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null,
     }.Count(enabled => enabled);
     if (fixtureBrowserOperationCount > 1)
     {
         result.AddError("Only one fixture check or drift operation can run at a time.");
+    }
+
+    if ((result.GetValue(fixtureFieldDefaultCleanupItemOption) is null)
+        != (result.GetValue(fixtureFieldDefaultCleanupTitleOption) is null))
+    {
+        result.AddError("--fixture-field-default-cleanup-item and --fixture-field-default-cleanup-title must be provided together.");
     }
 
     if (result.GetResult(baseUrlOption) is { Implicit: false }
@@ -1258,7 +1277,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureFieldSumDriftOption)
         && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
-        && !parseResult.GetValue(fixtureFieldDefaultDriftOption))
+        && !parseResult.GetValue(fixtureFieldDefaultDriftOption)
+        && parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is null)
     {
         Console.Error.WriteLine("Nothing to install or check. Use --browsers, --fixture, --fixture-ui, or a fixture check/drift option.");
         return 1;
@@ -1274,6 +1294,47 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         if (exitCode != 0)
         {
             return exitCode;
+        }
+    }
+
+    if (parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is { } cleanupItemId)
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var observer = new FieldDefaultFixtureObserver(client)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await observer.DeleteDraftAsync(
+                org,
+                projectNumber,
+                cleanupItemId,
+                parseResult.GetValue(fixtureFieldDefaultCleanupTitleOption)!,
+                cancellationToken);
+            Console.Error.WriteLine(
+                $"Fixture field-default draft cleanup verified: project=#{projectNumber} item={cleanupItemId}");
+            return 0;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
         }
     }
 
@@ -1396,9 +1457,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             {
                 OnProgress = Console.Error.WriteLine,
             };
-            await observer.ValidateStandardFixtureAsync(org, projectNumber, cancellationToken);
+            var result = await observer.ValidateStandardFixtureAsync(
+                org,
+                projectNumber,
+                cleanupDraft: false,
+                cancellationToken);
             Console.Error.WriteLine(
-                $"Fixture field defaults functionally verified: project=#{projectNumber} fields=4");
+                $"Fixture field defaults functionally verified: project=#{projectNumber} fields=4 draft={result.ItemId} title='{result.Title}' cleanup=pending");
             return 0;
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)

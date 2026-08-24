@@ -230,7 +230,7 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 | Step 7 fixture seed | target seed Project（title / number / URL）と target repository（owner/name / URL） |
 | Step 9 import | imported target Project（title / number / URL） |
 
-Project 内の Views / Workflows と field-default functional check の disposable draft は親 Project の nested resource として同じ entry に記録する。check draft は command 内の `finally` deletion後に `deleted` とする。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
+Project 内の Views / Workflows と field-default functional check の disposable draft は親 Project の nested resource として同じ entry に記録する。check commandが出力するdraft item ID / titleを`created`として保持し、明示的cleanup同意前には削除しない。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も`Creating field-default check draft` / `Field-default check draft created`出力から部分作成を確認し、作成済み resource があれば inventory へ追加する。
 
 Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
 
@@ -239,6 +239,30 @@ Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だ�
 3. `一時 resource をすべて残し、削除せず URL を完了報告へ記録する`
 
 同意前に delete command を送らない。削除を選んだ場合は選択範囲を reverse creation order で一 resource ずつ削除し、各 command の sentinel / exit code と read-back を確認して `deleted` へ更新する。削除対象の title / owner / name / number が inventory と一致しなければ停止する。残す entry は `retained` とし、後から削除できるよう URL を報告する。
+
+### Field-default check draft cleanup command
+
+cleanup同意後、Projectより先に、inventory内の各check draftをreverse creation orderで削除する。placeholderはcheck commandが出力した実item ID / titleを使用する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-default-cleanup-item '<draft-item-id>' `
+      --fixture-field-default-cleanup-title '<escaped-draft-title>' `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number>
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field-default draft cleanup verified`、command exit code 0、observerのabsence read-backを確認した場合だけdraft entryを`deleted`へ更新する。cleanupを拒否した場合はdraftを`retained`としてitem ID / title /親Project URLを完了報告へ残す。
 
 ### Project cleanup commands
 
@@ -1457,7 +1481,7 @@ $global:LASTEXITCODE = 0
 
 `GHPMV_BROWSER_FIELD_MATCH`、`GHPMV_BROWSER_VIEW_MATCH`、command exit code 0 を確認した場合だけ field-default status=`target-field-match`、field-sum status=`target-view-match` とする。Field / View の warning、`PartialMatch`、`NotVerified` は、overall status が許容可能でも `browser-e2e` の成功にしない。
 
-続けて同じ target に disposable draft を一件作成し、GitHub が4 defaultsを自動入力することを API read-back で確認する。command は成功/失敗にかかわらず draftを `finally` cleanupするため、target Project の nested resource inventory に一時 draftとして記録し、完了後 `deleted` に更新する。
+続けて同じ target に disposable draft を一件作成し、GitHub が4 defaultsを自動入力することを API read-back で確認する。command出力のdraft item ID / titleをtarget Projectのnested resource inventoryへ`created`として追加し、cleanup同意前には削除しない。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1476,7 +1500,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4` と exit code 0 を確認した場合だけ field-default status=`new-draft-observed` とする。初回 verify の `Item: Match` と合わせ、import 済み既存 item values が変化せず、新規 draftだけに defaults が入ったことを合格条件とする。
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、draftをinventoryへ追加した場合だけ field-default status=`new-draft-observed` とする。初回 verify の `Item: Match` と合わせ、import 済み既存 item values が変化せず、新規 draftだけに defaults が入ったことを合格条件とする。
 
 ### Browser field-sum machine check
 

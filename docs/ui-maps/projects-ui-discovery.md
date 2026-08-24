@@ -49,7 +49,7 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 4. Single-select は option node ID を snapshot に保存せず、target option name へ再解決する。
 5. import は source item の作成・値適用後に default を保存する。既存 item values は変更せず、新規 item のみ GitHub が自動入力する。
 6. 保存後は settings を再度開いて意味的に read-back し、不一致を warning にする。
-7. `setup --fixture-field-default-check` は disposable draft を API で作成し、GraphQL read-back で4 defaultsを確認して draftを削除する。
+7. `setup --fixture-field-default-check` は disposable draft を API で作成し、GraphQL read-back で4 defaultsを確認して item ID / title を返す。draft は resource inventory に追加し、明示的なcleanup同意後に `--fixture-field-default-cleanup-item` / `--fixture-field-default-cleanup-title` で削除する。
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
