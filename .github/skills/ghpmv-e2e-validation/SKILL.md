@@ -1668,6 +1668,7 @@ data residency の target option と optional mapping は初回 import と同じ
 
 ```powershell
 $repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.json'
+Remove-Item -LiteralPath $repairReportPath -ErrorAction SilentlyContinue
 $previousGhpmvToken = $env:GHPMV_TOKEN
 $previousGitHubToken = $env:GITHUB_TOKEN
 $repairNativeExitCode = 0

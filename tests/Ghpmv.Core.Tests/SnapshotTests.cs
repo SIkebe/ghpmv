@@ -285,6 +285,31 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void Fields_without_default_value_deserialize_as_uncaptured()
+    {
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [
+                { "name": "Text", "dataType": "TEXT" },
+                { "name": "Number", "dataType": "NUMBER" },
+                { "name": "Select", "dataType": "SINGLE_SELECT", "options": [] }
+              ],
+              "views": [],
+              "workflows": [],
+              "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.All(restored.Fields, field => Assert.Null(field.DefaultValue));
+    }
+
+    [Fact]
     public void Deserialize_snapshot_without_collaborators_and_linked_repositories_yields_null()
     {
         // Snapshots written before the collaborator/linked-repository fields stay loadable
