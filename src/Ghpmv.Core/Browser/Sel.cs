@@ -98,7 +98,9 @@ internal static class Sel
     // === Project field defaults (implementation contract 2026-08-24) ===
 
     private static readonly Regex FieldDefaultControlName = new("^Default value($|:)");
-    private static readonly Regex ClearFieldDefaultName = new("^(Clear|Remove)( selection| default value)?$", RegexOptions.IgnoreCase);
+    private static readonly Regex ClearFieldDefaultName = new(
+        "^(Clear selection|Clear default value|Remove default value)$",
+        RegexOptions.IgnoreCase);
 
     /// <summary>A field entry on the Project settings page.</summary>
     public static ILocator FieldSettingsEntry(IPage page, string fieldName)
@@ -118,7 +120,6 @@ internal static class Sel
     /// <summary>Clear action exposed by the single-select default picker.</summary>
     public static ILocator ClearFieldDefaultButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = ClearFieldDefaultName })
-            .Or(page.GetByRole(AriaRole.Menuitem, new() { NameRegex = ClearFieldDefaultName }))
             .First;
 
     /// <summary>An option in the open single-select default picker.</summary>

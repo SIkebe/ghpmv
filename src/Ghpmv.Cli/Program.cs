@@ -770,8 +770,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
         if (enableBrowserAutomation)
         {
-            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"field-defaults: imported={fieldDefaultsImported} warnings={fieldDefaultWarnings}"));
+            Console.WriteLine(FieldDefaultUiImporter.FormatSummary(
+                fieldDefaultsImported,
+                fieldDefaultWarnings));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }

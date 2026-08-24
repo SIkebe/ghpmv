@@ -142,6 +142,17 @@ public class FieldDefaultUiLogicTests
             skippedItemCount: 1));
     }
 
+    [Theory]
+    [InlineData(4, 0, "field-defaults: imported=4 warnings=0")]
+    [InlineData(0, 1, "field-defaults: imported=0 warnings=1")]
+    public void FormatSummary_preserves_machine_readable_counts(
+        int importedCount,
+        int warningCount,
+        string expected)
+        => Assert.Equal(
+            expected,
+            FieldDefaultUiImporter.FormatSummary(importedCount, warningCount));
+
     [Fact]
     public void Cleared_default_snapshot_only_neutralizes_captured_defaults()
     {

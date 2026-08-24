@@ -30,6 +30,11 @@ public sealed class FieldDefaultUiImporter
             && snapshot.Fields.Any(field => field.DefaultValue is not null);
     }
 
+    public static string FormatSummary(int importedCount, int warningCount)
+        => string.Create(
+            CultureInfo.InvariantCulture,
+            $"field-defaults: imported={importedCount} warnings={warningCount}");
+
     public static ProjectSnapshot CreateClearedDefaultsSnapshot(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
