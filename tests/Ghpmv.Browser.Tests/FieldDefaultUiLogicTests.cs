@@ -44,6 +44,17 @@ public class FieldDefaultUiLogicTests
                 new HashSet<string>(["Default value: Beta"], StringComparer.Ordinal)));
 
     [Fact]
+    public void NormalizeSingleSelectValue_rejects_unknown_control_text()
+    {
+        var exception = Assert.Throws<FormatException>(() =>
+            FieldDefaultUiExporter.NormalizeSingleSelectValue(
+                "Loading options...",
+                new HashSet<string>(["Beta"], StringComparer.Ordinal)));
+
+        Assert.Contains("did not match", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Validate_accepts_single_select_default_by_option_name_regardless_of_id()
     {
         var field = new FieldSnapshot

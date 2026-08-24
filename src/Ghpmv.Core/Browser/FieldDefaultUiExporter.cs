@@ -169,13 +169,17 @@ public sealed class FieldDefaultUiExporter
             value = labelledValue;
         }
 
-        return value is null
+        if (value is null
             || value.Equals("Select a default value", StringComparison.OrdinalIgnoreCase)
             || value.Equals("Choose a default value", StringComparison.OrdinalIgnoreCase)
             || value.Equals("No default value", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("None", StringComparison.OrdinalIgnoreCase)
-                ? null
-                : value;
+            || value.Equals("None", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        throw new FormatException(
+            $"Single-select default control value '{value}' did not match any field option.");
     }
 
     private static string? EmptyToNull(string? value)

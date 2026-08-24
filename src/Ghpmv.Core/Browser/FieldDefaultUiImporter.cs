@@ -220,18 +220,26 @@ public sealed class FieldDefaultUiImporter
         }
 
         var clear = Sel.ClearFieldDefaultButton(page);
-        if (await clear.CountAsync().ConfigureAwait(false) > 0)
+        try
         {
+            await clear.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 1_000,
+            }).ConfigureAwait(false);
             await clear.ClickAsync().ConfigureAwait(false);
             return;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            // Some picker variants expose only an editable combobox.
         }
 
         var tagName = await control.EvaluateAsync<string>("element => element.tagName.toLowerCase()")
             .ConfigureAwait(false);
         if (tagName == "input")
         {
-            await control.PressAsync("Control+A").ConfigureAwait(false);
-            await control.PressAsync("Backspace").ConfigureAwait(false);
+            await control.FillAsync(string.Empty).ConfigureAwait(false);
             await control.PressAsync("Escape").ConfigureAwait(false);
             return;
         }
