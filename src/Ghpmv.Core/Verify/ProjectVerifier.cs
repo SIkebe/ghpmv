@@ -254,9 +254,17 @@ public sealed class ProjectVerifier
                 target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
                 differences);
         }
+        var statusUpdatesExplicitlyRequested = includedCategories?.Contains(VerifyCategories.StatusUpdate) == true;
         if (Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
-            CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
+            if (source.StatusUpdates is null && statusUpdatesExplicitlyRequested)
+            {
+                notVerified.Add(VerifyCategories.StatusUpdate);
+            }
+            else
+            {
+                CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
+            }
         }
         if (Includes(includedCategories, VerifyCategories.Collaborator))
         {
@@ -279,7 +287,8 @@ public sealed class ProjectVerifier
         AddCategoryIfIncluded(categories, VerifyCategories.Workflow, includedCategories, differences, notVerified);
         AddCategoryIfIncluded(categories, VerifyCategories.Collaborator, includedCategories, differences, notVerified);
         AddCategoryIfIncluded(categories, VerifyCategories.LinkedRepository, includedCategories, differences, notVerified);
-        if (source.StatusUpdates is not null && Includes(includedCategories, VerifyCategories.StatusUpdate))
+        if ((source.StatusUpdates is not null || statusUpdatesExplicitlyRequested)
+            && Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
             categories.Add(CategoryResult(VerifyCategories.StatusUpdate, differences, notVerified));
         }
@@ -356,6 +365,10 @@ public sealed class ProjectVerifier
         if (Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
             sections |= ProjectExportSections.StatusUpdates;
+        }
+        if (Includes(includedCategories, VerifyCategories.View))
+        {
+            sections |= ProjectExportSections.Views;
         }
         if (Includes(includedCategories, VerifyCategories.TeamLink))
         {

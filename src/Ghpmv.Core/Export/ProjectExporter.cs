@@ -13,7 +13,8 @@ public enum ProjectExportSections
     Items = 1 << 1,
     StatusUpdates = 1 << 2,
     LinkedTeams = 1 << 3,
-    All = Fields | Items | StatusUpdates | LinkedTeams,
+    Views = 1 << 4,
+    All = Fields | Items | StatusUpdates | LinkedTeams | Views,
 }
 
 /// <summary>
@@ -73,11 +74,13 @@ public sealed class ProjectExporter
         }
 
         var projectInfo = ParseProjectInfo(project);
-        var views = await FetchViewsAsync(
-            project.GetProperty("views"),
-            ownerLogin,
-            projectNumber,
-            cancellationToken).ConfigureAwait(false);
+        var views = Sections.HasFlag(ProjectExportSections.Views)
+            ? await FetchViewsAsync(
+                project.GetProperty("views"),
+                ownerLogin,
+                projectNumber,
+                cancellationToken).ConfigureAwait(false)
+            : [];
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
         OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows.");

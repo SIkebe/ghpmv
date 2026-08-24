@@ -1563,6 +1563,24 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Explicit_status_update_scope_marks_legacy_snapshot_not_verified()
+    {
+        var source = BuildSnapshot();
+        Assert.Null(source.StatusUpdates);
+
+        var report = ProjectVerifier.Compare(
+            source,
+            BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() },
+            new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.StatusUpdate });
+
+        var category = Assert.Single(report.Categories);
+        Assert.Equal(VerifyCategories.StatusUpdate, category.Category);
+        Assert.Equal(VerifyStatus.NotVerified, category.Status);
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.True(report.ShouldFail(failOnWarning: false));
+    }
+
+    [Fact]
     public void Status_update_category_is_present_and_matches_when_sequences_align()
     {
         var source = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };

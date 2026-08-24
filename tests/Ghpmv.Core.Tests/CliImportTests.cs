@@ -110,6 +110,31 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Verify_explicit_status_update_category_fails_for_legacy_snapshot()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-verify-legacy-status-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            VerifyProjectResponse,
+            VerifyStatusUpdatesResponse);
+        try
+        {
+            var result = await RunVerifyCliAsync(directory, server, "--categories", "StatusUpdate");
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Equal(2, server.RequestBodies.Count);
+            Assert.Contains("StatusUpdate: NotVerified", result.Output, StringComparison.Ordinal);
+            Assert.Contains("1 not verified", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Conflict_skip_with_browser_automation_does_not_run_downstream_importers()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
