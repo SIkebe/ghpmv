@@ -58,6 +58,7 @@ public class ViewUiLogicTests
         => Assert.Equal(expected, ViewUiImporter.HasSortDirection(menuText, directionName));
 
     [Theory]
+    [InlineData("Sort by: Fixture Number (ascending)", "Fixture Number", "ASC", true)]
     [InlineData("Sort by: Fixture Number, ascending", "Fixture Number", "ASC", true)]
     [InlineData("Sort by:\nFixture Number\nDescending", "Fixture Number", "DESC", true)]
     [InlineData("Sort by: Fixture Number 2, ascending", "Fixture Number", "ASC", false)]

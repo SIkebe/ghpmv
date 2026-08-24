@@ -976,7 +976,7 @@ public sealed class ViewUiImporter
         var fieldValue = value?
             .Replace("Ascending", string.Empty, StringComparison.OrdinalIgnoreCase)
             .Replace("Descending", string.Empty, StringComparison.OrdinalIgnoreCase)
-            .Trim(' ', ',', '\r', '\n');
+            .Trim(' ', ',', '(', ')', '\r', '\n');
         return value is not null
             && string.Equals(fieldValue, sort.Field, StringComparison.Ordinal)
             && HasSortDirection(menuText, directionName);
