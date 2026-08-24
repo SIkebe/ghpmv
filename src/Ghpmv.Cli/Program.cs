@@ -631,23 +631,33 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
-            var fieldDefaultImporter = new FieldDefaultUiImporter(session)
+            if (FieldDefaultUiImporter.ShouldDefer(snapshot, itemResult.Skipped))
             {
-                OnProgress = Console.Error.WriteLine,
-            };
-            await fieldDefaultImporter.ImportAsync(
-                snapshot,
-                org,
-                ownerType,
-                result.ProjectNumber,
-                cancellationToken);
-            foreach (var warning in fieldDefaultImporter.Warnings)
+                fieldDefaultWarnings = 1;
+                Console.Error.WriteLine(
+                    $"warning: field defaults were deferred because {itemResult.Skipped} source item(s) were skipped; fix mappings and rerun import before defaults are applied");
+            }
+            else
             {
-                Console.Error.WriteLine($"warning: {warning}");
+                var fieldDefaultImporter = new FieldDefaultUiImporter(session)
+                {
+                    OnProgress = Console.Error.WriteLine,
+                };
+                await fieldDefaultImporter.ImportAsync(
+                    snapshot,
+                    org,
+                    ownerType,
+                    result.ProjectNumber,
+                    cancellationToken);
+                foreach (var warning in fieldDefaultImporter.Warnings)
+                {
+                    Console.Error.WriteLine($"warning: {warning}");
+                }
+
+                fieldDefaultWarnings = fieldDefaultImporter.Warnings.Count;
+                fieldDefaultsImported = fieldDefaultImporter.AppliedCount;
             }
 
-            fieldDefaultWarnings = fieldDefaultImporter.Warnings.Count;
-            fieldDefaultsImported = fieldDefaultImporter.AppliedCount;
             await PersistUnresolvedWarningsAsync(
                 importer.Warnings.Count + fieldDefaultWarnings,
                 itemResult.Warnings.Count,

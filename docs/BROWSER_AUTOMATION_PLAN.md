@@ -62,7 +62,7 @@ import は source item の作成・値適用後に defaults を設定し、既�
 | Y-axis aggregation / Number field | **UI** | **UI** | Count 以外は Number field 必須 |
 | historical data points | 対象外 | 対象外 | target item history から生成。設定だけを移行・verify |
 
-つまり完全移行には **export/import の両側で Playwright が必要**(field defaults、group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細、Insights chart 設定)。API-only import でも field/options と View の基本構成は作成されるが、captured defaults は target 上で保持されるだけで適用されない。
+つまり完全移行には **export/import の両側で Playwright が必要**(field defaults、group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細、Insights chart 設定)。API-only import でも field/options と View の基本構成は作成されるが、captured defaults は適用されない。既存targetのdefaultは通常維持されるものの、Single-select option再構成でdefault option自体が削除される場合は保持できない。
 
 ---
 

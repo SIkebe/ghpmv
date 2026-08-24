@@ -651,6 +651,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 | 症状 | よくある原因 | 対応 |
 |---|---|---|
 | Issue / PR item が skip | `repository-mappings.csv` 不足、target repo 不可視、Issue / PR number 不一致 | mapping、token visibility、GEI 結果を確認。 |
+| `field defaults were deferred because ... item(s) were skipped` | skipped item が後続runで作成された際にGitHub defaultを誤って継承する危険がある | mappingを修正して同じsnapshot/targetへ再importし、itemsがskipなしになったrunでdefaultsを適用する。 |
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
 | Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | `The browser session is not signed in to 'github.com'` | 保存済み target browser session の失効、または profile 間違い | `ghpmv login --profile target` を再実行し、target token と同じユーザーでログイン。 |

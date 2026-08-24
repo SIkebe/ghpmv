@@ -23,6 +23,13 @@ public sealed class FieldDefaultUiImporter
 
     public int AppliedCount { get; private set; }
 
+    public static bool ShouldDefer(ProjectSnapshot snapshot, int skippedItemCount)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return skippedItemCount > 0
+            && snapshot.Fields.Any(field => field.DefaultValue is not null);
+    }
+
     public async Task ImportAsync(
         ProjectSnapshot snapshot,
         string ownerLogin,

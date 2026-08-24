@@ -1385,7 +1385,7 @@ finally {
 
 target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`github.com-to-ghec-dr` ではこの target command にだけ両方を付ける。
 
-生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project title / number / URL を記録し、import が新規 Project を作成した場合は resource inventory に `created` として追加する。既存 Project を更新した場合は `pre-existing` として記録し cleanup 対象にしない。`browser-e2e` では `field-defaults: imported=4 warnings=0` を要求し、Field default / View / Workflow browser warning が一つでもあれば成功扱いせず、その field/property/View 名を示して停止する。
+生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project title / number / URL を記録し、import が新規 Project を作成した場合は resource inventory に `created` として追加する。既存 Project を更新した場合は `pre-existing` として記録し cleanup 対象にしない。`browser-e2e` ではitemsの`skipped=0`と`field-defaults: imported=4 warnings=0`を要求する。itemがskipされたrunではdefaultsが意図的にdeferされるため、mappingを修正して同じsnapshot/targetへ再importするまで先へ進まない。Field default / View / Workflow browser warning が一つでもあれば成功扱いせず、その field/property/View 名を示して停止する。
 
 ## Step 10: Verify
 

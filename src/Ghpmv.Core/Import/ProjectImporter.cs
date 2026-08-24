@@ -838,7 +838,7 @@ public sealed class ProjectImporter
             && snapshot.Fields.Any(field => field.DefaultValue is not null))
         {
             Warn(
-                "captured field defaults require browser automation and were not applied; target defaults were preserved");
+                "captured field defaults require browser automation and were not applied; existing target defaults are not guaranteed when field options are reconciled");
         }
         ImportCapabilityPreflight.ValidateProjectCapabilities(
             ImportCapabilityAnalyzer.Analyze(snapshot, BrowserViewEnrichmentPlanned, OwnerType),

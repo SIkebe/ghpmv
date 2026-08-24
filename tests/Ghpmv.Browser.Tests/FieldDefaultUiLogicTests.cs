@@ -116,6 +116,21 @@ public class FieldDefaultUiLogicTests
             DataType = "SINGLE_SELECT",
         }));
 
+    [Fact]
+    public void Field_defaults_are_deferred_when_any_source_item_was_skipped()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create();
+
+        Assert.True(FieldDefaultUiImporter.ShouldDefer(snapshot, skippedItemCount: 1));
+        Assert.False(FieldDefaultUiImporter.ShouldDefer(snapshot, skippedItemCount: 0));
+        Assert.False(FieldDefaultUiImporter.ShouldDefer(
+            snapshot with
+            {
+                Fields = snapshot.Fields.Select(field => field with { DefaultValue = null }).ToList(),
+            },
+            skippedItemCount: 1));
+    }
+
     [Theory]
     [InlineData("TEXT")]
     [InlineData("NUMBER")]
