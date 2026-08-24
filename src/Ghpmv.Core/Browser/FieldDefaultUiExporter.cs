@@ -63,7 +63,7 @@ public sealed class FieldDefaultUiExporter
                     projectNumber,
                     field.Name,
                     cancellationToken).ConfigureAwait(false);
-                var defaultValue = await ReadDefaultValueAsync(page, field.DataType).ConfigureAwait(false);
+                var defaultValue = await ReadDefaultValueAsync(page, field).ConfigureAwait(false);
                 fields.Add(field with { DefaultValue = defaultValue });
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException or FormatException)
@@ -105,8 +105,9 @@ public sealed class FieldDefaultUiExporter
 
     internal static async Task<FieldDefaultValueSnapshot> ReadDefaultValueAsync(
         IPage page,
-        string dataType)
+        FieldSnapshot field)
     {
+        ArgumentNullException.ThrowIfNull(field);
         var control = Sel.FieldDefaultControl(page);
         var tagName = await control.EvaluateAsync<string>("element => element.tagName.toLowerCase()")
             .ConfigureAwait(false);
@@ -114,7 +115,7 @@ public sealed class FieldDefaultUiExporter
             ? await control.InputValueAsync().ConfigureAwait(false)
             : await control.InnerTextAsync().ConfigureAwait(false);
 
-        return dataType switch
+        return field.DataType switch
         {
             "TEXT" => new FieldDefaultValueSnapshot
             {
@@ -123,10 +124,13 @@ public sealed class FieldDefaultUiExporter
             "NUMBER" => new FieldDefaultValueSnapshot { Number = ParseNumber(raw) },
             "SINGLE_SELECT" => new FieldDefaultValueSnapshot
             {
-                SingleSelectOptionName = NormalizeSingleSelectValue(raw),
+                SingleSelectOptionName = NormalizeSingleSelectValue(
+                    raw,
+                    field.Options?.Select(option => option.Name).ToHashSet(StringComparer.Ordinal)
+                        ?? []),
             },
             _ => throw new InvalidOperationException(
-                $"Field type '{dataType}' does not support a browser default value."),
+                $"Field type '{field.DataType}' does not support a browser default value."),
         };
     }
 
@@ -138,18 +142,31 @@ public sealed class FieldDefaultUiExporter
             : double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
-    internal static string? NormalizeSingleSelectValue(string? value)
+    internal static string? NormalizeSingleSelectValue(
+        string? value,
+        IReadOnlySet<string> optionNames)
     {
+        ArgumentNullException.ThrowIfNull(optionNames);
         value = EmptyToNull(value);
         if (value is null)
         {
             return null;
         }
+        if (optionNames.Contains(value))
+        {
+            return value;
+        }
 
         const string labelPrefix = "Default value:";
         if (value.StartsWith(labelPrefix, StringComparison.OrdinalIgnoreCase))
         {
-            value = EmptyToNull(value[labelPrefix.Length..]);
+            var labelledValue = EmptyToNull(value[labelPrefix.Length..]);
+            if (labelledValue is not null && optionNames.Contains(labelledValue))
+            {
+                return labelledValue;
+            }
+
+            value = labelledValue;
         }
 
         return value is null

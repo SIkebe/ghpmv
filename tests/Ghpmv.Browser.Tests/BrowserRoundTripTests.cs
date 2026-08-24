@@ -149,6 +149,13 @@ public class BrowserRoundTripTests
             var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
             try
             {
+                var initialItemResult = await new ItemImporter(targetClient)
+                {
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                }.ImportAsync(snapshot, result, operationLogDirectory, cancellationToken);
+                Assert.Empty(initialItemResult.Warnings);
+
                 var fieldDefaultImporter = new FieldDefaultUiImporter(targetSession);
                 await fieldDefaultImporter.ImportAsync(
                     snapshot,
@@ -302,6 +309,14 @@ public class BrowserRoundTripTests
                     RepositoryMapping = RepositoryMapping,
                     UserMapping = userMapping,
                 }.ImportIntoAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                var repairItemResult = await new ItemImporter(targetClient)
+                {
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                    ReapplyCompletedFieldValues = true,
+                }.ImportAsync(snapshot, repairResult, operationLogDirectory, cancellationToken);
+                Assert.Empty(repairItemResult.Warnings);
+
                 await fieldDefaultImporter.ImportAsync(
                     snapshot,
                     TargetOrg,

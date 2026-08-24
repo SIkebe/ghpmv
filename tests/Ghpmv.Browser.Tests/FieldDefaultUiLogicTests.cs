@@ -18,7 +18,30 @@ public class FieldDefaultUiLogicTests
     [InlineData("Default value: Beta", "Beta")]
     [InlineData("日本語 🚀", "日本語 🚀")]
     public void NormalizeSingleSelectValue_reads_cleared_and_named_values(string value, string? expected)
-        => Assert.Equal(expected, FieldDefaultUiExporter.NormalizeSingleSelectValue(value));
+        => Assert.Equal(
+            expected,
+            FieldDefaultUiExporter.NormalizeSingleSelectValue(
+                value,
+                new HashSet<string>(["Beta", "日本語 🚀"], StringComparer.Ordinal)));
+
+    [Theory]
+    [InlineData("None")]
+    [InlineData("No default value")]
+    [InlineData("Default value: Beta")]
+    public void NormalizeSingleSelectValue_preserves_option_names_that_look_like_ui_labels(string optionName)
+        => Assert.Equal(
+            optionName,
+            FieldDefaultUiExporter.NormalizeSingleSelectValue(
+                optionName,
+                new HashSet<string>([optionName], StringComparer.Ordinal)));
+
+    [Fact]
+    public void NormalizeSingleSelectValue_resolves_a_prefixed_arbitrary_option_name()
+        => Assert.Equal(
+            "Default value: Beta",
+            FieldDefaultUiExporter.NormalizeSingleSelectValue(
+                "Default value: Default value: Beta",
+                new HashSet<string>(["Default value: Beta"], StringComparer.Ordinal)));
 
     [Fact]
     public void Validate_accepts_single_select_default_by_option_name_regardless_of_id()

@@ -138,7 +138,7 @@ public sealed class FieldDefaultUiImporter
             field.Name,
             cancellationToken).ConfigureAwait(false);
 
-        var current = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field.DataType)
+        var current = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
             .ConfigureAwait(false);
         if (ValuesEqual(field.DataType, field.DefaultValue!, current))
         {
@@ -181,7 +181,7 @@ public sealed class FieldDefaultUiImporter
             projectNumber,
             field.Name,
             cancellationToken).ConfigureAwait(false);
-        var actual = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field.DataType)
+        var actual = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
             .ConfigureAwait(false);
         if (!ValuesEqual(field.DataType, field.DefaultValue!, actual))
         {
