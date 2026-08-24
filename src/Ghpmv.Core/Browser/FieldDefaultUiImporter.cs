@@ -30,6 +30,17 @@ public sealed class FieldDefaultUiImporter
             && snapshot.Fields.Any(field => field.DefaultValue is not null);
     }
 
+    public static ProjectSnapshot CreateClearedDefaultsSnapshot(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return snapshot with
+        {
+            Fields = snapshot.Fields.Select(field => field.DefaultValue is null
+                ? field
+                : field with { DefaultValue = new FieldDefaultValueSnapshot() }).ToList(),
+        };
+    }
+
     public async Task ImportAsync(
         ProjectSnapshot snapshot,
         string ownerLogin,

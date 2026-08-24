@@ -309,6 +309,14 @@ public class BrowserRoundTripTests
                     RepositoryMapping = RepositoryMapping,
                     UserMapping = userMapping,
                 }.ImportIntoAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                await fieldDefaultImporter.ImportAsync(
+                    FieldDefaultUiImporter.CreateClearedDefaultsSnapshot(snapshot),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    repairResult.ProjectNumber,
+                    cancellationToken);
+                Assert.Empty(fieldDefaultImporter.Warnings);
+
                 var repairItemResult = await new ItemImporter(targetClient)
                 {
                     RepositoryMapping = RepositoryMapping,

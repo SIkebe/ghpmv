@@ -47,7 +47,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 
 `FieldSnapshot.defaultValue = null` は API-only snapshot の「未取得」であり target を変更しない。
 present object の typed member が null の場合は「取得済み・default なし」として target を clear する。
-import は source item の作成・値適用後に defaults を設定し、既存 item へ GitHub の自動値を混入させない。
+import はcaptured target defaultsをitem作成前に一旦clearし、source item の作成・値適用がskipなしで完了した後にsource defaultsを設定する。これにより既存targetのdefaultも、後続resumeで作られるitemもsourceの未設定fieldへ混入しない。
 
 ### Insights chart の discovery source map (#48)
 

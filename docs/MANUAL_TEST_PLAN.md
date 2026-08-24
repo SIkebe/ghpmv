@@ -583,7 +583,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 出力された target Project URL と project number を控えます。
 
-stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` と `field-defaults: imported=... warnings=0` が出ることを確認します。再実行確認は 7.4 の Field sum / field-default drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えず、既存 item values が変わらないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
+stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` と `field-defaults: imported=... warnings=0` が出ることを確認します。browser-assisted importはtarget defaultsをitem作成前にclearし、itemsがskipなしで完了した後にsource defaultsを適用します。再実行確認は 7.4 の Field sum / field-default drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えず、既存 item values が変わらないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
 
 template 化は import の最終書き込み段です。stderr で Items / Status Updates / API View / browser View enrichment・tab order / Workflows の完了後に `Marking the target project as a template as the final import stage...` が出ることを確認します。Organization の **Projects → Templates** と Create project ダイアログで target Project がテンプレートとして表示されることも確認します。
 

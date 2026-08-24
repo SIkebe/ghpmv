@@ -131,6 +131,21 @@ public class FieldDefaultUiLogicTests
             skippedItemCount: 1));
     }
 
+    [Fact]
+    public void Cleared_default_snapshot_only_neutralizes_captured_defaults()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create();
+
+        var cleared = FieldDefaultUiImporter.CreateClearedDefaultsSnapshot(snapshot);
+
+        Assert.All(
+            cleared.Fields.Where(field => field.DefaultValue is not null),
+            field => Assert.Equal(new FieldDefaultValueSnapshot(), field.DefaultValue));
+        Assert.Equal(
+            snapshot.Fields.Where(field => field.DefaultValue is null),
+            cleared.Fields.Where(field => field.DefaultValue is null));
+    }
+
     [Theory]
     [InlineData("TEXT")]
     [InlineData("NUMBER")]

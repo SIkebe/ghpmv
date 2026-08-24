@@ -574,6 +574,28 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             return 0;
         }
 
+        if (enableBrowserAutomation
+            && snapshot.Fields.Any(field => field.DefaultValue is not null))
+        {
+            System.Diagnostics.Debug.Assert(session is not null);
+            var neutralizer = new FieldDefaultUiImporter(session)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await neutralizer.ImportAsync(
+                FieldDefaultUiImporter.CreateClearedDefaultsSnapshot(snapshot),
+                org,
+                ownerType,
+                result.ProjectNumber,
+                cancellationToken);
+            if (neutralizer.Warnings.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "Target field defaults could not be cleared before item import: "
+                    + string.Join("; ", neutralizer.Warnings));
+            }
+        }
+
         var itemImporter = new ItemImporter(client)
         {
             RepositoryMapping = repoMapping,
@@ -1228,7 +1250,8 @@ setupCommand.Validators.Add(result =>
         && !result.GetValue(fixtureFieldSumRenderCheckOption)
         && !result.GetValue(fixtureFieldDefaultCheckOption)
         && !result.GetValue(fixtureFieldDefaultDriftOption)
-        && result.GetValue(fixtureFieldDefaultCleanupItemOption) is null)
+        && result.GetValue(fixtureFieldDefaultCleanupItemOption) is null
+        && result.GetValue(fixtureFieldDefaultCleanupTitleOption) is null)
     {
         return;
     }
@@ -1288,7 +1311,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultDriftOption)
-        && parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is null)
+        && parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is null
+        && parseResult.GetValue(fixtureFieldDefaultCleanupTitleOption) is null)
     {
         Console.Error.WriteLine("Nothing to install or check. Use --browsers, --fixture, --fixture-ui, or a fixture check/drift option.");
         return 1;
