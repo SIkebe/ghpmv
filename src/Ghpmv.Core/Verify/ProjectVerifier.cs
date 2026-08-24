@@ -7,6 +7,32 @@ using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Verify;
 
+public static class VerifyCategories
+{
+    public const string Project = "Project";
+    public const string Field = "Field";
+    public const string View = "View";
+    public const string Workflow = "Workflow";
+    public const string Item = "Item";
+    public const string StatusUpdate = "StatusUpdate";
+    public const string Collaborator = "Collaborator";
+    public const string LinkedRepository = "LinkedRepository";
+    public const string TeamLink = "TeamLink";
+
+    public static IReadOnlyList<string> All { get; } =
+    [
+        Project,
+        Field,
+        Item,
+        View,
+        Workflow,
+        Collaborator,
+        LinkedRepository,
+        StatusUpdate,
+        TeamLink,
+    ];
+}
+
 /// <summary>
 /// Verifies a migrated project against its source snapshot (M5). The target project is
 /// read back through <see cref="ProjectExporter"/> and compared with the snapshot:
@@ -18,15 +44,15 @@ namespace Ghpmv.Core.Verify;
 /// </summary>
 public sealed class ProjectVerifier
 {
-    private const string ProjectCategory = "Project";
-    private const string FieldCategory = "Field";
-    private const string ViewCategory = "View";
-    private const string WorkflowCategory = "Workflow";
-    private const string ItemCategory = "Item";
-    private const string StatusUpdateCategory = "StatusUpdate";
-    private const string CollaboratorCategory = "Collaborator";
-    private const string LinkedRepositoryCategory = "LinkedRepository";
-    private const string TeamLinkCategory = "TeamLink";
+    private const string ProjectCategory = VerifyCategories.Project;
+    private const string FieldCategory = VerifyCategories.Field;
+    private const string ViewCategory = VerifyCategories.View;
+    private const string WorkflowCategory = VerifyCategories.Workflow;
+    private const string ItemCategory = VerifyCategories.Item;
+    private const string StatusUpdateCategory = VerifyCategories.StatusUpdate;
+    private const string CollaboratorCategory = VerifyCategories.Collaborator;
+    private const string LinkedRepositoryCategory = VerifyCategories.LinkedRepository;
+    private const string TeamLinkCategory = VerifyCategories.TeamLink;
 
     private readonly GitHubGraphQLClient _client;
 
@@ -55,6 +81,11 @@ public sealed class ProjectVerifier
     public IReadOnlyDictionary<string, string> TeamMapping { get; init; } = ReadOnlyDictionary<string, string>.Empty;
 
     /// <summary>
+    /// Categories to compare. Null performs the complete verification used by existing callers.
+    /// </summary>
+    public IReadOnlySet<string>? IncludedCategories { get; init; }
+
+    /// <summary>
     /// Optional post-processing hook for the target snapshot. Browser-assisted verification
     /// uses this to re-read UI-only settings before comparison.
     /// </summary>
@@ -65,17 +96,22 @@ public sealed class ProjectVerifier
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetOrgLogin);
+        ValidateIncludedCategories(IncludedCategories);
 
         var exporter = new ProjectExporter(_client)
         {
             OnProgress = OnProgress,
             OwnerType = OwnerType,
             PostExportAsync = PostExportAsync,
+            Sections = RequiredExportSections(IncludedCategories),
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        var effectiveTeamMapping = OwnerType == ProjectOwnerType.User
-            ? ReadOnlyDictionary<string, string>.Empty
-            : BuildEffectiveTeamMapping(source.LinkedTeams, TeamMapping, targetOrgLogin);
+        var needsTeamMapping = OwnerType == ProjectOwnerType.Organization
+            && (Includes(IncludedCategories, VerifyCategories.TeamLink)
+                || Includes(IncludedCategories, VerifyCategories.Collaborator));
+        var effectiveTeamMapping = needsTeamMapping
+            ? BuildEffectiveTeamMapping(source.LinkedTeams, TeamMapping, targetOrgLogin)
+            : ReadOnlyDictionary<string, string>.Empty;
         return CompareCore(
             source,
             target,
@@ -83,7 +119,8 @@ public sealed class ProjectVerifier
             UserMapping,
             OrganizationMapping,
             effectiveTeamMapping,
-            teamLinksApplicable: OwnerType == ProjectOwnerType.Organization);
+            teamLinksApplicable: OwnerType == ProjectOwnerType.Organization,
+            includedCategories: IncludedCategories);
     }
 
     /// <summary>Pure snapshot-to-snapshot comparison (no API access).</summary>
@@ -116,7 +153,8 @@ public sealed class ProjectVerifier
             userMapping,
             organizationMapping,
             ReadOnlyDictionary<string, string>.Empty,
-            teamLinksApplicable: true);
+            teamLinksApplicable: true,
+            includedCategories: null);
 
     /// <summary>Pure snapshot comparison with repository, user, organization and Team mappings.</summary>
     public static VerifyReport Compare(
@@ -133,7 +171,26 @@ public sealed class ProjectVerifier
             userMapping,
             organizationMapping,
             teamMapping,
-            teamLinksApplicable: true);
+            teamLinksApplicable: true,
+            includedCategories: null);
+
+    /// <summary>Pure snapshot comparison restricted to the requested categories.</summary>
+    public static VerifyReport Compare(
+        ProjectSnapshot source,
+        ProjectSnapshot target,
+        IReadOnlySet<string> includedCategories)
+    {
+        ValidateIncludedCategories(includedCategories);
+        return CompareCore(
+            source,
+            target,
+            ReadOnlyDictionary<string, string>.Empty,
+            ReadOnlyDictionary<string, string>.Empty,
+            ReadOnlyDictionary<string, string>.Empty,
+            ReadOnlyDictionary<string, string>.Empty,
+            teamLinksApplicable: true,
+            includedCategories: includedCategories);
+    }
 
     private static VerifyReport CompareCore(
         ProjectSnapshot source,
@@ -142,7 +199,8 @@ public sealed class ProjectVerifier
         IReadOnlyDictionary<string, string> userMapping,
         IReadOnlyDictionary<string, string> organizationMapping,
         IReadOnlyDictionary<string, string> teamMapping,
-        bool teamLinksApplicable)
+        bool teamLinksApplicable,
+        IReadOnlySet<string>? includedCategories)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
@@ -151,64 +209,118 @@ public sealed class ProjectVerifier
         ArgumentNullException.ThrowIfNull(organizationMapping);
         ArgumentNullException.ThrowIfNull(teamMapping);
 
-        source = ProjectFilterTransformer.TransformSnapshot(
-            source,
-            userMapping,
-            repositoryMapping,
-            organizationMapping);
-
-        if (repositoryMapping.Count > 0)
+        var verifyViews = Includes(includedCategories, VerifyCategories.View);
+        var verifyWorkflows = Includes(includedCategories, VerifyCategories.Workflow);
+        if (verifyViews || verifyWorkflows)
         {
-            source = ApplyRepositoryMapping(source, repositoryMapping);
+            var scopedSource = source with
+            {
+                Views = verifyViews ? source.Views : [],
+                Workflows = verifyWorkflows ? source.Workflows : [],
+            };
+            var transformedSource = ProjectFilterTransformer.TransformSnapshot(
+                scopedSource,
+                userMapping,
+                repositoryMapping,
+                organizationMapping);
+            source = source with
+            {
+                Views = verifyViews ? transformedSource.Views : source.Views,
+                Workflows = verifyWorkflows ? transformedSource.Workflows : source.Workflows,
+            };
         }
 
-        if (userMapping.Count > 0)
+        if (repositoryMapping.Count > 0
+            && (Includes(includedCategories, VerifyCategories.Item)
+                || Includes(includedCategories, VerifyCategories.LinkedRepository)
+                || verifyWorkflows))
+        {
+            source = ApplyRepositoryMapping(source, repositoryMapping, includedCategories);
+        }
+
+        if (userMapping.Count > 0 && Includes(includedCategories, VerifyCategories.Collaborator))
         {
             source = ApplyUserMapping(source, userMapping);
         }
 
-        if (teamMapping.Count > 0)
+        if (teamMapping.Count > 0
+            && (Includes(includedCategories, VerifyCategories.TeamLink)
+                || Includes(includedCategories, VerifyCategories.Collaborator)))
         {
             source = ApplyTeamMapping(source, teamMapping);
         }
 
         var differences = new List<VerifyDifference>();
         var notVerified = new HashSet<string>(StringComparer.Ordinal);
-        CompareProject(source.Project, target.Project, differences);
-        CompareFields(source.Fields, target.Fields, differences);
-        CompareViews(source.Views, target.Views, differences, notVerified);
-        CompareWorkflows(source.Workflows, target.Workflows, differences, notVerified);
-        CompareItems(
-            source.Items,
-            target.Items,
-            source.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
-            target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
-            differences);
-        CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
-        CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
-        CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
-        if (teamLinksApplicable)
+        if (Includes(includedCategories, VerifyCategories.Project))
+        {
+            CompareProject(source.Project, target.Project, differences);
+        }
+        if (Includes(includedCategories, VerifyCategories.Field))
+        {
+            CompareFields(source.Fields, target.Fields, differences);
+        }
+        if (Includes(includedCategories, VerifyCategories.View))
+        {
+            CompareViews(source.Views, target.Views, differences, notVerified);
+        }
+        if (Includes(includedCategories, VerifyCategories.Workflow))
+        {
+            CompareWorkflows(source.Workflows, target.Workflows, differences, notVerified);
+        }
+        if (Includes(includedCategories, VerifyCategories.Item))
+        {
+            CompareItems(
+                source.Items,
+                target.Items,
+                source.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+                target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
+                differences);
+        }
+        var statusUpdatesExplicitlyRequested = includedCategories?.Contains(VerifyCategories.StatusUpdate) == true;
+        if (Includes(includedCategories, VerifyCategories.StatusUpdate))
+        {
+            if (source.StatusUpdates is null && statusUpdatesExplicitlyRequested)
+            {
+                notVerified.Add(VerifyCategories.StatusUpdate);
+            }
+            else
+            {
+                CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
+            }
+        }
+        if (Includes(includedCategories, VerifyCategories.Collaborator))
+        {
+            CompareCollaborators(source.Collaborators, target.Collaborators, differences, notVerified);
+        }
+        if (Includes(includedCategories, VerifyCategories.LinkedRepository))
+        {
+            CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
+        }
+        if (teamLinksApplicable && Includes(includedCategories, VerifyCategories.TeamLink))
         {
             CompareLinkedTeams(source.LinkedTeams, target.LinkedTeams, differences, notVerified);
         }
 
-        var categories = new List<VerifyCategoryResult>
+        var categories = new List<VerifyCategoryResult>();
+        AddCategoryIfIncluded(categories, VerifyCategories.Project, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.Field, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.Item, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.View, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.Workflow, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.Collaborator, includedCategories, differences, notVerified);
+        AddCategoryIfIncluded(categories, VerifyCategories.LinkedRepository, includedCategories, differences, notVerified);
+        if ((source.StatusUpdates is not null || statusUpdatesExplicitlyRequested)
+            && Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
-            CategoryResult(ProjectCategory, differences, notVerified),
-            CategoryResult(FieldCategory, differences, notVerified),
-            CategoryResult(ItemCategory, differences, notVerified),
-            CategoryResult(ViewCategory, differences, notVerified),
-            CategoryResult(WorkflowCategory, differences, notVerified),
-            CategoryResult(CollaboratorCategory, differences, notVerified),
-            CategoryResult(LinkedRepositoryCategory, differences, notVerified),
-        };
-        if (source.StatusUpdates is not null)
-        {
-            categories.Add(CategoryResult(StatusUpdateCategory, differences, notVerified));
+            categories.Add(CategoryResult(VerifyCategories.StatusUpdate, differences, notVerified));
         }
-        categories.Add(teamLinksApplicable
-            ? CategoryResult(TeamLinkCategory, differences, notVerified)
-            : new VerifyCategoryResult { Category = TeamLinkCategory, Status = VerifyStatus.NotApplicable });
+        if (Includes(includedCategories, VerifyCategories.TeamLink))
+        {
+            categories.Add(teamLinksApplicable
+                ? CategoryResult(VerifyCategories.TeamLink, differences, notVerified)
+                : new VerifyCategoryResult { Category = VerifyCategories.TeamLink, Status = VerifyStatus.NotApplicable });
+        }
 
         return new VerifyReport
         {
@@ -217,26 +329,107 @@ public sealed class ProjectVerifier
         };
     }
 
-    private static ProjectSnapshot ApplyRepositoryMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> repositoryMapping)
+    private static bool Includes(IReadOnlySet<string>? includedCategories, string category)
+        => includedCategories is null || includedCategories.Contains(category);
+
+    private static void AddCategoryIfIncluded(
+        List<VerifyCategoryResult> categories,
+        string category,
+        IReadOnlySet<string>? includedCategories,
+        IReadOnlyList<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (Includes(includedCategories, category))
+        {
+            categories.Add(CategoryResult(category, differences, notVerified));
+        }
+    }
+
+    private static void ValidateIncludedCategories(IReadOnlySet<string>? includedCategories)
+    {
+        if (includedCategories is null)
+        {
+            return;
+        }
+        if (includedCategories.Count == 0)
+        {
+            throw new ArgumentException("At least one verification category is required.", nameof(includedCategories));
+        }
+
+        var unknown = includedCategories
+            .Where(category => !VerifyCategories.All.Contains(category, StringComparer.Ordinal))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        if (unknown.Count > 0)
+        {
+            throw new ArgumentException(
+                $"Unknown verification categories: {string.Join(", ", unknown)}.",
+                nameof(includedCategories));
+        }
+    }
+
+    private static ProjectExportSections RequiredExportSections(IReadOnlySet<string>? includedCategories)
+    {
+        if (includedCategories is null)
+        {
+            return ProjectExportSections.All;
+        }
+
+        var sections = ProjectExportSections.None;
+        if (Includes(includedCategories, VerifyCategories.Field)
+            || Includes(includedCategories, VerifyCategories.Item))
+        {
+            sections |= ProjectExportSections.Fields;
+        }
+        if (Includes(includedCategories, VerifyCategories.Item))
+        {
+            sections |= ProjectExportSections.Items;
+        }
+        if (Includes(includedCategories, VerifyCategories.StatusUpdate))
+        {
+            sections |= ProjectExportSections.StatusUpdates;
+        }
+        if (Includes(includedCategories, VerifyCategories.View))
+        {
+            sections |= ProjectExportSections.Views;
+        }
+        if (Includes(includedCategories, VerifyCategories.TeamLink)
+            || Includes(includedCategories, VerifyCategories.Collaborator))
+        {
+            sections |= ProjectExportSections.LinkedTeams;
+        }
+        return sections;
+    }
+
+    private static ProjectSnapshot ApplyRepositoryMapping(
+        ProjectSnapshot source,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlySet<string>? includedCategories)
     {
         return source with
         {
-            Items = source.Items.Select(item => item.Repository is { Length: > 0 } repository
-                    && repositoryMapping.TryGetValue(repository, out var mappedRepository)
-                ? item with { Repository = mappedRepository }
-                : item).ToList(),
-            LinkedRepositories = source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
-                ? mappedRepository
-                : repository).ToList(),
-            Workflows = source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
-                ? workflow with
-                {
-                    Ui = workflow.Ui with
+            Items = Includes(includedCategories, VerifyCategories.Item)
+                ? source.Items.Select(item => item.Repository is { Length: > 0 } repository
+                        && repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                    ? item with { Repository = mappedRepository }
+                    : item).ToList()
+                : source.Items,
+            LinkedRepositories = Includes(includedCategories, VerifyCategories.LinkedRepository)
+                ? source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                    ? mappedRepository
+                    : repository).ToList()
+                : source.LinkedRepositories,
+            Workflows = Includes(includedCategories, VerifyCategories.Workflow)
+                ? source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
+                    ? workflow with
                     {
-                        Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
-                    },
-                }
-                : workflow).ToList(),
+                        Ui = workflow.Ui with
+                        {
+                            Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
+                        },
+                    }
+                    : workflow).ToList()
+                : source.Workflows,
         };
     }
 

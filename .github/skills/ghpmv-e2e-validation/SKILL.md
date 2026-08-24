@@ -1504,6 +1504,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
@@ -1580,6 +1581,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `

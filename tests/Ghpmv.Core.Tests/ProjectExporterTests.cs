@@ -131,6 +131,33 @@ public class ProjectExporterTests
     }
 
     [Fact]
+    public async Task Export_scope_without_views_does_not_follow_view_pagination()
+    {
+        using var handler = new StubHandler(
+            MetadataResponse(
+                """
+                [{"number":9,"name":"First","layout":"TABLE_LAYOUT","filter":null,
+                  "groupByFields":{"nodes":[]},"verticalGroupByFields":{"nodes":[]},"sortByFields":{"nodes":[]},
+                  "configuration":{"visibleFields":{"nodes":[]}}}]
+                """,
+                hasNextPage: true,
+                endCursor: "view-cursor"));
+        using var client = CreateClient(handler);
+
+        var snapshot = await new ProjectExporter(client)
+        {
+            Sections = ProjectExportSections.None,
+        }.ExportAsync(
+            "source",
+            1,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(snapshot.Views);
+        Assert.Single(handler.RequestBodies);
+        Assert.DoesNotContain("\"after\":\"view-cursor\"", handler.RequestBodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Export_reads_linked_issue_field_identity_and_definition_directly_from_project_fields()
     {
         using var handler = new StubHandler(

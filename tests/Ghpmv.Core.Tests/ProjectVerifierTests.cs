@@ -175,10 +175,13 @@ public class ProjectVerifierTests
     {
         private readonly Queue<string> _responses = new(responses);
 
+        public int RequestCount { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            RequestCount++;
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(_responses.Dequeue(), Encoding.UTF8, "application/json"),
@@ -196,6 +199,32 @@ public class ProjectVerifierTests
 
         Assert.Empty(report.Differences);
         Assert.True(report.IsMatch);
+    }
+
+    [Fact]
+    public void Category_scoped_comparison_ignores_unselected_differences()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Project = source.Project with { ShortDescription = "different" },
+            Views =
+            [
+                source.Views[0] with { Layout = "BOARD_LAYOUT" },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.View });
+
+        var category = Assert.Single(report.Categories);
+        Assert.Equal(VerifyCategories.View, category.Category);
+        Assert.Equal(VerifyStatus.Mismatch, category.Status);
+        var difference = Assert.Single(report.Differences);
+        Assert.Equal(VerifyCategories.View, difference.Category);
+        Assert.DoesNotContain(report.Differences, candidate => candidate.Category == VerifyCategories.Project);
     }
 
     [Fact]
@@ -244,6 +273,94 @@ public class ProjectVerifierTests
         Assert.Equal(VerifySeverity.Error, difference.Severity);
         Assert.Equal("Project", difference.Category);
         Assert.Contains("short description mismatch", difference.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Project_only_verify_ignores_unrelated_mapping_preflights()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{"title":"Fixture","shortDescription":"desc","readme":"# Readme","public":false,"closed":false,"template":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            """);
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
+        var source = BuildSnapshot() with
+        {
+            Workflows =
+            [
+                new WorkflowSnapshot
+                {
+                    Number = 1,
+                    Name = "Auto-add",
+                    Enabled = true,
+                    Ui = new WorkflowUiSnapshot { Repository = "repo" },
+                },
+            ],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source-org", Slug = "platform", Name = "Platform" },
+            ],
+        };
+        var verifier = new ProjectVerifier(client)
+        {
+            IncludedCategories = new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.Project },
+            RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-a/repo"] = "target/one",
+                ["source-b/repo"] = "target/two",
+            },
+            TeamMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org/platform"] = "invalid",
+            },
+        };
+
+        var report = await verifier.VerifyAsync(
+            source,
+            "target-org",
+            42,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(report.IsMatch);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task Collaborator_only_verify_fetches_linked_teams()
+    {
+        using var handler = new StubHandler(
+            """
+            {"data":{"organization":{"projectV2":{"title":"Fixture","shortDescription":"desc","readme":"# Readme","public":false,"closed":false,"template":false,"views":{"nodes":[]},"workflows":{"nodes":[]},"repositories":{"nodes":[]}}}}}
+            """,
+            """
+            {"data":{"organization":{"projectV2":{"teams":{"nodes":[{"name":"Platform","slug":"platform","organization":{"login":"target-org"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+            """);
+        using var client = new GitHubGraphQLClient("dummy-token", baseUrl: null, handler, delayAsync: null);
+        var source = BuildSnapshot() with
+        {
+            Collaborators = [],
+            LinkedTeams =
+            [
+                new LinkedTeamSnapshot { Organization = "source-org", Slug = "platform", Name = "Platform" },
+            ],
+        };
+        var verifier = new ProjectVerifier(client)
+        {
+            IncludedCategories = new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.Collaborator },
+            TeamMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["source-org/platform"] = "target-org/platform",
+            },
+            PostExportAsync = (target, _) => Task.FromResult(target with { Collaborators = [] }),
+        };
+
+        var report = await verifier.VerifyAsync(
+            source,
+            "target-org",
+            42,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(report.IsMatch);
+        Assert.Equal(2, handler.RequestCount);
     }
 
     [Fact]
@@ -1534,6 +1651,24 @@ public class ProjectVerifierTests
         Assert.Equal(
             baseline.Categories.Select(category => category.Category),
             report.Categories.Select(category => category.Category));
+    }
+
+    [Fact]
+    public void Explicit_status_update_scope_marks_legacy_snapshot_not_verified()
+    {
+        var source = BuildSnapshot();
+        Assert.Null(source.StatusUpdates);
+
+        var report = ProjectVerifier.Compare(
+            source,
+            BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() },
+            new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.StatusUpdate });
+
+        var category = Assert.Single(report.Categories);
+        Assert.Equal(VerifyCategories.StatusUpdate, category.Category);
+        Assert.Equal(VerifyStatus.NotVerified, category.Status);
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.True(report.ShouldFail(failOnWarning: false));
     }
 
     [Fact]

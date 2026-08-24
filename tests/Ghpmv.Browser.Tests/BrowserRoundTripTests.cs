@@ -10,12 +10,11 @@ using System.Text.Json;
 namespace Ghpmv.Browser.Tests;
 
 /// <summary>
-/// M6 E2E: exports the configured fixture project including browser-scraped UI
-/// settings, imports it into the target org (project, fields, and supported View state
-/// via GraphQL; unsupported View state via browser automation), re-exports the target and asserts the views round-trip
-/// (name / layout / UI settings). Requires GHPMV_BROWSER_STATE (a storage-state file
-/// saved by <c>ghpmv login</c>) and GHPMV_TEST_TOKEN; skipped otherwise.
-/// The created project is deleted in a finally block.
+/// Shared browser E2E: exports the configured fixture once, imports it into one target
+/// Project, applies View and Workflow UI state, and verifies Views, Workflows, and explicit
+/// collaborators together. The same target is drifted once and re-verified so the suite
+/// launches only one source and one target browser session. Requires configured browser
+/// state and API tokens; skipped otherwise. The target Project is deleted in a finally block.
 /// </summary>
 [Trait("Category", "E2E")]
 public class BrowserRoundTripTests
@@ -48,7 +47,7 @@ public class BrowserRoundTripTests
         => Path.Combine(Path.GetTempPath(), $"ghpmv-browser-project-import-{Guid.NewGuid():N}");
 
     [Fact]
-    public async Task Explicit_collaborators_are_exported_through_browser_automation()
+    public async Task Browser_features_round_trip_in_one_shared_scenario()
     {
         var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
         var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
@@ -66,59 +65,118 @@ public class BrowserRoundTripTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
         using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
-        var (projectId, userId) = await ResolveProjectAndUserIdsAsync(sourceClient, SourceOrg, ExplicitCollaboratorLogin, cancellationToken);
+        var (sourceProjectId, sourceUserId) = await ResolveProjectAndUserIdsAsync(
+            sourceClient,
+            SourceOrg,
+            ExplicitCollaboratorLogin,
+            cancellationToken);
         var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
         var targetCollaboratorLogin = userMapping.TryGetValue(ExplicitCollaboratorLogin, out var mappedLogin)
             ? mappedLogin
             : ExplicitCollaboratorLogin;
         var targetUserId = await ResolveUserIdAsync(targetClient, targetCollaboratorLogin, cancellationToken);
 
-        await SetCollaboratorAsync(sourceClient, projectId, userId, "WRITER", cancellationToken);
+        await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
+        await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
+        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
+            targetClient,
+            targetSession,
+            cancellationToken);
+
+        await SetCollaboratorAsync(sourceClient, sourceProjectId, sourceUserId, "WRITER", cancellationToken);
         try
         {
-            await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
-            await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
-            var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
-                targetClient,
-                targetSession,
+            var sourceViewExporter = new ViewUiExporter(sourceSession);
+            var sourceWorkflowExporter = new WorkflowUiExporter(sourceSession);
+            var sourceCollaboratorExporter = new CollaboratorUiExporter(sourceSession);
+            var source = await new ProjectExporter(sourceClient)
+                .ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+            source = await sourceViewExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
+            source = await sourceWorkflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
+            source = await sourceCollaboratorExporter.EnrichAsync(
+                source,
+                SourceOrg,
+                ProjectOwnerType.Organization,
+                FixtureProjectNumber,
                 cancellationToken);
-            var exporter = new ProjectExporter(sourceClient);
-            var snapshot = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-            var collaboratorExporter = new CollaboratorUiExporter(sourceSession);
 
-            snapshot = await collaboratorExporter.EnrichAsync(snapshot, SourceOrg, ProjectOwnerType.Organization, FixtureProjectNumber, cancellationToken);
-
-            Assert.Empty(collaboratorExporter.Warnings);
-            var collaborator = Assert.Single(snapshot.Collaborators!, c =>
-                string.Equals(c.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
+            Assert.Empty(sourceViewExporter.Warnings);
+            Assert.Empty(sourceWorkflowExporter.Warnings);
+            Assert.Empty(sourceCollaboratorExporter.Warnings);
+            Assert.False(
+                sourceViewExporter.GraphQlPositionMatchesDomOrder,
+                "GraphQL POSITION now matches the saved-tab DOM order. Re-evaluate replacing the browser read path with the public API.");
+            AssertSourceViews(source);
+            AssertSourceWorkflows(source);
+            var collaborator = Assert.Single(source.Collaborators!, candidate =>
+                string.Equals(candidate.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("USER", collaborator.Type);
             Assert.Equal("WRITER", collaborator.Role);
 
-            var verificationSnapshot = snapshot with
+            var snapshot = BuildRoundTripSnapshot(source, collaborator);
+            var apiPositions = snapshot.Views
+                .OrderBy(view => view.Number)
+                .Select((view, position) => (view.Number, position))
+                .ToDictionary(pair => pair.Number, pair => pair.position);
+            var apiImportSnapshot = snapshot with
             {
-                Project = snapshot.Project with { Title = "ghpmv-browser-collaborator-test-" + Guid.NewGuid().ToString("N") },
-                Views = [],
-                Workflows = [],
-                Items = [],
-                LinkedRepositories = [],
-                Collaborators = [collaborator],
+                Views = snapshot.Views.Select(view => view with
+                {
+                    TabPosition = apiPositions[view.Number],
+                }).ToList(),
             };
-            var result = await new ProjectImporter(targetClient)
+
+            var importer = new ProjectImporter(targetClient)
             {
                 OperationLogDirectory = CreateOperationLogDirectory(),
                 BeforeWriteAsync = validateTargetAuthentication,
+                BrowserViewEnrichmentPlanned = true,
                 OrganizationMapping = OrganizationMapping,
                 RepositoryMapping = RepositoryMapping,
                 UserMapping = userMapping,
-            }.ImportAsync(
-                verificationSnapshot,
-                TargetOrg,
-                cancellationToken);
+            };
+            var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
             try
             {
+                var initialViewReport = await new ProjectVerifier(targetClient)
+                {
+                    OrganizationMapping = OrganizationMapping,
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                    IncludedCategories = new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.View },
+                }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                Assert.Contains(initialViewReport.Categories, category =>
+                    category.Category == VerifyCategories.View && category.Status == VerifyStatus.NotVerified);
+
+                var targetPage = await targetSession.GetPageAsync(cancellationToken);
+                await targetPage.SetViewportSizeAsync(480, 1000);
+                var viewImporter = new ViewUiImporter(targetSession);
+                await viewImporter.EnrichAsync(
+                    snapshot,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+
+                var workflowImporter = new WorkflowUiImporter(targetSession)
+                {
+                    OrganizationMapping = OrganizationMapping,
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                };
+                await workflowImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                Assert.True(
+                    workflowImporter.Warnings.Count == 0,
+                    string.Join(Environment.NewLine, workflowImporter.Warnings));
+                Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
+
+                ProjectSnapshot? reExported = null;
                 var targetViewExporter = new ViewUiExporter(targetSession);
                 var targetWorkflowExporter = new WorkflowUiExporter(targetSession);
                 var targetCollaboratorExporter = new CollaboratorUiExporter(targetSession);
+                var browserVerificationCount = 0;
                 var verifier = new ProjectVerifier(targetClient)
                 {
                     OrganizationMapping = OrganizationMapping,
@@ -126,34 +184,69 @@ public class BrowserRoundTripTests
                     UserMapping = userMapping,
                     PostExportAsync = async (target, ct) =>
                     {
+                        browserVerificationCount++;
                         target = await targetViewExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
                         target = await targetWorkflowExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
-                        return await targetCollaboratorExporter.EnrichAsync(
+                        reExported = await targetCollaboratorExporter.EnrichAsync(
                             target,
                             TargetOrg,
                             ProjectOwnerType.Organization,
                             result.ProjectNumber,
                             ct);
+                        return reExported;
                     },
                 };
 
-                var matchReport = await verifier.VerifyAsync(
-                    verificationSnapshot,
-                    TargetOrg,
-                    result.ProjectNumber,
-                    cancellationToken);
-                Assert.DoesNotContain(matchReport.Differences, difference => difference.Category == "Collaborator");
+                var matchReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                Assert.Empty(targetViewExporter.Warnings);
+                Assert.Empty(targetWorkflowExporter.Warnings);
+                Assert.Empty(targetCollaboratorExporter.Warnings);
+                Assert.Equal(
+                    VerifyCategories.All,
+                    matchReport.Categories.Select(category => category.Category));
+                Assert.All(
+                    matchReport.Categories,
+                    category => Assert.Equal(VerifyStatus.Match, category.Status));
+                var target = Assert.IsType<ProjectSnapshot>(reExported);
+                AssertRoundTrippedViews(snapshot, target);
+                AssertRoundTrippedWorkflows(snapshot, target);
 
-                await SetCollaboratorAsync(targetClient, result.ProjectId, targetUserId, "READER", cancellationToken);
-                var driftReport = await verifier.VerifyAsync(
-                    verificationSnapshot,
+                var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
+                await viewImporter.ApplyFieldSumAsync(
                     TargetOrg,
+                    ProjectOwnerType.Organization,
                     result.ProjectNumber,
+                    result.ViewNumbers[sourceTable.Number],
+                    sourceTable.Name,
+                    ["Fixture Number"],
                     cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+
+                var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
+                await workflowImporter.UpdateExistingFilterAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    targetWorkflow,
+                    "is:issue label:documentation",
+                    cancellationToken);
+                await SetCollaboratorAsync(targetClient, result.ProjectId, targetUserId, "READER", cancellationToken);
+
+                var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
-                    && difference.Category == "Collaborator"
+                    && difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.Workflow
+                    && difference.Message.Contains("filter mismatch", StringComparison.Ordinal));
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.Collaborator
                     && difference.Message.Contains("role mismatch", StringComparison.Ordinal));
+
+                Assert.Equal(2, browserVerificationCount);
             }
             finally
             {
@@ -162,69 +255,34 @@ public class BrowserRoundTripTests
         }
         finally
         {
-            await SetCollaboratorAsync(sourceClient, projectId, userId, "NONE", CancellationToken.None);
+            await SetCollaboratorAsync(sourceClient, sourceProjectId, sourceUserId, "NONE", CancellationToken.None);
         }
     }
 
-    [Fact]
-    public async Task Views_round_trip_through_browser_automation()
+    private static void AssertSourceViews(ProjectSnapshot source)
     {
-        var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
-        var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
-        Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(sourceStatePath) || !File.Exists(sourceStatePath),
-            "The configured source browser state file does not exist; skipping browser E2E test.");
-        Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(targetStatePath) || !File.Exists(targetStatePath),
-            "The configured target browser state file does not exist; skipping browser E2E test.");
-        var sourceToken = E2eTestEnvironment.SourceToken;
-        var targetToken = E2eTestEnvironment.TargetToken;
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(sourceToken), "The configured source token is not set; skipping browser E2E test.");
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(targetToken), "The configured target token is not set; skipping browser E2E test.");
-
-        var cancellationToken = TestContext.Current.CancellationToken;
-        using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
-        using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
-        await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
-        await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
-        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
-            targetClient,
-            targetSession,
-            cancellationToken);
-
-        // Export the fixture with UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(sourceClient);
-        var uiExporter = new ViewUiExporter(sourceSession);
-        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-        source = await uiExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
-        Assert.Empty(uiExporter.Warnings);
-        Assert.False(
-            uiExporter.GraphQlPositionMatchesDomOrder,
-            "GraphQL POSITION now matches the saved-tab DOM order. Re-evaluate replacing the browser read path with the public API.");
-        Assert.All(source.Views, v => Assert.NotNull(v.Ui));
+        Assert.All(source.Views, view => Assert.NotNull(view.Ui));
         Assert.Contains(source.Fields, field => field.Name == "Labels" && field.DataType == "LABELS");
         Assert.Contains(source.Fields, field => field.Name == "Fixture Teams" && field.IssueField is not null);
 
-        // Explicit source expectations (fixture enrichment, 2026-07-06) — guards against
-        // silently comparing null-to-null when the scrape misses a setting.
-        var sourceTable = Assert.Single(source.Views, v => v.Name == "View 1");
+        var sourceTable = Assert.Single(source.Views, view => view.Name == "View 1");
         Assert.Equal("status:Todo", sourceTable.Filter);
         Assert.Equal(["Status"], sourceTable.GroupByFields);
         Assert.Equal("Fixture Number", Assert.Single(sourceTable.SortByFields).Field);
         Assert.Equal("Fixture Select", sourceTable.Ui!.SliceBy);
         Assert.Equal(["Count", "Fixture Number", "Fixture Number 2"], sourceTable.Ui.FieldSum);
 
-        var sourceBoard = Assert.Single(source.Views, v => v.Name == "Fixture Board");
+        var sourceBoard = Assert.Single(source.Views, view => view.Name == "Fixture Board");
         Assert.Equal("Fixture Select", Assert.Single(sourceBoard.VerticalGroupByFields));
         Assert.Equal(["Fixture Number"], sourceBoard.Ui!.FieldSum);
 
-        var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
+        var sourceRoadmap = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap");
         Assert.Equal(["Status"], sourceRoadmap.GroupByFields);
         Assert.Equal(["Fixture Number 2"], sourceRoadmap.Ui!.FieldSum);
-        Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
+        Assert.Equal("Quarter", sourceRoadmap.Ui.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
 
-        var sourceEmptySums = Assert.Single(source.Views, v => v.Name == "Fixture Empty Sums");
+        var sourceEmptySums = Assert.Single(source.Views, view => view.Name == "Fixture Empty Sums");
         Assert.Equal(["Status"], sourceEmptySums.GroupByFields);
         Assert.Empty(sourceEmptySums.Ui!.FieldSum ?? []);
 
@@ -232,8 +290,25 @@ public class BrowserRoundTripTests
         Assert.False(sourceTabOrder.SequenceEqual(
             source.Views.OrderBy(view => view.Number).Select(view => view.Name),
             StringComparer.Ordinal));
+    }
 
-        var title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N");
+    private static void AssertSourceWorkflows(ProjectSnapshot source)
+    {
+        Assert.All(source.Workflows, workflow => Assert.NotNull(workflow.Ui));
+        Assert.Equal(2, source.Workflows.Count(workflow => workflow.Ui!.Repository is not null));
+        var sourceSecondary = Assert.Single(source.Workflows, workflow => workflow.Name == "Auto-add secondary");
+        Assert.True(sourceSecondary.Enabled);
+        Assert.Equal(SourceFixtureRepository, sourceSecondary.Ui!.Repository);
+        Assert.Equal("is:issue label:bug", sourceSecondary.Ui.Filter);
+        var sourceDisabled = Assert.Single(source.Workflows, workflow => workflow.Name == "Code changes requested");
+        Assert.False(sourceDisabled.Enabled);
+        Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
+    }
+
+    private static ProjectSnapshot BuildRoundTripSnapshot(
+        ProjectSnapshot source,
+        CollaboratorSnapshot collaborator)
+    {
         var shiftedSourceViews = source.Views.Select(view => view with
         {
             TabPosition = view.TabPosition + 1,
@@ -250,280 +325,60 @@ public class BrowserRoundTripTests
             VisibleFields = [],
             Ui = new ViewUiSnapshot(),
         }).ToList();
-        var snapshot = source with
+        return source with
         {
-            Project = source.Project with { Title = title },
+            Project = source.Project with { Title = "ghpmv-browser-test-" + Guid.NewGuid().ToString("N") },
             Views = [.. shiftedSourceViews, .. overflowViews],
+            Collaborators = [collaborator],
         };
-        var apiPositions = snapshot.Views
-            .OrderBy(view => view.Number)
-            .Select((view, position) => (view.Number, position))
-            .ToDictionary(pair => pair.Number, pair => pair.position);
-        var apiImportSnapshot = snapshot with
+    }
+
+    private static void AssertRoundTrippedViews(ProjectSnapshot snapshot, ProjectSnapshot target)
+    {
+        Assert.Equal(snapshot.Views.Count, target.Views.Count);
+        Assert.True(snapshot.Views.Count > 3);
+        Assert.Equal(
+            snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name),
+            target.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
+        foreach (var expected in snapshot.Views)
         {
-            Views = snapshot.Views.Select(view => view with
+            var actual = Assert.Single(target.Views, view => string.Equals(view.Name, expected.Name, StringComparison.Ordinal));
+            Assert.Equal(expected.Layout, actual.Layout);
+            Assert.NotNull(expected.Ui);
+            Assert.NotNull(actual.Ui);
+            Assert.Equal(expected.Ui!.SliceBy, actual.Ui!.SliceBy);
+            Assert.Equal(expected.Ui.FieldSum ?? [], actual.Ui.FieldSum ?? []);
+            Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
+            if (expected.Ui.Roadmap is { } roadmap)
             {
-                TabPosition = apiPositions[view.Number],
-            }).ToList(),
-        };
-        var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
-
-        var importer = new ProjectImporter(targetClient)
-        {
-            OperationLogDirectory = CreateOperationLogDirectory(),
-            BeforeWriteAsync = validateTargetAuthentication,
-            BrowserViewEnrichmentPlanned = true,
-            OrganizationMapping = OrganizationMapping,
-            RepositoryMapping = RepositoryMapping,
-            UserMapping = userMapping,
-        };
-        var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
-        try
-        {
-            var initialReport = await new ProjectVerifier(targetClient)
-            {
-                OrganizationMapping = OrganizationMapping,
-                RepositoryMapping = RepositoryMapping,
-                UserMapping = userMapping,
-            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Contains(initialReport.Differences, difference =>
-                difference.Severity == VerifySeverity.Warning
-                && difference.Category == "View"
-                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
-            Assert.Contains(initialReport.Categories, category =>
-                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
-
-            var targetPage = await targetSession.GetPageAsync(cancellationToken);
-            await targetPage.SetViewportSizeAsync(480, 1000);
-            var viewImporter = new ViewUiImporter(targetSession);
-            await viewImporter.EnrichAsync(
-                snapshot,
-                TargetOrg,
-                ProjectOwnerType.Organization,
-                result.ProjectNumber,
-                result.ViewNumbers,
-                cancellationToken);
-            Assert.Empty(viewImporter.Warnings);
-
-            var apiOnlyReport = await new ProjectVerifier(targetClient)
-            {
-                OrganizationMapping = OrganizationMapping,
-                RepositoryMapping = RepositoryMapping,
-                UserMapping = userMapping,
-            }.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Contains(apiOnlyReport.Differences, difference =>
-                difference.Severity == VerifySeverity.Warning
-                && difference.Category == "View"
-                && difference.Message.Contains("tab order was captured in the source", StringComparison.Ordinal));
-            Assert.Contains(apiOnlyReport.Categories, category =>
-                category.Category == "View" && category.Status == VerifyStatus.NotVerified);
-
-            // Verify re-exports the target through GraphQL and its browser post-export hook.
-            ProjectSnapshot? reExported = null;
-            var reExportUi = new ViewUiExporter(targetSession);
-            var verifier = new ProjectVerifier(targetClient)
-            {
-                OrganizationMapping = OrganizationMapping,
-                RepositoryMapping = RepositoryMapping,
-                UserMapping = userMapping,
-                PostExportAsync = async (target, ct) =>
-                {
-                    reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
-                    return reExported;
-                },
-            };
-            var report = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Empty(reExportUi.Warnings);
-            var target = Assert.IsType<ProjectSnapshot>(reExported);
-            Assert.DoesNotContain(report.Differences, difference => difference.Category == "Field");
-            Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
-
-            Assert.Equal(snapshot.Views.Count, target.Views.Count);
-            Assert.True(snapshot.Views.Count > 3);
-            Assert.Equal(
-                snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name),
-                target.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
-            foreach (var expected in snapshot.Views)
-            {
-                var actual = Assert.Single(target.Views, v => string.Equals(v.Name, expected.Name, StringComparison.Ordinal));
-                Assert.Equal(expected.Layout, actual.Layout);
-
-                Assert.NotNull(expected.Ui);
-                Assert.NotNull(actual.Ui);
-                Assert.Equal(expected.Ui!.SliceBy, actual.Ui!.SliceBy);
-                Assert.Equal(expected.Ui.FieldSum ?? [], actual.Ui.FieldSum ?? []);
-                Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
-                if (expected.Ui.Roadmap is { } roadmap)
-                {
-                    Assert.Equal(roadmap.StartField, actual.Ui.Roadmap!.StartField);
-                    Assert.Equal(roadmap.TargetField, actual.Ui.Roadmap.TargetField);
-                    Assert.Equal(roadmap.Zoom, actual.Ui.Roadmap.Zoom);
-                    Assert.Equal(roadmap.Markers ?? [], actual.Ui.Roadmap.Markers ?? []);
-                }
+                Assert.Equal(roadmap.StartField, actual.Ui.Roadmap!.StartField);
+                Assert.Equal(roadmap.TargetField, actual.Ui.Roadmap.TargetField);
+                Assert.Equal(roadmap.Zoom, actual.Ui.Roadmap.Zoom);
+                Assert.Equal(roadmap.Markers ?? [], actual.Ui.Roadmap.Markers ?? []);
             }
-
-            var driftedSnapshot = snapshot with
-            {
-                Views = snapshot.Views.Select(view =>
-                    view.Name == "View 1"
-                        ? view with { Ui = view.Ui! with { FieldSum = ["Fixture Number"] } }
-                        : view).ToList(),
-            };
-            await viewImporter.EnrichAsync(
-                driftedSnapshot,
-                TargetOrg,
-                ProjectOwnerType.Organization,
-                result.ProjectNumber,
-                result.ViewNumbers,
-                cancellationToken);
-            var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Contains(driftReport.Differences, difference =>
-                difference.Severity == VerifySeverity.Error
-                && difference.Category == "View"
-                && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
-        }
-        finally
-        {
-            await DeleteProjectAsync(targetClient, result.ProjectId);
         }
     }
 
-    /// <summary>
-    /// M7 E2E: exports the fixture workflows (GraphQL + UI scrape), imports them into a
-    /// fresh target project (workflows via browser automation, Auto-add repository
-    /// resolved through the repo mapping), re-exports the target and asserts the
-    /// enabled state / content types / status values / filter / repository round-trip.
-    /// Kept independent of the views E2E so each run stays focused (and faster).
-    /// </summary>
-    [Fact]
-    public async Task Workflows_round_trip_through_browser_automation()
+    private static void AssertRoundTrippedWorkflows(ProjectSnapshot snapshot, ProjectSnapshot target)
     {
-        var sourceStatePath = E2eTestEnvironment.SourceBrowserStatePath;
-        var targetStatePath = E2eTestEnvironment.TargetBrowserStatePath;
-        Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(sourceStatePath) || !File.Exists(sourceStatePath),
-            "The configured source browser state file does not exist; skipping browser E2E test.");
-        Assert.SkipWhen(
-            string.IsNullOrWhiteSpace(targetStatePath) || !File.Exists(targetStatePath),
-            "The configured target browser state file does not exist; skipping browser E2E test.");
-        var sourceToken = E2eTestEnvironment.SourceToken;
-        var targetToken = E2eTestEnvironment.TargetToken;
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(sourceToken), "The configured source token is not set; skipping browser E2E test.");
-        Assert.SkipWhen(string.IsNullOrWhiteSpace(targetToken), "The configured target token is not set; skipping browser E2E test.");
-
-        var cancellationToken = TestContext.Current.CancellationToken;
-        using var sourceClient = CreateClient(sourceToken!, E2eTestEnvironment.Current.Source.ApiBaseUrl);
-        using var targetClient = CreateClient(targetToken!, E2eTestEnvironment.Current.Target.ApiBaseUrl);
-        await using var sourceSession = CreateSession(sourceStatePath!, E2eTestEnvironment.Current.Source);
-        await using var targetSession = CreateSession(targetStatePath!, E2eTestEnvironment.Current.Target);
-        var validateTargetAuthentication = await CreateTargetAuthenticationGuardAsync(
-            targetClient,
-            targetSession,
-            cancellationToken);
-
-        // Export the fixture with workflow UI settings and retarget it under a unique title.
-        var exporter = new ProjectExporter(sourceClient);
-        var workflowExporter = new WorkflowUiExporter(sourceSession);
-        var source = await exporter.ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
-        source = await workflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
-        Assert.Empty(workflowExporter.Warnings);
-        Assert.All(source.Workflows, w => Assert.NotNull(w.Ui));
-
-        // Explicit source expectations (fixture enrichment, 2026-07-06): two Auto-add
-        // instances (exercising the Duplicate path) and a saved-but-disabled workflow
-        // (exercising the disable mirroring incl. the save-once path on the target).
-        Assert.Equal(2, source.Workflows.Count(w => w.Ui!.Repository is not null));
-        var sourceSecondary = Assert.Single(source.Workflows, w => w.Name == "Auto-add secondary");
-        Assert.True(sourceSecondary.Enabled);
-        Assert.Equal(SourceFixtureRepository, sourceSecondary.Ui!.Repository);
-        Assert.Equal("is:issue label:bug", sourceSecondary.Ui.Filter);
-        var sourceDisabled = Assert.Single(source.Workflows, w => w.Name == "Code changes requested");
-        Assert.False(sourceDisabled.Enabled);
-        Assert.Equal("Code changes requested", sourceDisabled.Name);
-        Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
-
-        var title = "ghpmv-browser-wf-test-" + Guid.NewGuid().ToString("N");
-        var snapshot = source with { Project = source.Project with { Title = title } };
-        var userMapping = E2eTestEnvironment.Current.Users.ToMappingDictionary();
-
-        var importer = new ProjectImporter(targetClient)
+        Assert.Equal(
+            snapshot.Workflows.Select(workflow => workflow.Name).Order(StringComparer.Ordinal),
+            target.Workflows.Select(workflow => workflow.Name).Order(StringComparer.Ordinal));
+        foreach (var expected in snapshot.Workflows)
         {
-            OperationLogDirectory = CreateOperationLogDirectory(),
-            BeforeWriteAsync = validateTargetAuthentication,
-            OrganizationMapping = OrganizationMapping,
-            RepositoryMapping = RepositoryMapping,
-            UserMapping = userMapping,
-        };
-        var result = await importer.ImportAsync(snapshot, TargetOrg, cancellationToken);
-        try
-        {
-            var workflowImporter = new WorkflowUiImporter(targetSession)
-            {
-                OrganizationMapping = OrganizationMapping,
-                RepositoryMapping = RepositoryMapping,
-                UserMapping = userMapping,
-            };
-            await workflowImporter.ImportAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.True(
-                workflowImporter.Warnings.Count == 0,
-                string.Join(Environment.NewLine, workflowImporter.Warnings));
-            Assert.Equal(snapshot.Workflows.Count, workflowImporter.ImportedCount);
-
-            var reExportUi = new WorkflowUiExporter(targetSession);
-            ProjectSnapshot? reExported = null;
-            var verifier = new ProjectVerifier(targetClient)
-            {
-                OrganizationMapping = OrganizationMapping,
-                RepositoryMapping = RepositoryMapping,
-                UserMapping = userMapping,
-                PostExportAsync = async (target, ct) =>
-                {
-                    reExported = await reExportUi.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
-                    return reExported;
-                },
-            };
-            var matchReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Empty(reExportUi.Warnings);
-            Assert.DoesNotContain(matchReport.Differences, difference => difference.Category == "Workflow");
-            var target = Assert.IsType<ProjectSnapshot>(reExported);
-
+            var actual = Assert.Single(target.Workflows, workflow =>
+                string.Equals(workflow.Name, expected.Name, StringComparison.Ordinal));
+            Assert.Equal(expected.Enabled, actual.Enabled);
+            Assert.NotNull(expected.Ui);
+            Assert.NotNull(actual.Ui);
+            Assert.Equal(expected.Ui!.ContentTypes ?? [], actual.Ui!.ContentTypes ?? []);
+            Assert.Equal(expected.Ui.StatusValue, actual.Ui.StatusValue);
+            Assert.Equal(expected.Ui.Filter, actual.Ui.Filter);
             Assert.Equal(
-                snapshot.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal),
-                target.Workflows.Select(w => w.Name).Order(StringComparer.Ordinal));
-            foreach (var expected in snapshot.Workflows)
-            {
-                var actual = Assert.Single(target.Workflows, w => string.Equals(w.Name, expected.Name, StringComparison.Ordinal));
-                Assert.Equal(expected.Enabled, actual.Enabled);
-
-                Assert.NotNull(expected.Ui);
-                Assert.NotNull(actual.Ui);
-                Assert.Equal(expected.Ui!.ContentTypes ?? [], actual.Ui!.ContentTypes ?? []);
-                Assert.Equal(expected.Ui.StatusValue, actual.Ui.StatusValue);
-                Assert.Equal(expected.Ui.Filter, actual.Ui.Filter);
-                Assert.Equal(
-                    expected.Ui.Repository == SourceFixtureRepository
-                        ? TargetFixtureRepository
-                        : expected.Ui.Repository,
-                    actual.Ui.Repository);
-            }
-
-            var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
-            await workflowImporter.UpdateExistingFilterAsync(
-                TargetOrg,
-                ProjectOwnerType.Organization,
-                result.ProjectNumber,
-                targetWorkflow,
-                "is:issue label:documentation",
-                cancellationToken);
-            var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
-            Assert.Contains(driftReport.Differences, difference =>
-                difference.Severity == VerifySeverity.Error
-                && difference.Category == "Workflow"
-                && difference.Message.Contains("filter mismatch", StringComparison.Ordinal));
-        }
-        finally
-        {
-            await DeleteProjectAsync(targetClient, result.ProjectId);
+                expected.Ui.Repository == SourceFixtureRepository
+                    ? TargetFixtureRepository
+                    : expected.Ui.Repository,
+                actual.Ui.Repository);
         }
     }
 
