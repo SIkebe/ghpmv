@@ -42,7 +42,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 |---|---|---|---|
 | Text default | **UI** | **UI** | Unicode と明示 clear を保持 |
 | Number default | **UI** | **UI** | zero / negative を invariant number として保持 |
-| Single-select default | **UI** | **UI** | source option ID は保存せず option name で target option を選択 |
+| Custom Single-select default | **UI** | **UI** | source option ID は保存せず option name で target option を選択。built-in Status はworkflow管理のため対象外 |
 | Date default | 対象外 | 対象外 | GitHub が default を提供しない |
 
 `FieldSnapshot.defaultValue = null` は API-only snapshot の「未取得」であり target を変更しない。

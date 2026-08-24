@@ -90,6 +90,7 @@ public sealed class FieldDefaultFixtureObserver
             OnProgress?.Invoke($"Field-default check draft created: id={itemId} title='{title}'");
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            InvalidOperationException? lastDefaultMismatch = null;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -100,18 +101,32 @@ public sealed class FieldDefaultFixtureObserver
                     string.Equals(item.Draft?.Title, title, StringComparison.Ordinal));
                 if (draft is not null)
                 {
-                    ValidateDraftDefaults(expected.Fields, draft);
-                    OnProgress?.Invoke(
-                        $"Fixture field defaults verified on new draft '{title}': fields={expected.Fields.Count(field => field.DefaultValue is not null)}");
-                    return new FieldDefaultFixtureCheckResult
+                    try
                     {
-                        ItemId = itemId,
-                        Title = title,
-                    };
+                        ValidateDraftDefaults(expected.Fields, draft);
+                        OnProgress?.Invoke(
+                            $"Fixture field defaults verified on new draft '{title}': fields={expected.Fields.Count(field => field.DefaultValue is not null)}");
+                        return new FieldDefaultFixtureCheckResult
+                        {
+                            ItemId = itemId,
+                            Title = title,
+                        };
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        lastDefaultMismatch = exception;
+                    }
                 }
 
                 if (DateTimeOffset.UtcNow >= deadline)
                 {
+                    if (lastDefaultMismatch is not null)
+                    {
+                        throw new InvalidOperationException(
+                            $"The field-default check draft '{title}' did not receive all expected defaults within 30 seconds.",
+                            lastDefaultMismatch);
+                    }
+
                     throw new TimeoutException(
                         $"The field-default check draft '{title}' was not visible within 30 seconds.");
                 }

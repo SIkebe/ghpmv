@@ -78,6 +78,8 @@ public sealed class FieldDefaultUiExporter
 
     internal static bool Supports(FieldSnapshot field)
         => field.IssueField is null
+            // Built-in Status behavior is controlled by workflows and is outside the
+            // custom-field default contract.
             && !string.Equals(field.Name, "Status", StringComparison.Ordinal)
             && field.DataType is "TEXT" or "NUMBER" or "SINGLE_SELECT";
 
