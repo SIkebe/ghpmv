@@ -644,7 +644,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 6. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence、field defaults、Field sum の復元を同時に確認します。
 7. browser-assisted verify を `--categories Field,Item,View` で実行します。`Field: Match` / `View: Match`に加え、`Item`差分がcleanup同意待ちのinventory済みcheck draft 1件だけで、source由来itemの値差分がないことを確認します。その後`--fixture-field-default-check`を再実行して修復後の新規draftにdefaultsが適用されることを機械確認し、このdraftもinventoryへ追加します。
 
-この統合により追加実行は drift verify、修復用の再 import、最終 verify の 3 command だけです。証跡は 11、削除は 10 の既存手順へまとめます。
+この統合で追加実行するのは、初回functional check、field-default drift、field-sum drift、drift verify、修復用re-import、repair verify、修復後functional checkの7 commandです。同じsnapshot / target / mappingsを再利用し、証跡は11、draftとProjectの削除は10の既存cleanup同意へまとめます。
 
 warning / error が出た場合は、次の観点で切り分けます。
 

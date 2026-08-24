@@ -1712,7 +1712,20 @@ $repairViewCategories = @($repairReport.categories | Where-Object category -eq '
 $repairItemDifferences = @($repairReport.differences | Where-Object category -eq 'Item')
 $expectedDraftMessage = "draft '<escaped-initial-check-draft-title>' exists only in the target"
 $expectedDraftDifferences = @($repairItemDifferences | Where-Object message -eq $expectedDraftMessage)
-$unexpectedItemDifferences = @($repairItemDifferences | Where-Object message -ne $expectedDraftMessage)
+$totalCountDifferences = @($repairItemDifferences | Where-Object message -match '^item count mismatch \(source \d+, target \d+\)$')
+$draftCountDifferences = @($repairItemDifferences | Where-Object message -match '^item count for type DRAFT_ISSUE mismatch \(source \d+, target \d+\)$')
+$allowedItemMessages = @($expectedDraftDifferences.message) + @($totalCountDifferences.message) + @($draftCountDifferences.message)
+$unexpectedItemDifferences = @($repairItemDifferences | Where-Object message -notin $allowedItemMessages)
+$totalCountDeltaIsOne = $false
+if ($totalCountDifferences.Count -eq 1 -and
+    $totalCountDifferences[0].message -match '^item count mismatch \(source (?<source>\d+), target (?<target>\d+)\)$') {
+    $totalCountDeltaIsOne = ([int]$Matches.target - [int]$Matches.source) -eq 1
+}
+$draftCountDeltaIsOne = $false
+if ($draftCountDifferences.Count -eq 1 -and
+    $draftCountDifferences[0].message -match '^item count for type DRAFT_ISSUE mismatch \(source (?<source>\d+), target (?<target>\d+)\)$') {
+    $draftCountDeltaIsOne = ([int]$Matches.target - [int]$Matches.source) -eq 1
+}
 if ($repairFieldCategories.Count -ne 1 -or $repairFieldCategories[0].status -ne 'Match' -or
     $repairItemCategories.Count -ne 1 -or $repairItemCategories[0].status -ne 'Mismatch' -or
     $repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
@@ -1723,8 +1736,10 @@ $repairDifferences = @($repairReport.differences | Where-Object category -in @('
 if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/View still has differences: $($repairDifferences.message -join '; ')"; return }
 if ($global:GHPMV_REPAIR_VERIFY_EXIT_CODE -eq 0 -or
     $expectedDraftDifferences.Count -ne 1 -or
+    !$totalCountDeltaIsOne -or
+    !$draftCountDeltaIsOne -or
     $unexpectedItemDifferences.Count -ne 0) {
-    Stop-FieldSumRepairCheck "Repair Item verification must fail only for the inventoried functional-check draft; actual: $($repairItemDifferences.message -join '; ')"
+    Stop-FieldSumRepairCheck "Repair Item verification must contain only the inventoried draft and its total/DRAFT_ISSUE count deltas of +1; actual: $($repairItemDifferences.message -join '; ')"
     return
 }
 Write-Output 'GHPMV_ITEM_VALUES_REPAIR_MATCH'
