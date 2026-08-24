@@ -1598,7 +1598,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories Field,View `
+      --categories Field,Item,View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
@@ -1703,20 +1703,41 @@ $repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.
 if (!(Test-Path -LiteralPath $repairReportPath)) { Stop-FieldSumRepairCheck "Repair report was not created: $repairReportPath"; return }
 $repairReport = Get-Content -LiteralPath $repairReportPath -Raw | ConvertFrom-Json
 $repairFieldCategories = @($repairReport.categories | Where-Object category -eq 'Field')
+$repairItemCategories = @($repairReport.categories | Where-Object category -eq 'Item')
 $repairViewCategories = @($repairReport.categories | Where-Object category -eq 'View')
 if ($repairFieldCategories.Count -ne 1 -or $repairFieldCategories[0].status -ne 'Match' -or
+    $repairItemCategories.Count -ne 1 -or $repairItemCategories[0].status -ne 'Match' -or
     $repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
-    Stop-FieldSumRepairCheck "Repaired Field and View categories must be Match; Field=$($repairFieldCategories.status -join ', ') View=$($repairViewCategories.status -join ', ')."
+    Stop-FieldSumRepairCheck "Repaired Field, Item, and View categories must be Match; Field=$($repairFieldCategories.status -join ', ') Item=$($repairItemCategories.status -join ', ') View=$($repairViewCategories.status -join ', ')."
     return
 }
-$repairDifferences = @($repairReport.differences | Where-Object category -in @('Field', 'View'))
-if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/View still has differences: $($repairDifferences.message -join '; ')"; return }
+$repairDifferences = @($repairReport.differences | Where-Object category -in @('Field', 'Item', 'View'))
+if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/Item/View still has differences: $($repairDifferences.message -join '; ')"; return }
 Write-Output 'GHPMV_FIELD_DEFAULT_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_DEFAULT_REPAIR_MATCH`、`GHPMV_FIELD_SUM_REPAIR_MATCH`、command exit code 0 を確認後、`--fixture-field-default-check` をもう一度実行する。修復後の new draftにも4 defaultsが入った場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_DEFAULT_REPAIR_MATCH`、`GHPMV_FIELD_SUM_REPAIR_MATCH`、command exit code 0 を確認後、次のfunctional checkを同じterminalへ送る。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-default-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number>
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、repair verifyの`Item: Match`で既存item valuesが不変だった場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
 
 `browser-e2e` は field-defaultの`new-draft-observed` / `repair-match` と field-sumの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
