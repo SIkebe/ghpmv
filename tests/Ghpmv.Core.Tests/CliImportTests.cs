@@ -85,6 +85,31 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Verify_categories_limits_comparison_and_api_sections()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-verify-categories-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(VerifyProjectResponse);
+        try
+        {
+            var result = await RunVerifyCliAsync(directory, server, "--categories", "view");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Single(server.RequestBodies);
+            Assert.Contains("selected verification categories match", result.Output, StringComparison.Ordinal);
+            Assert.Contains("View: Match", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Project:", result.Output, StringComparison.Ordinal);
+            Assert.DoesNotContain("Workflow:", result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Conflict_skip_with_browser_automation_does_not_run_downstream_importers()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

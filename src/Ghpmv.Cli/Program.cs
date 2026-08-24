@@ -796,6 +796,21 @@ var reportJsonOption = new Option<string?>("--report-json")
 {
     Description = "Write the complete verification result as JSON to this path.",
 };
+var verifyCategoriesOption = new Option<string?>("--categories")
+{
+    Description = "Verify only comma-separated categories: Project, Field, Item, View, Workflow, Collaborator, LinkedRepository, StatusUpdate, TeamLink.",
+};
+verifyCategoriesOption.Validators.Add(result =>
+{
+    try
+    {
+        _ = ParseVerifyCategories(result.Tokens.SingleOrDefault()?.Value);
+    }
+    catch (ArgumentException exception)
+    {
+        result.AddError(exception.Message);
+    }
+});
 
 var verifyCommand = new Command("verify", "Verify a migrated project against the source snapshot and report differences.")
 {
@@ -814,6 +829,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     browserBaseUrlOption,
     failOnWarningOption,
     reportJsonOption,
+    verifyCategoriesOption,
     noUpdateCheckOption,
 };
 
@@ -828,6 +844,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
     var failOnWarning = parseResult.GetValue(failOnWarningOption);
     var reportJsonPath = parseResult.GetValue(reportJsonOption);
+    var includedCategories = ParseVerifyCategories(parseResult.GetValue(verifyCategoriesOption));
     var token = parseResult.GetValue(tokenOption)
         ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
         ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN");
@@ -844,7 +861,11 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
     try
     {
-        await using var session = enableBrowserAutomation
+        var browserCategoriesRequested = includedCategories is null
+            || includedCategories.Contains(VerifyCategories.View)
+            || includedCategories.Contains(VerifyCategories.Workflow)
+            || includedCategories.Contains(VerifyCategories.Collaborator);
+        await using var session = enableBrowserAutomation && browserCategoriesRequested
             ? new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
@@ -881,20 +902,40 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
             UserMapping = userMapping,
             OrganizationMapping = organizationMapping,
             TeamMapping = teamMapping,
+            IncludedCategories = includedCategories,
         };
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;
         CollaboratorUiExporter? collaboratorExporter = null;
         if (session is not null)
         {
-            viewExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
-            workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
-            collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            if (includedCategories is null || includedCategories.Contains(VerifyCategories.View))
+            {
+                viewExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            }
+            if (includedCategories is null || includedCategories.Contains(VerifyCategories.Workflow))
+            {
+                workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            }
+            if (includedCategories is null || includedCategories.Contains(VerifyCategories.Collaborator))
+            {
+                collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            }
             verifier.PostExportAsync = async (target, ct) =>
             {
-                target = await viewExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
-                target = await workflowExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
-                return await collaboratorExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+                if (viewExporter is not null)
+                {
+                    target = await viewExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+                }
+                if (workflowExporter is not null)
+                {
+                    target = await workflowExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+                }
+                if (collaboratorExporter is not null)
+                {
+                    target = await collaboratorExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
+                }
+                return target;
             };
         }
 
@@ -917,7 +958,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
             await VerifyReportFile.SaveAsync(report, reportJsonPath, cancellationToken);
         }
 
-        WriteVerifyReport(report);
+        WriteVerifyReport(report, categoryScoped: includedCategories is not null);
         await NotifyUpdateAsync(updateCheck);
         return report.ShouldFail(failOnWarning) ? 1 : 0;
     }
@@ -1641,6 +1682,27 @@ static void ValidateBrowserBaseUrl(System.CommandLine.Parsing.OptionResult resul
     }
 }
 
+static IReadOnlySet<string>? ParseVerifyCategories(string? value)
+{
+    if (value is null)
+    {
+        return null;
+    }
+
+    var categories = value
+        .Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+        .Select(category => VerifyCategories.All.FirstOrDefault(
+            supported => string.Equals(supported, category, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException(
+                $"Unknown verification category '{category}'. Supported categories: {string.Join(", ", VerifyCategories.All)}."))
+        .ToHashSet(StringComparer.Ordinal);
+    if (categories.Count == 0)
+    {
+        throw new ArgumentException("--categories requires at least one category.");
+    }
+    return categories;
+}
+
 // Starts a fire-and-forget update check against GitHub Releases (opt-out via
 // --no-update-check or GHPMV_NO_UPDATE_CHECK). Never throws; sends no telemetry.
 static Task<string?> StartUpdateCheck(bool disabled)
@@ -1665,11 +1727,13 @@ static async Task NotifyUpdateAsync(Task<string?> updateCheck)
 }
 
 // Writes the verify report to stdout as a human-readable table plus a summary line.
-static void WriteVerifyReport(VerifyReport report)
+static void WriteVerifyReport(VerifyReport report, bool categoryScoped)
 {
     if (report.Status == VerifyStatus.Match && report.Differences.Count == 0)
     {
-        Console.WriteLine("OK: the target project matches the snapshot.");
+        Console.WriteLine(categoryScoped
+            ? "OK: the selected verification categories match the snapshot."
+            : "OK: the target project matches the snapshot.");
     }
 
     if (report.Differences.Count > 0)

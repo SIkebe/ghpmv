@@ -5,6 +5,17 @@ using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Export;
 
+[Flags]
+public enum ProjectExportSections
+{
+    None = 0,
+    Fields = 1 << 0,
+    Items = 1 << 1,
+    StatusUpdates = 1 << 2,
+    LinkedTeams = 1 << 3,
+    All = Fields | Items | StatusUpdates | LinkedTeams,
+}
+
 /// <summary>
 /// Exports an organization project (Projects V2) into a <see cref="ProjectSnapshot"/> (M2).
 /// Reads everything the GraphQL API exposes: project metadata, fields
@@ -35,6 +46,12 @@ public sealed class ProjectExporter
     public Action<string>? OnProgress { get; set; }
 
     /// <summary>
+    /// Optional follow-up API sections to export after project metadata, Views, Workflows,
+    /// and linked repositories. Full exports include every section by default.
+    /// </summary>
+    public ProjectExportSections Sections { get; init; } = ProjectExportSections.All;
+
+    /// <summary>
     /// Optional post-processing hook invoked with the GraphQL snapshot; returns the final
     /// snapshot. Used by the browser module (M6) to fill UI-only view settings without
     /// coupling the GraphQL export path to Playwright.
@@ -63,27 +80,25 @@ public sealed class ProjectExporter
             cancellationToken).ConfigureAwait(false);
         var workflows = ParseWorkflows(project.GetProperty("workflows"));
         var linkedRepositories = ParseLinkedRepositories(project.GetProperty("repositories"));
-        OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows. Fetching items and status updates...");
+        OnProgress?.Invoke($"Fetched {views.Count} views and {workflows.Count} workflows.");
 
-        var items = await FetchItemsAsync(
-            ownerLogin,
-            projectNumber,
-            cancellationToken).ConfigureAwait(false);
-        var statusUpdates = await FetchStatusUpdatesAsync(
-            ownerLogin,
-            projectNumber,
-            cancellationToken).ConfigureAwait(false);
-        var fields = await FetchApiFieldsAsync(
-            ownerLogin,
-            projectNumber,
-            cancellationToken).ConfigureAwait(false);
-        var linkedTeams = OwnerType == ProjectOwnerType.Organization
-            ? await FetchLinkedTeamsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+        var items = Sections.HasFlag(ProjectExportSections.Items)
+            ? await FetchItemsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
             : [];
+        var statusUpdates = Sections.HasFlag(ProjectExportSections.StatusUpdates)
+            ? await FetchStatusUpdatesAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+            : null;
+        var fields = Sections.HasFlag(ProjectExportSections.Fields)
+            ? await FetchApiFieldsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+            : [];
+        var linkedTeams = OwnerType == ProjectOwnerType.Organization
+            && Sections.HasFlag(ProjectExportSections.LinkedTeams)
+                ? await FetchLinkedTeamsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
+                : [];
 
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
-            $"Fetched {fields.Count} fields, {items.Count} items, and {statusUpdates.Count} status updates."));
+            $"Fetched {fields.Count} fields, {items.Count} items, and {statusUpdates?.Count ?? 0} status updates."));
 
         var snapshot = new ProjectSnapshot
         {

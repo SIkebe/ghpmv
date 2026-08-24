@@ -305,9 +305,11 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
 2. **UI でしか読めない項目**: saved-tab DOM順と§3.2 / §4.2のexport用読み取りルーチンを**そのまま再利用**してターゲットを再スクレイプし、`tabPosition`と`spec.ui`を比較
 3. 差分は `verify` コマンドと同じレポーター(期待値/実測値/対象)で出力
 
-手動実行する `BrowserRoundTripTests` は View と Workflow のラウンドトリップを別々のテストに分け、それぞれ
-`fixture project → export → 空プロジェクトへ import → export(再) → snapshot diff`
-を行う。explicit collaborator export は別の E2E テストで検証する。
+手動実行する `BrowserRoundTripTests` は View、Workflow、explicit collaborator を一つの共有シナリオで検証し、
+`fixture project → export 1回 → 空プロジェクトへ import 1回 → browser設定適用 → export(再) → snapshot diff`
+を行う。各機能の deliberate drift はまとめて適用し、一回の追加 verify で検出する。
+新しい browser checkpoint は独立した `[Fact]`、target Project、full round trip を追加せず、このシナリオへ統合する。
+`BrowserE2eArchitectureTests` は E2E entry point が一つより増えた場合に deterministic suite で失敗する。
 
 ---
 

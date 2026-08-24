@@ -199,6 +199,32 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Category_scoped_comparison_ignores_unselected_differences()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Project = source.Project with { ShortDescription = "different" },
+            Views =
+            [
+                source.Views[0] with { Layout = "BOARD_LAYOUT" },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(
+            source,
+            target,
+            new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.View });
+
+        var category = Assert.Single(report.Categories);
+        Assert.Equal(VerifyCategories.View, category.Category);
+        Assert.Equal(VerifyStatus.Mismatch, category.Status);
+        var difference = Assert.Single(report.Differences);
+        Assert.Equal(VerifyCategories.View, difference.Category);
+        Assert.DoesNotContain(report.Differences, candidate => candidate.Category == VerifyCategories.Project);
+    }
+
+    [Fact]
     public async Task VerifyAsync_applies_post_export_hook_before_comparison()
     {
         using var handler = new StubHandler(
