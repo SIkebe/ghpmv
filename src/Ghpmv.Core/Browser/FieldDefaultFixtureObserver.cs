@@ -43,24 +43,44 @@ public sealed class FieldDefaultFixtureObserver
         string? itemId = null;
         try
         {
-            var data = await _client.MutationAsync(
-                "addProjectV2DraftIssue",
-                """
-                mutation($projectId: ID!, $title: String!, $clientMutationId: String!) {
-                  addProjectV2DraftIssue(input: {
-                    projectId: $projectId,
-                    title: $title,
-                    clientMutationId: $clientMutationId
-                  }) {
-                    projectItem { id }
-                  }
-                }
-                """,
-                new { projectId, title },
-                MutationRetryPolicy.Create,
-                target: projectId,
-                requiredResultPath: "projectItem.id",
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+            System.Text.Json.JsonElement data;
+            try
+            {
+                data = await _client.MutationAsync(
+                    "addProjectV2DraftIssue",
+                    """
+                    mutation($projectId: ID!, $title: String!, $clientMutationId: String!) {
+                      addProjectV2DraftIssue(input: {
+                        projectId: $projectId,
+                        title: $title,
+                        clientMutationId: $clientMutationId
+                      }) {
+                        projectItem { id }
+                      }
+                    }
+                    """,
+                    new { projectId, title },
+                    MutationRetryPolicy.Create,
+                    target: projectId,
+                    requiredResultPath: "projectItem.id",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (AmbiguousMutationResultException exception)
+            {
+                var reconciledIds = await FindMatchingDraftItemIdsAsync(
+                    projectId,
+                    title,
+                    CancellationToken.None).ConfigureAwait(false);
+                var ids = reconciledIds.Count == 0
+                    ? "(none found)"
+                    : string.Join(",", reconciledIds);
+                OnProgress?.Invoke(
+                    $"Field-default check draft creation was ambiguous: ids={ids} title='{title}' cleanup=pending");
+                throw new InvalidOperationException(
+                    $"Field-default check draft creation was ambiguous; inventory title '{title}' and matching item IDs [{ids}] before cleanup.",
+                    exception);
+            }
+
             itemId = data
                 .GetProperty("addProjectV2DraftIssue")
                 .GetProperty("projectItem")

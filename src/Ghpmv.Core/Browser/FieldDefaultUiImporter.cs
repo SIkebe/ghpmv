@@ -30,6 +30,44 @@ public sealed class FieldDefaultUiImporter
             && snapshot.Fields.Any(field => field.DefaultValue is not null);
     }
 
+    public static async Task<FieldDefaultImportSequenceResult<T>> RunImportSequenceAsync<T>(
+        ProjectSnapshot snapshot,
+        Func<FieldDefaultImportPhase, ProjectSnapshot, CancellationToken, Task> applyDefaultsAsync,
+        Func<CancellationToken, Task<T>> importItemsAsync,
+        Func<T, int> getSkippedItemCount,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(applyDefaultsAsync);
+        ArgumentNullException.ThrowIfNull(importItemsAsync);
+        ArgumentNullException.ThrowIfNull(getSkippedItemCount);
+
+        var hasCapturedDefaults = snapshot.Fields.Any(field => field.DefaultValue is not null);
+        if (hasCapturedDefaults)
+        {
+            await applyDefaultsAsync(
+                FieldDefaultImportPhase.NeutralizeBeforeItems,
+                CreateClearedDefaultsSnapshot(snapshot),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        var itemResult = await importItemsAsync(cancellationToken).ConfigureAwait(false);
+        var deferred = ShouldDefer(snapshot, getSkippedItemCount(itemResult));
+        if (hasCapturedDefaults && !deferred)
+        {
+            await applyDefaultsAsync(
+                FieldDefaultImportPhase.ApplyAfterItems,
+                snapshot,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return new FieldDefaultImportSequenceResult<T>
+        {
+            ItemResult = itemResult,
+            DefaultsDeferred = deferred,
+        };
+    }
+
     public static string FormatSummary(int importedCount, int warningCount)
         => string.Create(
             CultureInfo.InvariantCulture,
@@ -44,6 +82,19 @@ public sealed class FieldDefaultUiImporter
                 ? field
                 : field with { DefaultValue = new FieldDefaultValueSnapshot() }).ToList(),
         };
+    }
+
+    public enum FieldDefaultImportPhase
+    {
+        NeutralizeBeforeItems,
+        ApplyAfterItems,
+    }
+
+    public sealed record FieldDefaultImportSequenceResult<T>
+    {
+        public required T ItemResult { get; init; }
+
+        public required bool DefaultsDeferred { get; init; }
     }
 
     public async Task ImportAsync(

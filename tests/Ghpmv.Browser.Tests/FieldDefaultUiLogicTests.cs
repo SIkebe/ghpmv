@@ -168,6 +168,61 @@ public class FieldDefaultUiLogicTests
             cleared.Fields.Where(field => field.DefaultValue is null));
     }
 
+    [Fact]
+    public async Task Import_sequence_neutralizes_before_items_and_restores_only_after_skip_free_resume()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create();
+        var events = new List<string>();
+
+        var skipped = await FieldDefaultUiImporter.RunImportSequenceAsync(
+            snapshot,
+            (phase, desiredSnapshot, _) =>
+            {
+                events.Add(phase.ToString());
+                if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.NeutralizeBeforeItems)
+                {
+                    Assert.All(
+                        desiredSnapshot.Fields.Where(field => field.DefaultValue is not null),
+                        field => Assert.Equal(new FieldDefaultValueSnapshot(), field.DefaultValue));
+                }
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                events.Add("ImportItemsSkipped");
+                return Task.FromResult(new SequenceItemResult(1));
+            },
+            result => result.Skipped,
+            TestContext.Current.CancellationToken);
+
+        var resumed = await FieldDefaultUiImporter.RunImportSequenceAsync(
+            snapshot,
+            (phase, _, _) =>
+            {
+                events.Add(phase.ToString());
+                return Task.CompletedTask;
+            },
+            _ =>
+            {
+                events.Add("ImportItemsComplete");
+                return Task.FromResult(new SequenceItemResult(0));
+            },
+            result => result.Skipped,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(skipped.DefaultsDeferred);
+        Assert.False(resumed.DefaultsDeferred);
+        Assert.Equal(
+            [
+                "NeutralizeBeforeItems",
+                "ImportItemsSkipped",
+                "NeutralizeBeforeItems",
+                "ImportItemsComplete",
+                "ApplyAfterItems",
+            ],
+            events);
+    }
+
     [Theory]
     [InlineData("TEXT")]
     [InlineData("NUMBER")]
@@ -217,4 +272,6 @@ public class FieldDefaultUiLogicTests
 
         Assert.Contains("Fixture Text", exception.Message, StringComparison.Ordinal);
     }
+
+    private sealed record SequenceItemResult(int Skipped);
 }

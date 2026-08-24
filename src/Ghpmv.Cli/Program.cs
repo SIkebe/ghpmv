@@ -574,28 +574,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             return 0;
         }
 
-        if (enableBrowserAutomation
-            && snapshot.Fields.Any(field => field.DefaultValue is not null))
-        {
-            System.Diagnostics.Debug.Assert(session is not null);
-            var neutralizer = new FieldDefaultUiImporter(session)
-            {
-                OnProgress = Console.Error.WriteLine,
-            };
-            await neutralizer.ImportAsync(
-                FieldDefaultUiImporter.CreateClearedDefaultsSnapshot(snapshot),
-                org,
-                ownerType,
-                result.ProjectNumber,
-                cancellationToken);
-            if (neutralizer.Warnings.Count > 0)
-            {
-                throw new InvalidOperationException(
-                    "Target field defaults could not be cleared before item import: "
-                    + string.Join("; ", neutralizer.Warnings));
-            }
-        }
-
+        var fieldDefaultWarnings = 0;
+        var fieldDefaultsImported = 0;
         var itemImporter = new ItemImporter(client)
         {
             RepositoryMapping = repoMapping,
@@ -603,7 +583,58 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
             ReapplyCompletedFieldValues = result.Outcome == ProjectImportOutcome.Updated,
         };
-        var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+        ItemImportResult itemResult;
+        if (enableBrowserAutomation)
+        {
+            System.Diagnostics.Debug.Assert(session is not null);
+            var sequence = await FieldDefaultUiImporter.RunImportSequenceAsync(
+                snapshot,
+                async (phase, desiredSnapshot, ct) =>
+                {
+                    var defaultImporter = new FieldDefaultUiImporter(session)
+                    {
+                        OnProgress = Console.Error.WriteLine,
+                    };
+                    await defaultImporter.ImportAsync(
+                        desiredSnapshot,
+                        org,
+                        ownerType,
+                        result.ProjectNumber,
+                        ct);
+                    if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.NeutralizeBeforeItems
+                        && defaultImporter.Warnings.Count > 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Target field defaults could not be cleared before item import: "
+                            + string.Join("; ", defaultImporter.Warnings));
+                    }
+                    if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.ApplyAfterItems)
+                    {
+                        foreach (var warning in defaultImporter.Warnings)
+                        {
+                            Console.Error.WriteLine($"warning: {warning}");
+                        }
+
+                        fieldDefaultWarnings = defaultImporter.Warnings.Count;
+                        fieldDefaultsImported = defaultImporter.AppliedCount;
+                    }
+                },
+                ct => itemImporter.ImportAsync(snapshot, result, inDirectory, ct),
+                candidate => candidate.Skipped,
+                cancellationToken);
+            itemResult = sequence.ItemResult;
+            if (sequence.DefaultsDeferred)
+            {
+                fieldDefaultWarnings = 1;
+                Console.Error.WriteLine(
+                    $"warning: field defaults were deferred because {itemResult.Skipped} source item(s) were skipped; fix mappings and rerun import before defaults are applied");
+            }
+        }
+        else
+        {
+            itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+        }
+
         await PersistUnresolvedWarningsAsync(
             importer.Warnings.Count,
             itemResult.Warnings.Count,
@@ -646,40 +677,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var viewWarnings = result.ViewWarningCount;
-        var fieldDefaultWarnings = 0;
-        var fieldDefaultsImported = 0;
         var workflowWarnings = 0;
         var workflowsImported = 0;
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
-            if (FieldDefaultUiImporter.ShouldDefer(snapshot, itemResult.Skipped))
-            {
-                fieldDefaultWarnings = 1;
-                Console.Error.WriteLine(
-                    $"warning: field defaults were deferred because {itemResult.Skipped} source item(s) were skipped; fix mappings and rerun import before defaults are applied");
-            }
-            else
-            {
-                var fieldDefaultImporter = new FieldDefaultUiImporter(session)
-                {
-                    OnProgress = Console.Error.WriteLine,
-                };
-                await fieldDefaultImporter.ImportAsync(
-                    snapshot,
-                    org,
-                    ownerType,
-                    result.ProjectNumber,
-                    cancellationToken);
-                foreach (var warning in fieldDefaultImporter.Warnings)
-                {
-                    Console.Error.WriteLine($"warning: {warning}");
-                }
-
-                fieldDefaultWarnings = fieldDefaultImporter.Warnings.Count;
-                fieldDefaultsImported = fieldDefaultImporter.AppliedCount;
-            }
-
             await PersistUnresolvedWarningsAsync(
                 importer.Warnings.Count + fieldDefaultWarnings,
                 itemResult.Warnings.Count,
