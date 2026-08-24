@@ -571,6 +571,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
             OnProgress = Console.Error.WriteLine,
+            ReapplyCompletedFieldValues = result.Outcome == ProjectImportOutcome.Updated,
         };
         var itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
         await PersistUnresolvedWarningsAsync(
@@ -1010,17 +1011,25 @@ var fixtureUiOption = new Option<bool>("--fixture-ui")
 {
     Description = "Create the standard test fixture Views and Workflows on an existing project using browser automation.",
 };
+var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
+{
+    Description = "Apply the standard View 1 field-sum drift to an existing fixture Project using browser automation.",
+};
+var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
+{
+    Description = "Verify visible grouped-header Field sum rendering on an existing standard fixture Project.",
+};
 var fixtureOption = new Option<bool>("--fixture")
 {
     Description = "Create the standard API-backed test fixture repository/project.",
 };
 var fixtureOrgOption = new Option<string?>("--fixture-org")
 {
-    Description = "Organization login that owns the fixture used with --fixture or --fixture-ui.",
+    Description = "Organization login that owns the fixture used with fixture creation or browser fixture checks.",
 };
 var fixtureProjectOption = new Option<int?>("--fixture-project")
 {
-    Description = "Project number to configure with the standard fixture Views and Workflows used with --fixture-ui.",
+    Description = "Existing standard fixture Project number used by browser fixture operations.",
 };
 var fixtureTitleOption = new Option<string>("--fixture-title")
 {
@@ -1046,7 +1055,7 @@ var fixtureTeamOption = new Option<string?>("--fixture-team")
 };
 var setupBrowserProfileOption = new Option<string?>("--browser-profile")
 {
-    Description = "Named browser profile from 'ghpmv login --profile <name>' used with --fixture-ui.",
+    Description = "Named browser profile from 'ghpmv login --profile <name>' used by browser fixture operations.",
 };
 var setupApiBaseUrlOption = new Option<string?>("--api-base-url")
 {
@@ -1056,6 +1065,8 @@ setupApiBaseUrlOption.Validators.Add(ValidateBaseUrl);
 
 setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
+setupCommand.Options.Add(fixtureFieldSumDriftOption);
+setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
 setupCommand.Options.Add(fixtureOrgOption);
 setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
@@ -1086,33 +1097,52 @@ setupCommand.Validators.Add(result =>
         result.AddError("--fixture requires --fixture-org.");
     }
 
-    if (!result.GetValue(fixtureUiOption))
+    if (!result.GetValue(fixtureUiOption)
+        && !result.GetValue(fixtureFieldSumDriftOption)
+        && !result.GetValue(fixtureFieldSumRenderCheckOption))
     {
         return;
+    }
+
+    if ((result.GetValue(fixtureFieldSumDriftOption)
+            || result.GetValue(fixtureFieldSumRenderCheckOption))
+        && (result.GetValue(fixtureOption) || result.GetValue(fixtureUiOption)))
+    {
+        result.AddError("Field-sum drift/render checks cannot be combined with --fixture or --fixture-ui.");
+    }
+
+    if (result.GetValue(fixtureFieldSumDriftOption)
+        && result.GetValue(fixtureFieldSumRenderCheckOption))
+    {
+        result.AddError("--fixture-field-sum-drift and --fixture-field-sum-render-check cannot be combined.");
     }
 
     if (result.GetResult(baseUrlOption) is { Implicit: false }
         && result.GetResult(browserBaseUrlOption) is { Implicit: false })
     {
-        result.AddError("--fixture-ui accepts either --browser-base-url or the legacy --base-url, not both.");
+        result.AddError("Browser fixture operations accept either --browser-base-url or the legacy --base-url, not both.");
     }
 
     if (string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
     {
-        result.AddError("--fixture-ui requires --fixture-org.");
+        result.AddError("Browser fixture operations require --fixture-org.");
     }
 
     if (!result.GetValue(fixtureOption) && result.GetValue(fixtureProjectOption) is null)
     {
-        result.AddError("--fixture-ui requires --fixture-project unless it is combined with --fixture.");
+        result.AddError("Browser fixture operations require --fixture-project unless --fixture-ui is combined with --fixture.");
     }
 });
 
 setupCommand.SetAction(async (parseResult, cancellationToken) =>
 {
-    if (!parseResult.GetValue(browsersOption) && !parseResult.GetValue(fixtureOption) && !parseResult.GetValue(fixtureUiOption))
+    if (!parseResult.GetValue(browsersOption)
+        && !parseResult.GetValue(fixtureOption)
+        && !parseResult.GetValue(fixtureUiOption)
+        && !parseResult.GetValue(fixtureFieldSumDriftOption)
+        && !parseResult.GetValue(fixtureFieldSumRenderCheckOption))
     {
-        Console.Error.WriteLine("Nothing to install. Use 'ghpmv setup --browsers' to install the Playwright Chromium browser, 'ghpmv setup --fixture' to create the API-backed test fixture, or 'ghpmv setup --fixture-ui' to create test fixture Views/Workflows.");
+        Console.Error.WriteLine("Nothing to install or check. Use --browsers, --fixture, --fixture-ui, --fixture-field-sum-drift, or --fixture-field-sum-render-check.");
         return 1;
     }
 
@@ -1126,6 +1156,195 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         if (exitCode != 0)
         {
             return exitCode;
+        }
+    }
+
+    if (parseResult.GetValue(fixtureFieldSumRenderCheckOption))
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                ? parseResult.GetValue(baseUrlOption)
+                : null;
+            await using var browserSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+
+            var projectData = await client.QueryAsync(
+                """
+                query($login: String!, $number: Int!) {
+                  organization(login: $login) {
+                    projectV2(number: $number) {
+                      views(first: 100) { nodes { number name } }
+                    }
+                  }
+                }
+                """,
+                new { login = org, number = projectNumber },
+                cancellationToken);
+            var expectedNames = new HashSet<string>(["View 1", "Fixture Roadmap"], StringComparer.Ordinal);
+            var viewNumbers = projectData
+                .GetProperty("organization")
+                .GetProperty("projectV2")
+                .GetProperty("views")
+                .GetProperty("nodes")
+                .EnumerateArray()
+                .Where(node => expectedNames.Contains(node.GetProperty("name").GetString() ?? ""))
+                .GroupBy(node => node.GetProperty("name").GetString()!, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group =>
+                    {
+                        var matches = group.ToArray();
+                        if (matches.Length != 1)
+                        {
+                            throw new InvalidOperationException(
+                                $"Expected exactly one target View named '{group.Key}', found {matches.Length}.");
+                        }
+
+                        return matches[0].GetProperty("number").GetInt32();
+                    },
+                    StringComparer.Ordinal);
+            if (viewNumbers.Count != expectedNames.Count)
+            {
+                var missing = expectedNames.Where(name => !viewNumbers.ContainsKey(name));
+                throw new InvalidOperationException($"Missing target fixture Views: {string.Join(", ", missing)}.");
+            }
+
+            var observer = new FieldSumRenderingObserver(browserSession)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await observer.ValidateStandardFixtureAsync(
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                viewNumbers,
+                cancellationToken);
+            Console.Error.WriteLine(
+                $"Fixture field-sum rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
+            return 0;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    if (parseResult.GetValue(fixtureFieldSumDriftOption))
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                ? parseResult.GetValue(baseUrlOption)
+                : null;
+            await using var browserSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+
+            var snapshot = FixtureUiSnapshotFactory.CreateFieldSumDrift(
+                parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
+            var view = snapshot.Views.Single(candidate =>
+                string.Equals(candidate.Name, "View 1", StringComparison.Ordinal));
+            var projectData = await client.QueryAsync(
+                """
+                query($login: String!, $number: Int!) {
+                  organization(login: $login) {
+                    projectV2(number: $number) {
+                      views(first: 100) { nodes { number name } }
+                    }
+                  }
+                }
+                """,
+                new { login = org, number = projectNumber },
+                cancellationToken);
+            var targetViews = projectData
+                .GetProperty("organization")
+                .GetProperty("projectV2")
+                .GetProperty("views")
+                .GetProperty("nodes")
+                .EnumerateArray()
+                .Where(node => string.Equals(
+                    node.GetProperty("name").GetString(),
+                    view.Name,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (targetViews.Length != 1)
+            {
+                Console.Error.WriteLine(
+                    $"error: expected exactly one target View named '{view.Name}', found {targetViews.Length}.");
+                return 1;
+            }
+
+            var targetViewNumber = targetViews[0].GetProperty("number").GetInt32();
+            var viewImporter = new ViewUiImporter(browserSession) { OnProgress = Console.Error.WriteLine };
+            await viewImporter.ApplyFieldSumAsync(
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                targetViewNumber,
+                view.Name,
+                view.Ui!.FieldSum!,
+                cancellationToken);
+            foreach (var warning in viewImporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            Console.Error.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Fixture field-sum drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
+            return viewImporter.Warnings.Count == 0 ? 0 : 1;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
         }
     }
 

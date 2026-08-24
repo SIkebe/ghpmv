@@ -209,6 +209,12 @@ public sealed partial record E2eTestSettings
                 $"{sourceName}: gei.targetRole must be owner, migrator-active, or migrator-pending.");
         }
 
+        if (Gei.RepositoryMigrationsBypass is not ("exempt" or "not-applicable" or "unconfirmed"))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: gei.repositoryMigrationsBypass must be exempt, not-applicable, or unconfirmed.");
+        }
+
         if (Execution.FixturePreparation is not ("existing" or "create"))
         {
             throw new InvalidDataException(
@@ -340,6 +346,12 @@ public sealed partial record E2eTestSettings
             endpoint.TokenEnvironmentVariable,
             $"{propertyName}.tokenEnvironmentVariable",
             sourceName);
+        if (endpoint.TokenType is not null
+            && endpoint.TokenType is not ("classic" or "fine-grained"))
+        {
+            throw new InvalidDataException(
+                $"{sourceName}: {propertyName}.tokenType must be classic, fine-grained, or null.");
+        }
     }
 
     private static void ValidateFixture(E2eFixtureDefinition fixture, string propertyName, string sourceName)
@@ -570,6 +582,8 @@ public sealed record E2eEndpointSettings
 {
     public string Organization { get; init; } = "";
 
+    public bool? OrganizationAdministrator { get; init; }
+
     public bool? ProjectsEnabled { get; init; }
 
     public bool? PrivateRepositoryCreationAllowed { get; init; }
@@ -585,6 +599,8 @@ public sealed record E2eEndpointSettings
     public string BrowserStateEnvironmentVariable { get; init; } = "GHPMV_BROWSER_STATE";
 
     public string TokenEnvironmentVariable { get; init; } = "GHPMV_TEST_TOKEN";
+
+    public string? TokenType { get; init; }
 }
 
 public sealed record E2eFixtureSettings
@@ -656,6 +672,8 @@ public sealed record E2eGeiSettings
     public string SourceRole { get; init; } = "owner";
 
     public string TargetRole { get; init; } = "owner";
+
+    public string RepositoryMigrationsBypass { get; init; } = "unconfirmed";
 }
 
 public sealed record E2eExecutionSettings

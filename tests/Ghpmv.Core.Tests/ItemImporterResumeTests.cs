@@ -261,6 +261,230 @@ public class ItemImporterResumeTests
     }
 
     [Fact]
+    public async Task Existing_project_update_reapplies_completed_field_values_without_recreating_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-reapply-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage: "");
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var result = await new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            }.ImportAsync(snapshot, target, directory, cancellationToken);
+
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(2, handler.FieldMutationCount);
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            Assert.Equal(0, result.Created);
+            Assert.Equal(1, result.Resumed);
+            Assert.Equal(0, result.AlreadyComplete);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_project_update_unarchives_live_item_when_archive_log_was_not_persisted()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-archive-recovery-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(
+                failedStage: "",
+                rejectFieldMutationWhenArchived: true);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var interrupted = await ImportLog.LoadAsync(directory, cancellationToken);
+            var interruptedState = Assert.Single(interrupted!.ItemStates).Value;
+            interruptedState.ArchiveApplied = false;
+            await interrupted.SaveAsync(directory, cancellationToken);
+
+            var result = await new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            }.ImportAsync(snapshot, target, directory, cancellationToken);
+
+            Assert.Empty(result.Warnings);
+            Assert.Equal(1, handler.CreateMutationCount);
+            Assert.Equal(2, handler.FieldMutationCount);
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            var completedState = Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value;
+            Assert.True(completedState.FieldValuesApplied);
+            Assert.True(completedState.ArchiveApplied);
+            Assert.Null(completedState.LastError);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_project_update_rearchives_item_when_field_replay_is_incomplete()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-archive-warning-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(failedStage: "");
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var targetWithField = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, targetWithField, directory, cancellationToken);
+            var result = await new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            }.ImportAsync(
+                snapshot,
+                targetWithField with { FieldIds = new Dictionary<string, string>() },
+                directory,
+                cancellationToken);
+
+            Assert.Single(result.Warnings);
+            Assert.Equal(1, handler.FieldMutationCount);
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            var state = Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value;
+            Assert.False(state.FieldValuesApplied);
+            Assert.True(state.ArchiveApplied);
+            Assert.NotNull(state.FieldValuesError);
+            Assert.Null(state.ArchiveError);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_project_update_rearchives_item_when_field_replay_throws()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-archive-error-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler("field", failureAttempt: 2);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var importer = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+
+            Assert.Equal(2, handler.FieldMutationCount);
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            var state = Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value;
+            Assert.False(state.FieldValuesApplied);
+            Assert.True(state.ArchiveApplied);
+            Assert.NotNull(state.FieldValuesError);
+            Assert.Null(state.ArchiveError);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_project_update_rearchives_item_when_unarchive_result_is_uncertain()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-update-unarchive-error-").FullName;
+        try
+        {
+            using var handler = new StageResumeHandler(
+                failedStage: "",
+                failUnarchiveAfterApplying: true);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with
+            {
+                Outcome = ProjectImportOutcome.Updated,
+                FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" },
+            };
+
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var importer = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["source/repo"] = "target/repo",
+                },
+                ReapplyCompletedFieldValues = true,
+            };
+
+            await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+
+            Assert.Equal(1, handler.UnarchiveMutationCount);
+            Assert.Equal(2, handler.ArchiveMutationCount);
+            var state = Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value;
+            Assert.False(state.FieldValuesApplied);
+            Assert.True(state.ArchiveApplied);
+            Assert.NotNull(state.FieldValuesError);
+            Assert.Null(state.ArchiveError);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_field_mapping_remains_resumable()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -609,8 +833,12 @@ public class ItemImporterResumeTests
     private sealed class StageResumeHandler(
         string failedStage,
         int failureAttempt = 1,
-        bool archivedAfterFailure = false) : HttpMessageHandler
+        bool archivedAfterFailure = false,
+        bool rejectFieldMutationWhenArchived = false,
+        bool failUnarchiveAfterApplying = false) : HttpMessageHandler
     {
+        private bool _isArchived = archivedAfterFailure;
+
         public int CreateMutationCount { get; private set; }
 
         public int FieldMutationCount { get; private set; }
@@ -618,6 +846,8 @@ public class ItemImporterResumeTests
         public int PositionMutationCount { get; private set; }
 
         public int ArchiveMutationCount { get; private set; }
+
+        public int UnarchiveMutationCount { get; private set; }
 
         public List<string?> PositionAfterIds { get; } = [];
 
@@ -650,6 +880,11 @@ public class ItemImporterResumeTests
             if (query.Contains("updateProjectV2ItemFieldValue", StringComparison.Ordinal))
             {
                 FieldMutationCount++;
+                if (rejectFieldMutationWhenArchived && _isArchived)
+                {
+                    return Error();
+                }
+
                 return ShouldFail("field", FieldMutationCount)
                     ? Error()
                     : Json("""{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_new"}}}}""");
@@ -665,17 +900,33 @@ public class ItemImporterResumeTests
                     : Json("""{"data":{"updateProjectV2ItemPosition":{"clientMutationId":"position"}}}""");
             }
 
+            if (query.Contains("unarchiveProjectV2Item", StringComparison.Ordinal))
+            {
+                UnarchiveMutationCount++;
+                _isArchived = false;
+                if (failUnarchiveAfterApplying)
+                {
+                    return Error();
+                }
+
+                return Json("""{"data":{"unarchiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
+            }
+
             if (query.Contains("archiveProjectV2Item", StringComparison.Ordinal))
             {
                 ArchiveMutationCount++;
-                return ShouldFail("archive", ArchiveMutationCount)
-                    ? Error()
-                    : Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
+                if (ShouldFail("archive", ArchiveMutationCount))
+                {
+                    return Error();
+                }
+
+                _isArchived = true;
+                return Json("""{"data":{"archiveProjectV2Item":{"item":{"id":"PVTI_new"}}}}""");
             }
 
             if (query.Contains("... on ProjectV2Item { isArchived }", StringComparison.Ordinal))
             {
-                return archivedAfterFailure
+                return _isArchived
                     ? Json("""{"data":{"node":{"isArchived":true}}}""")
                     : Json("""{"data":{"node":{"isArchived":false}}}""");
             }

@@ -10,7 +10,7 @@
 | View タブ並べ替え | `[role=tab][href$='/views/{number}']` の source を target の左右端へ drag-and-drop | View number で前方一致名を避ける。overflow 時は両 locator を `ScrollIntoViewIfNeededAsync` してから操作 |
 | 新規 View 作成 | `getByRole('tab', { name: 'New view' })` → menu `New view` → `menuitem "Table"/"Board"/"Roadmap"` | 選択と同時に view 作成・遷移(保存不要) |
 | View リネーム | タブをダブルクリック → `getByRole('textbox', { name: 'Change view name' })` → fill → Enter | 即時保存 |
-| View 設定メニュー | フィルターバーの `button "View"`(exact)| `menu > group "Configuration"` に `menuitem "Group by: <val>" / "Markers: <val>" / "Sort by: <val>" / "Dates: <val>" / "Zoom level: <val>" / "Slice by: <val>"`。**ラベルと現在値が name に結合**されるため部分一致(`name: /^Group by:/` 等)で特定する |
+| View 設定メニュー | フィルターバーの `button "View"`(exact)| `menu > group "Configuration"` に `menuitem "Group by: <val>" / "Markers: <val>" / "Sort by: <val>" / "Dates: <val>" / "Zoom level: <val>" / "Field sum: <val>" / "Slice by: <val>"`。**ラベルと現在値が name に結合**されるため部分一致(`name: /^Group by:/` 等)で特定する |
 | Roadmap 日付フィールド | `menuitem "Dates: ..."` → `dialog "Select date fields"` → group "Start date" / "Target date" の `menuitemradio` | Iteration フィールドは "<name> start" / "<name> end" の 2 radio に展開される |
 | View 設定の保存 | `button "Save view"` → **確認 alertdialog** "Save display options for <view>?" → `button "Save"` | 設定変更は「Unsaved changes」status で検出可能。保存は 2 段階 |
 | Workflow 一覧 | `/orgs/{org}/projects/{n}/workflows`。サイドバー `list "Default workflows"` 内の link | |
@@ -27,13 +27,26 @@
 5. View 系の設定変更は SPA 内で「Unsaved changes」になり、明示保存が必要(タブ名変更は例外で即時保存)
 6. GraphQL read-backのView内容とWorkflow状態はUI操作後に反映されるが、`views(orderBy:{field:POSITION})`はsaved-tab DOM順と一致しない場合がある。実環境診断(2026-08-19)ではDOMが`Fixture Roadmap → View 1 → Fixture Board`、GraphQL POSITIONが`View 1 → Fixture Roadmap → Fixture Board`のまま60秒超乖離した。tab orderは`navigation "Select view"`内のsaved tab `href` DOM順を正とする
 
+## Table / Roadmap Field sum discovery (2026-08-19)
+
+GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、2 つの Number field を追加して確認した。
+
+1. Table と Roadmap は `Group by` が `none` の間は `Field sum` 項目を表示しない。グループ化すると Board と同じ `menuitem "Field sum: Count"` が現れる
+2. 3 layout とも子 menu の選択肢は `menuitemcheckbox`、`aria-checked` で状態を表す。選択肢は `Count` と Number field 名で、`Count` は既定で checked だが解除可能
+3. Table と Roadmap でも複数 Number field を同時に checked にでき、空集合へ戻せる。3 件以上の選択時、親 menu の summary は `Count, Probe Number 1, 1 more` のように省略されるため、export は summary text を parse せず子 menu の checked entry を全件読む
+4. Roadmap では親の View menu に `Truncate titles` / `Show date fields` の checkbox も残る。Field sum / Markers の同期は page 全体ではなく、最後に開いた子 menu へ scope しないと無関係な表示設定を変更する
+5. Table / Roadmap とも変更後は `button "Save view"` が表示され、`alertdialog "Save display options for <view>?"` の `button "Save"` で確定する。既存の 2 段階保存フローと同じ
+6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
+7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
+
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board
-  - 1=View 1 (TABLE): filter=`status:Todo`, Sort by=Fixture Number (asc), Slice by=Fixture Select, visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums
+  - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
-  - 3=Fixture Roadmap (ROADMAP): Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
+  - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
+  - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
 
@@ -84,10 +97,10 @@ Important limitations:
 ## E2E カバレッジ強化で確定した追加知見(2026-07-06)
 
 1. **Board の横グルーピングは「Group by」ではなく「Swimlanes」メニュー項目**(`menuitem "Swimlanes: <value>"`)。Board のメニューは `Fields / Column by / Swimlanes / Sort by / Field sum / Slice by` の 6 項目で "Group by" は存在しない。GraphQL の `groupByFields` は board では Swimlanes を反映するため、import は board のとき Swimlanes メニューで適用する
-2. **Field sum はチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。menuitem の accessible name は "Field sum: Count and Fixture Number" のようにラベル結合されるため値はメニューを開かず読める。Count は uncheck 可能
+2. **Field sum は Board と grouped Table / Roadmap 共通のチェックボックスオーバーレイ**(`menuitemcheckbox`: "Count" + 数値フィールド名)。親 menu の accessible name は "Field sum: Count and Fixture Number" のように値を含むが、3 件以上では `1 more` に省略されるため、export は子 menu を開いて checked entry を全件読む。submenu が存在して全 entry が unchecked なら `fieldSum=[]`、expected control または checkable entry を取得できなければ View UI 未取得 warning とする。Count は uncheck 可能。Table / Roadmap では未 grouping の間は項目自体が無い
 3. **UI のリスト値は散文形式**: "A and B" / "A, B, and C"(カンマ区切りとは限らない)→ ParseListValue は `,` と `" and "` の両方で分割する
 4. **Fields オーバーレイのエントリーは `option` ロール + aria-checked**(Field sum / Markers の `menuitemcheckbox` とは異なる)→ チェックボックス走査は両ロール対応が必要(ToggleCheckboxesAsync 対応済み)
-5. **Markers オーバーレイには表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Milestone / date・iteration フィールド名(マーカー)。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
+5. **Roadmap の親 menu には表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Markers / Field sum の子 menu。子 menu の checkbox 操作は最後に開いた menu へ scope し、親 menu の表示設定を誤操作しない。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
 6. **未保存 workflow のページには enable toggle が存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID だが、この ID は GraphQL workflow number とは独立している。export は GraphQL の enabled 値を使い、詳細ページはサイドバーの name 一致 link で開く。toggle の accessible name も workflow 名とは限らないため、import は main detail pane 内の stateful control (`aria-pressed` / `aria-checked` / checkbox) へ fallback する
 7. **未保存 disabled workflow は Edit → "Save and turn on workflow"(設定変更なしでも押せる)→ トグル off で「保存済み disabled」にできる**。未保存状態には toggle がないため、設定値が既に一致する enabled workflow も toggle を探さずこの保存経路で有効化する。保存済み disabled workflow は GraphQL の `workflows` に enabled=false で現れ、閲覧モードで設定値も読める(export 可能)。import は未保存の場合にこの save-once 経路を通す(WorkflowUiImporter.ApplyBuiltInAsync / ApplyDisabledAsync)
 8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する

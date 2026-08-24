@@ -70,7 +70,11 @@
         "sourceTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "targetTokenOwnerLogin": { "$ref": "#/$defs/optionalUserLogin" },
         "sourceRole": { "$ref": "#/$defs/geiRole" },
-        "targetRole": { "$ref": "#/$defs/geiRole" }
+        "targetRole": { "$ref": "#/$defs/geiRole" },
+        "repositoryMigrationsBypass": {
+          "enum": ["exempt", "not-applicable", "unconfirmed"],
+          "description": "Whether applicable rulesets exempt Repository migrations, no applicable ruleset exists, or the state is not confirmed."
+        }
       }
     },
     "execution": {
@@ -141,6 +145,10 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
+        "organizationAdministrator": {
+          "type": ["boolean", "null"],
+          "description": "Whether the configured ghpmv token/browser identity is an organization administrator; null when not yet confirmed."
+        },
         "projectsEnabled": {
           "type": ["boolean", "null"],
           "description": "Whether GitHub Projects is enabled for the organization; null when not yet confirmed."
@@ -180,6 +188,11 @@
         "tokenEnvironmentVariable": {
           "$ref": "#/$defs/environmentVariable",
           "description": "Must not match either endpoint's browserStateEnvironmentVariable."
+        },
+        "tokenType": {
+          "type": ["string", "null"],
+          "enum": ["classic", "fine-grained", null],
+          "description": "PAT type used by ghpmv for this endpoint. When null or omitted, the interactive validation workflow asks."
         }
       }
     },

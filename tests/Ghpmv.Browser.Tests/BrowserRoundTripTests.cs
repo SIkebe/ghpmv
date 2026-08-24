@@ -209,16 +209,25 @@ public class BrowserRoundTripTests
         // silently comparing null-to-null when the scrape misses a setting.
         var sourceTable = Assert.Single(source.Views, v => v.Name == "View 1");
         Assert.Equal("status:Todo", sourceTable.Filter);
+        Assert.Equal(["Status"], sourceTable.GroupByFields);
         Assert.Equal("Fixture Number", Assert.Single(sourceTable.SortByFields).Field);
         Assert.Equal("Fixture Select", sourceTable.Ui!.SliceBy);
+        Assert.Equal(["Count", "Fixture Number", "Fixture Number 2"], sourceTable.Ui.FieldSum);
 
         var sourceBoard = Assert.Single(source.Views, v => v.Name == "Fixture Board");
         Assert.Equal("Fixture Select", Assert.Single(sourceBoard.VerticalGroupByFields));
         Assert.Equal(["Fixture Number"], sourceBoard.Ui!.FieldSum);
 
         var sourceRoadmap = Assert.Single(source.Views, v => v.Name == "Fixture Roadmap");
+        Assert.Equal(["Status"], sourceRoadmap.GroupByFields);
+        Assert.Equal(["Fixture Number 2"], sourceRoadmap.Ui!.FieldSum);
         Assert.Equal("Quarter", sourceRoadmap.Ui!.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+
+        var sourceEmptySums = Assert.Single(source.Views, v => v.Name == "Fixture Empty Sums");
+        Assert.Equal(["Status"], sourceEmptySums.GroupByFields);
+        Assert.Empty(sourceEmptySums.Ui!.FieldSum ?? []);
+
         var sourceTabOrder = source.Views.OrderBy(view => view.TabPosition).Select(view => view.Name).ToList();
         Assert.False(sourceTabOrder.SequenceEqual(
             source.Views.OrderBy(view => view.Number).Select(view => view.Name),
@@ -357,7 +366,7 @@ public class BrowserRoundTripTests
             {
                 Views = snapshot.Views.Select(view =>
                     view.Name == "View 1"
-                        ? view with { Ui = view.Ui! with { SliceBy = "Status" } }
+                        ? view with { Ui = view.Ui! with { FieldSum = ["Fixture Number"] } }
                         : view).ToList(),
             };
             await viewImporter.EnrichAsync(
@@ -371,7 +380,7 @@ public class BrowserRoundTripTests
             Assert.Contains(driftReport.Differences, difference =>
                 difference.Severity == VerifySeverity.Error
                 && difference.Category == "View"
-                && difference.Message.Contains("slice by mismatch", StringComparison.Ordinal));
+                && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
         }
         finally
         {

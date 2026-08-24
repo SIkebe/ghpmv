@@ -20,6 +20,7 @@ public class E2eTestSettingsTests
               "schemaVersion": 1,
               "source": {
                 "organization": "source-org",
+                "organizationAdministrator": true,
                 "projectsEnabled": true,
                 "privateRepositoryCreationAllowed": false,
                 "apiBaseUrl": "https://api.github.com/graphql",
@@ -28,9 +29,11 @@ public class E2eTestSettingsTests
                 "browserProfile": "source",
                 "browserStateEnvironmentVariable": "SOURCE_STATE",
                 "tokenEnvironmentVariable": "SOURCE_TOKEN",
+                "tokenType": "fine-grained",
               },
               "target": {
                 "organization": "target-org",
+                "organizationAdministrator": false,
                 "projectsEnabled": null,
                 "privateRepositoryCreationAllowed": true,
                 "apiBaseUrl": "https://api.example.ghe.com/graphql",
@@ -38,7 +41,8 @@ public class E2eTestSettingsTests
                 "uploadsBaseUrl": "https://uploads.example.ghe.com",
                 "browserProfile": "target",
                 "browserStateEnvironmentVariable": "TARGET_STATE",
-                "tokenEnvironmentVariable": "TARGET_TOKEN"
+                "tokenEnvironmentVariable": "TARGET_TOKEN",
+                "tokenType": "classic"
               },
               "fixtures": {
                 "integration": {
@@ -69,7 +73,8 @@ public class E2eTestSettingsTests
                 "sourceTokenOwnerLogin": "source-owner",
                 "targetTokenOwnerLogin": "target-owner",
                 "sourceRole": "migrator-active",
-                "targetRole": "owner"
+                "targetRole": "owner",
+                "repositoryMigrationsBypass": "exempt"
               },
               "execution": {
                 "fixturePreparation": "existing",
@@ -85,12 +90,17 @@ public class E2eTestSettingsTests
             var result = E2eTestSettings.Load(path);
 
             Assert.Equal("example.ghe.com", new Uri(result.Target.WebBaseUrl).Host);
+            Assert.True(result.Source.OrganizationAdministrator);
+            Assert.Equal("fine-grained", result.Source.TokenType);
+            Assert.False(result.Target.OrganizationAdministrator);
+            Assert.Equal("classic", result.Target.TokenType);
             Assert.True(result.Source.ProjectsEnabled);
             Assert.False(result.Source.PrivateRepositoryCreationAllowed);
             Assert.Null(result.Target.ProjectsEnabled);
             Assert.True(result.Target.PrivateRepositoryCreationAllowed);
             Assert.Equal("gei-target", result.Gei.TargetRepository);
             Assert.Equal("migrator-active", result.Gei.SourceRole);
+            Assert.Equal("exempt", result.Gei.RepositoryMigrationsBypass);
             Assert.Equal("octocat_contoso", result.Users.ToMappingDictionary()["octocat"]);
         }
         finally
@@ -115,6 +125,40 @@ public class E2eTestSettingsTests
         var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
 
         Assert.Contains("environment variable name, not a token value", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_rejects_unknown_repository_migrations_bypass_status()
+    {
+        var settings = new E2eTestSettings
+        {
+            Gei = new E2eGeiSettings
+            {
+                RepositoryMigrationsBypass = "always-allow",
+            },
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
+
+        Assert.Contains("gei.repositoryMigrationsBypass", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_rejects_unknown_endpoint_token_type()
+    {
+        var settings = new E2eTestSettings
+        {
+            Source = new E2eEndpointSettings
+            {
+                Organization = "source-org",
+                BrowserProfile = "source",
+                TokenType = "oauth-app",
+            },
+        };
+
+        var exception = Assert.Throws<InvalidDataException>(() => settings.Validate());
+
+        Assert.Contains("source.tokenType", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

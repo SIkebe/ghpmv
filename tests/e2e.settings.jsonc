@@ -9,6 +9,10 @@
     // Project と fixture repository を所有する Organization の login です。表示名ではありません。
     "organization": "gpm-source",
 
+    // source token / browser account がOrganization administratorかを記録します。
+    // true / false、未確認ならnullです。標準fixtureのIssue Field作成にはtrueが必要です。
+    "organizationAdministrator": null,
+
     // OrganizationでGitHub Projectsが有効かを記録します。true / false、未確認ならnullです。
     "projectsEnabled": null,
 
@@ -35,12 +39,19 @@
 
     // fixture 作成と export に使用する PAT を保持する環境変数名です。
     // PAT の値そのものは絶対にこの設定ファイルへ書きません。
-    "tokenEnvironmentVariable": "GHPMV_SOURCE_TOKEN"
+    "tokenEnvironmentVariable": "GHPMV_SOURCE_TOKEN",
+
+    // classic / fine-grained。nullならE2E validation開始時に質問します。
+    "tokenType": null
   },
 
   // import、verify、および一時 Project 作成先となる GitHub 環境です。
   "target": {
     "organization": "gpm-target",
+
+    // target token / browser account がOrganization administratorかを記録します。
+    // 標準fixture snapshotのIssue Field importにはtrueが必要です。
+    "organizationAdministrator": null,
 
     // import先Projectを作成できるよう、target OrganizationでProjectsが有効かを記録します。
     "projectsEnabled": null,
@@ -56,7 +67,10 @@
     "uploadsBaseUrl": null,
     "browserProfile": "target",
     "browserStateEnvironmentVariable": "GHPMV_TARGET_BROWSER_STATE",
-    "tokenEnvironmentVariable": "GHPMV_TARGET_TOKEN"
+    "tokenEnvironmentVariable": "GHPMV_TARGET_TOKEN",
+
+    // classic / fine-grained。nullならE2E validation開始時に質問します。
+    "tokenType": null
   },
 
   // 既存の自動テストが参照する共有 fixture です。
@@ -122,7 +136,11 @@
     // owner、migrator-active、migrator-pending のいずれかです。
     // migrator-pending は role 付与前なので、GEI 実行可能とは扱いません。
     "sourceRole": "owner",
-    "targetRole": "owner"
+    "targetRole": "owner",
+
+    // exempt: applicable rulesetでRepository migrations bypassがExempt。
+    // not-applicable: applicable rulesetなし。未確認ならunconfirmedで、GEI実行前に停止します。
+    "repositoryMigrationsBypass": "unconfirmed"
   },
 
   // E2E の resource 準備方法です。安全確認や削除同意を省略する設定ではありません。

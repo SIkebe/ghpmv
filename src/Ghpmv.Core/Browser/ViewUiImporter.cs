@@ -12,6 +12,8 @@ namespace Ghpmv.Core.Browser;
 /// </summary>
 public sealed class ViewUiImporter
 {
+    private const int ViewPersistenceAttempts = 3;
+
     private static readonly AriaRole[] OptionRoles =
     [
         AriaRole.Menuitemradio,
@@ -142,8 +144,7 @@ public sealed class ViewUiImporter
                     projectNumber,
                     string.Create(CultureInfo.InvariantCulture, $"views/{targetNumber}"));
                 await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-                await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
-                await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+                await ApplyAndVerifyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
@@ -158,6 +159,43 @@ public sealed class ViewUiImporter
                 viewNumbers,
                 cancellationToken),
             _warnings).ConfigureAwait(false);
+    }
+
+    /// <summary>Applies and saves only the complete Field sum selection for one target View.</summary>
+    public async Task ApplyFieldSumAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        string viewName,
+        IReadOnlyList<string> fieldSum,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
+        ArgumentNullException.ThrowIfNull(fieldSum);
+
+        OnProgress?.Invoke($"Applying field-sum drift for view '{viewName}'...");
+        try
+        {
+            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            await ApplyAndVerifyFieldSumAsync(
+                page,
+                viewName,
+                fieldSum,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            _warnings.Add($"view '{viewName}': field-sum drift could not be applied — {exception.Message}");
+        }
     }
 
     internal static async Task ApplyTabOrderRecoverablyAsync(
@@ -472,6 +510,10 @@ public sealed class ViewUiImporter
                 cancellationToken).ConfigureAwait(false);
         }
 
+        // Grouped Table/Roadmap views do not reliably expose Field sum until the
+        // grouping change has been persisted and the View has reloaded.
+        await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+
         if (isBoard && view.VerticalGroupByFields.Count > 0)
         {
             await TrySetSingleAsync(page, "Column by", view.VerticalGroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
@@ -489,12 +531,16 @@ public sealed class ViewUiImporter
 
         if (view.SortByFields.Count > 0)
         {
-            await TryEnsureSortFieldVisibleAsync(
-                page,
-                view.SortByFields[0].Field,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
-            await TrySetSortAsync(page, view.SortByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            var sort = view.SortByFields[0];
+            if (!await IsSortAlreadyAppliedAsync(page, sort, cancellationToken).ConfigureAwait(false))
+            {
+                await TryEnsureSortFieldVisibleAsync(
+                    page,
+                    sort.Field,
+                    view.Name,
+                    cancellationToken).ConfigureAwait(false);
+                await TrySetSortAsync(page, sort, view.Name, cancellationToken).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -523,11 +569,11 @@ public sealed class ViewUiImporter
                 cancellationToken).ConfigureAwait(false);
         }
 
-        // "Field sum" is a checkbox overlay (Count + number fields). A fresh board
-        // defaults to ["Count"], so apply the complete desired set, including empty.
-        if (isBoard && view.Ui is not null)
+        // Grouped Table/Roadmap views and Board views expose the same checkbox overlay
+        // (Count + number fields). Apply the complete desired set, including empty.
+        if (FieldSumValuesToApply(view) is { } fieldSum)
         {
-            await TrySetCheckboxesAsync(page, "Field sum", view.Ui.FieldSum ?? [], view.Name, cancellationToken).ConfigureAwait(false);
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, view.Name, cancellationToken).ConfigureAwait(false);
         }
 
         if (view.Ui?.Roadmap is { } roadmap)
@@ -546,6 +592,271 @@ public sealed class ViewUiImporter
         }
 
     }
+
+    internal static IReadOnlyList<string>? FieldSumValuesToApply(ViewSnapshot view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        if (view.Ui is null)
+        {
+            return null;
+        }
+
+        return FieldSumControlExpected(view) ? view.Ui.FieldSum ?? [] : null;
+    }
+
+    internal static bool FieldSumControlExpected(ViewSnapshot view)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        return string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            || view.GroupByFields.Count > 0
+            && (view.Layout is "TABLE_LAYOUT" or "ROADMAP_LAYOUT");
+    }
+
+    private async Task ApplyAndVerifyBrowserOnlySettingsAsync(
+        IPage page,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> differences = [];
+        for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+        {
+            var warningStart = _warnings.Count;
+            await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+
+            var persisted = await ReadPersistedSettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            differences = CollectPersistenceDifferences(view, persisted);
+            if (differences.Count == 0)
+            {
+               return;
+            }
+
+            if (attempt < ViewPersistenceAttempts)
+            {
+               _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+               OnProgress?.Invoke(
+                   $"View '{view.Name}' did not persist all browser settings; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+               await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+               await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var difference in differences)
+        {
+            _warnings.Add(
+               $"view '{view.Name}': {difference} did not persist after {ViewPersistenceAttempts} attempts");
+        }
+    }
+
+    private async Task ApplyAndVerifyFieldSumAsync(
+        IPage page,
+        string viewName,
+        IReadOnlyList<string> fieldSum,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? persisted = null;
+        for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+        {
+            var warningStart = _warnings.Count;
+            await TrySetCheckboxesAsync(page, "Field sum", fieldSum, viewName, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            persisted = await ReadPersistedFieldSumAsync(page, cancellationToken).ConfigureAwait(false);
+            if (FieldSumMatches(fieldSum, persisted))
+            {
+                return;
+            }
+
+            if (attempt < ViewPersistenceAttempts)
+            {
+                _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+                OnProgress?.Invoke(
+                    $"View '{viewName}' did not persist the Field sum selection; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+                await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _warnings.Add(
+            $"view '{viewName}': field-sum expected [{string.Join(", ", fieldSum)}], "
+            + $"actual [{(persisted is null ? "unavailable" : string.Join(", ", persisted))}] "
+            + $"did not persist after {ViewPersistenceAttempts} attempts");
+    }
+
+    private static async Task<PersistedViewSettings> ReadPersistedSettingsAsync(
+        IPage page,
+        ViewSnapshot view,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var groupingLabel = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+               ? "Swimlanes"
+               : "Group by";
+            var groupBy = await ReadMenuValueAsync(menu, groupingLabel).ConfigureAwait(false);
+            var columnBy = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+               ? await ReadMenuValueAsync(menu, "Column by").ConfigureAwait(false)
+               : null;
+            var sliceBy = view.Ui is null
+               ? null
+               : await ReadMenuValueAsync(menu, "Slice by").ConfigureAwait(false);
+
+            var expectedFieldSum = FieldSumValuesToApply(view);
+            if (expectedFieldSum is null)
+            {
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
+            }
+
+            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
+            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            {
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
+            }
+
+            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            var checkedValues = await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
+            return checkedValues is null
+                ? new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, [])
+                : new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>?> ReadPersistedFieldSumAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
+            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            {
+                return null;
+            }
+
+            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            return await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<string?> ReadMenuValueAsync(ILocator menu, string label)
+    {
+        var item = Sel.ConfigurationMenuItem(menu, label);
+        return await item.CountAsync().ConfigureAwait(false) == 0
+            ? null
+            : ViewUiExporter.ParseMenuValue(await item.First.InnerTextAsync().ConfigureAwait(false));
+    }
+
+    private static async Task<IReadOnlyList<string>?> ReadCheckedValuesAsync(ILocator overlay)
+    {
+        var values = new List<string>();
+        var options = Sel.CheckboxOptions(overlay);
+        var count = await options.CountAsync().ConfigureAwait(false);
+        if (count == 0)
+        {
+            return null;
+        }
+
+        for (var index = 0; index < count; index++)
+        {
+            var option = options.Nth(index);
+            if (!string.Equals(
+                   await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                   "true",
+                   StringComparison.Ordinal))
+            {
+               continue;
+            }
+
+            if (ViewUiExporter.NormalizeUiText(await option.InnerTextAsync().ConfigureAwait(false)) is { } value)
+            {
+               values.Add(value);
+            }
+        }
+
+        return values;
+    }
+
+    internal static IReadOnlyList<string> CollectPersistenceDifferences(
+        ViewSnapshot expected,
+        PersistedViewSettings actual)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(actual);
+
+        var differences = new List<string>();
+        var expectedGroupBy = expected.GroupByFields.Count == 0
+            ? null
+            : expected.GroupByFields[0];
+        if (!string.Equals(expectedGroupBy, actual.GroupBy, StringComparison.Ordinal))
+        {
+            differences.Add($"grouping expected '{FormatValue(expectedGroupBy)}', actual '{FormatValue(actual.GroupBy)}'");
+        }
+
+        if (string.Equals(expected.Layout, "BOARD_LAYOUT", StringComparison.Ordinal))
+        {
+            var expectedColumnBy = expected.VerticalGroupByFields.Count == 0
+                ? null
+                : expected.VerticalGroupByFields[0];
+            if (!string.Equals(expectedColumnBy, actual.ColumnBy, StringComparison.Ordinal))
+            {
+               differences.Add($"column-by expected '{FormatValue(expectedColumnBy)}', actual '{FormatValue(actual.ColumnBy)}'");
+            }
+        }
+
+        if (expected.Ui is not null
+            && !string.Equals(expected.Ui.SliceBy, actual.SliceBy, StringComparison.Ordinal))
+        {
+            differences.Add($"slice-by expected '{FormatValue(expected.Ui.SliceBy)}', actual '{FormatValue(actual.SliceBy)}'");
+        }
+
+        if (FieldSumValuesToApply(expected) is { } expectedFieldSum)
+        {
+            if (!actual.FieldSumAvailable)
+            {
+               differences.Add("field-sum control is unavailable");
+            }
+            else if (!SetEquals(expectedFieldSum, actual.FieldSum))
+            {
+               differences.Add(
+                   $"field-sum expected [{string.Join(", ", expectedFieldSum)}], actual [{string.Join(", ", actual.FieldSum)}]");
+            }
+        }
+
+        return differences;
+    }
+
+    private static bool SetEquals(IReadOnlyList<string> expected, IReadOnlyList<string> actual)
+        => expected.Count == actual.Count
+            && expected.ToHashSet(StringComparer.Ordinal).SetEquals(actual);
+
+    internal static bool FieldSumMatches(
+        IReadOnlyList<string> expected,
+        IReadOnlyList<string>? actual)
+        => actual is not null && SetEquals(expected, actual);
+
+    private static string FormatValue(string? value) => value ?? "none";
+
+    internal sealed record PersistedViewSettings(
+        string? GroupBy,
+        string? ColumnBy,
+        string? SliceBy,
+        bool FieldSumAvailable,
+        IReadOnlyList<string> FieldSum);
 
     private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
         => await TrySetSingleAsync(page, label, [value], value, viewName, cancellationToken).ConfigureAwait(false);
@@ -655,6 +966,40 @@ public sealed class ViewUiImporter
     internal static bool HasSortDirection(string? menuText, string directionName)
         => menuText?.Contains(directionName, StringComparison.OrdinalIgnoreCase) == true;
 
+    internal static bool SortMenuMatches(string? menuText, SortByFieldSnapshot sort)
+    {
+        ArgumentNullException.ThrowIfNull(sort);
+        var value = ViewUiExporter.ParseMenuValue(menuText);
+        var directionName = string.Equals(sort.Direction, "DESC", StringComparison.Ordinal)
+            ? "Descending"
+            : "Ascending";
+        var fieldValue = value?
+            .Replace("Ascending", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("Descending", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', ',', '(', ')', '\r', '\n');
+        return value is not null
+            && string.Equals(fieldValue, sort.Field, StringComparison.Ordinal)
+            && HasSortDirection(menuText, directionName);
+    }
+
+    private static async Task<bool> IsSortAlreadyAppliedAsync(
+        IPage page,
+        SortByFieldSnapshot sort,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var item = Sel.ConfigurationMenuItem(menu, "Sort by");
+            return await item.CountAsync().ConfigureAwait(false) > 0
+                && SortMenuMatches(await item.First.InnerTextAsync().ConfigureAwait(false), sort);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private async Task TryEnsureSortFieldVisibleAsync(
         IPage page,
         string field,
@@ -706,7 +1051,28 @@ public sealed class ViewUiImporter
 
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
-            await ToggleCheckboxesAsync(page, new HashSet<string>(values, StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            var result = await ToggleCheckboxesAsync(
+                overlay,
+                new HashSet<string>(values, StringComparer.Ordinal),
+                cancellationToken).ConfigureAwait(false);
+            if (result.Available.Count == 0)
+            {
+                _warnings.Add($"view '{viewName}': {label} menu contains no checkable entries");
+            }
+
+            foreach (var value in values.Where(value => !result.Available.Contains(value)))
+            {
+                _warnings.Add($"view '{viewName}': {label} value '{value}' is not available on the target");
+            }
+
+            foreach (var mismatch in result.DisabledMismatches)
+            {
+                var action = mismatch.ShouldBeChecked ? "selected" : "cleared";
+                _warnings.Add($"view '{viewName}': {label} value '{mismatch.Name}' is disabled on the target and could not be {action}");
+            }
+
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
@@ -722,37 +1088,57 @@ public sealed class ViewUiImporter
     /// <c>menuitemcheckbox</c> entries, while "Fields" renders <c>option</c> entries — both
     /// carry <c>aria-checked</c>.
     /// </summary>
-    private static async Task ToggleCheckboxesAsync(IPage page, HashSet<string> desired, CancellationToken cancellationToken)
+    private static async Task<CheckboxToggleResult> ToggleCheckboxesAsync(
+        ILocator overlay,
+        HashSet<string> desired,
+        CancellationToken cancellationToken)
     {
-        var checkboxes = page.GetByRole(AriaRole.Menuitemcheckbox);
-        if (await checkboxes.CountAsync().ConfigureAwait(false) == 0)
-        {
-            checkboxes = page.GetByRole(AriaRole.Option);
-        }
+        var checkboxes = Sel.CheckboxOptions(overlay);
 
+        var available = new HashSet<string>(StringComparer.Ordinal);
+        var disabledMismatches = new List<DisabledCheckboxMismatch>();
         var count = await checkboxes.CountAsync().ConfigureAwait(false);
         for (var i = 0; i < count; i++)
         {
             var checkbox = checkboxes.Nth(i);
-            if (string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
             var name = ViewUiExporter.NormalizeUiText(await checkbox.InnerTextAsync().ConfigureAwait(false));
             if (name is null)
             {
                 continue;
             }
 
+            available.Add(name);
             var isChecked = string.Equals(await checkbox.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal);
-            if (desired.Contains(name) != isChecked)
+            var isDisabled = string.Equals(await checkbox.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal);
+            var shouldBeChecked = desired.Contains(name);
+            if (DisabledCheckboxChangeRequired(shouldBeChecked, isChecked, isDisabled))
+            {
+                disabledMismatches.Add(new DisabledCheckboxMismatch(name, shouldBeChecked));
+            }
+
+            if (isDisabled)
+            {
+                continue;
+            }
+
+            if (shouldBeChecked != isChecked)
             {
                 await checkbox.ClickAsync().ConfigureAwait(false);
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
         }
+
+        return new CheckboxToggleResult(available, disabledMismatches);
     }
+
+    internal static bool DisabledCheckboxChangeRequired(bool shouldBeChecked, bool isChecked, bool isDisabled)
+        => isDisabled && shouldBeChecked != isChecked;
+
+    private sealed record CheckboxToggleResult(
+        HashSet<string> Available,
+        IReadOnlyList<DisabledCheckboxMismatch> DisabledMismatches);
+
+    private sealed record DisabledCheckboxMismatch(string Name, bool ShouldBeChecked);
 
     private async Task TrySetDateFieldsAsync(IPage page, RoadmapSettingsSnapshot roadmap, string viewName, CancellationToken cancellationToken)
     {
@@ -806,22 +1192,40 @@ public sealed class ViewUiImporter
 
     private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
     {
-        // D0: the "Save view" button lives inside the View menu overlay, so the menu
-        // must be (re-)opened first. With no unsaved changes the button is absent.
-        var save = Sel.SaveViewButton(page);
-        if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
+        var unsavedChanges = Sel.UnsavedChangesStatus(page);
+        try
         {
-            await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
-            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            await unsavedChanges.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 750,
+            }).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            return;
         }
 
-        if (await save.CountAsync().ConfigureAwait(false) == 0 || !await save.First.IsVisibleAsync().ConfigureAwait(false))
+        // D0: the "Save view" button lives inside the View menu overlay. Close any
+        // child menu first so clicking View opens the parent configuration menu.
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+
+        var save = Sel.SaveViewButton(page);
+        try
+        {
+            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 1_000 }).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-            return; // No unsaved changes.
+            throw new InvalidOperationException(
+                "the View has unsaved changes but Save view is unavailable",
+                exception);
         }
 
-        await save.First.ClickAsync().ConfigureAwait(false);
+        await save.ClickAsync().ConfigureAwait(false);
 
         // D0: saving raises a confirmation alertdialog "Save display options for <view>?".
         var confirm = Sel.SaveConfirmDialog(page);
@@ -829,13 +1233,29 @@ public sealed class ViewUiImporter
         {
             await confirm.WaitForAsync(new() { Timeout = 5_000 }).ConfigureAwait(false);
             await confirm.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true }).First.ClickAsync().ConfigureAwait(false);
+            await confirm.WaitForAsync(new() { State = WaitForSelectorState.Hidden, Timeout = 10_000 }).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
             // No confirmation dialog appeared; the save applied directly.
         }
 
+        // GitHub clears the local dirty state before the save request is fully durable.
+        // Give the request time to complete before navigation can cancel it, then reload
+        // so the following checks and next View operate on server-persisted state.
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+        await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        if (await save.CountAsync().ConfigureAwait(false) > 0
+            && await save.IsVisibleAsync().ConfigureAwait(false))
+        {
+            throw new InvalidOperationException("the View still exposes Save view after the save completed");
+        }
+
+        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
     }
 
     // ----- helpers -----

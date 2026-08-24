@@ -125,7 +125,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 
 Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
-Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
+Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
 
 ---
 
@@ -339,10 +339,11 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 
 - Views
-  - `View 1`: Table、filter、sort、Slice by、visible fields
+  - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
   - `Fixture Board`: Board、Column by、Swimlanes、Field sum
-  - `Fixture Roadmap`: Roadmap、date fields、Quarter zoom、markers
-  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board`
+  - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers
+  - `Fixture Empty Sums`: grouped Table、Field sum の空選択
+  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums`
 - Workflows
   - item state 系 built-in workflows
   - `Auto-add to project`
@@ -353,26 +354,33 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 - `dotnet run --project src/Ghpmv.Cli -- setup --browsers` が完了している。
 - `dotnet run --project src/Ghpmv.Cli -- login --profile source` で source org を編集できる browser session が保存されている。
-- 対象 Project は `ghpmv setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` / `Fixture Teams` fields と `$env:GHPMV_FIXTURE_REPO` repository が存在する。
+- 対象 Project は `ghpmv setup --fixture` で作成済みで、`Fixture Text` / `Fixture Number` / `Fixture Number 2` / `Fixture Date` / `Fixture Select` / `Fixture Sprint` / `Fixture Teams` fields と `$env:GHPMV_FIXTURE_REPO` repository が存在する。
 
 `ghpmv setup --fixture-ui` が GitHub UI 変更などで失敗した場合のみ、フォールバックとして Source Project を開き、以下を手動で設定します。
 
 Views:
 
-- タブを `Fixture Roadmap` → Table view → Board view の非自明な順に並べる
-- Table view
-  - filter を設定
-  - hidden / visible fields を調整
-  - 2 key sort
+- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` の順に並べる
+- `View 1` (Table)
+  - filter=`status:Todo`
+  - visible fields を標準 fixture に合わせる
+  - Sort by=`Fixture Number` ascending
   - group by Status
-  - Field sum に Number field を設定
-- Board view
-  - Column by Status または Single-select field
-  - Swimlanes / Slice by を設定
-- Roadmap view
-  - Date field または Iteration を設定
-  - Zoom を Quarter に設定
-  - markers を有効化
+  - Slice by=`Fixture Select`
+  - Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
+- `Fixture Board` (Board)
+  - Column by=`Fixture Select`
+  - Swimlanes=`Status`
+  - Field sum=`Fixture Number`
+- `Fixture Roadmap` (Roadmap)
+  - group by Status
+  - Field sum=`Fixture Number 2`
+  - Dates=`Fixture Date` → `Fixture Sprint end`
+  - Zoom=`Quarter`
+  - Markers=`Fixture Date`
+- `Fixture Empty Sums` (Table) を作成
+  - group by Status
+  - Field sum は空（`Count` を含めてすべて解除）
 
 Workflows:
 
@@ -409,7 +417,7 @@ gh repo view "$env:GHPMV_TARGET_ORG/$env:GHPMV_TARGET_REPO"
 
 存在する場合は、別名にするか cleanup してから進めます。
 
-destination organization または enterprise に repository ruleset がある場合は、各 ruleset の bypass list に **Repository migrations** を追加し、mode を **Exempt** にします。既定の **Always allow** のままでは migration push の評価が timeout する可能性があります。詳細は [Setting ruleset bypasses for repository migrations](https://docs.github.com/en/enterprise-cloud@latest/migrations/troubleshooting/setting-ruleset-bypasses-for-repository-migrations) を参照してください。
+destination organization または enterprise に repository ruleset がある場合は、各 ruleset の bypass list に **Repository migrations** を追加し、mode を **Exempt** にします。確認結果をsettingsの`gei.repositoryMigrationsBypass`へ`exempt`、applicable rulesetがなければ`not-applicable`として記録します。`unconfirmed`のままGEIを開始しません。既定の **Always allow** のままでは migration push の評価が timeout する可能性があります。詳細は [Setting ruleset bypasses for repository migrations](https://docs.github.com/en/enterprise-cloud@latest/migrations/troubleshooting/setting-ruleset-bypasses-for-repository-migrations) を参照してください。
 
 ### 6.2 GEI migration を queue / 実行
 
@@ -488,6 +496,20 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - linked Team がある場合は `team-mappings.csv` が生成され、source 値は `organization/slug` になっている。
 - source UI の Views / Workflows / collaborators に関する warning がない、または想定内である。
 - 各 View の `tabPosition` が 0 から始まる source UI 順で保存され、view `number` 順とは独立している。
+- `snapshot.json` の View UI 設定が 5.2 の標準 fixture と一致する。
+  - `View 1`: `fieldSum=["Count","Fixture Number","Fixture Number 2"]`
+  - `Fixture Board`: `fieldSum=["Fixture Number"]`
+  - `Fixture Roadmap`: `fieldSum=["Fixture Number 2"]`
+  - `Fixture Empty Sums`: `fieldSum=[]`（submenu を取得できた空選択。control/submenu を取得できない場合は View UI 未取得 warning）
+
+3 件以上の Field sum は GitHub UI で `1 more` と省略されますが、snapshot には実フィールド名が全件必要です。既存の snapshot 確認に次を追加し、別 export は実行しません。
+
+```powershell
+$snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
+$snapshot.views |
+  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums') |
+  Select-Object name, groupByFields, @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } }
+```
 
 ### 7.2 Mapping CSV を補完
 
@@ -560,7 +582,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 出力された target Project URL と project number を控えます。
 
-stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。同じ snapshot directory と `--project-number <target-project-number> --on-conflict update` で再実行し、`created=0`、`already-complete=5` となり、UI の履歴件数が増えないことも確認します。本文が同じ Status Update が複数あっても内容で統合されず、snapshot の各 sequence が1件ずつ残ることが合格条件です。
+stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。再実行確認は 7.4 の Field sum drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
 
 template 化は import の最終書き込み段です。stderr で Items / Status Updates / API View / browser View enrichment・tab order / Workflows の完了後に `Marking the target project as a template as the final import stage...` が出ることを確認します。Organization の **Projects → Templates** と Create project ダイアログで target Project がテンプレートとして表示されることも確認します。
 
@@ -600,6 +622,26 @@ OK: the target project matches the snapshot.
 ```
 
 human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれ、`Project: Match` に template 属性の一致が反映されることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
+
+Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
+
+1. 初回 browser-assisted verify で `View: Match` を確認します。Group by、Field sum menu の完全な選択集合、空集合は Playwright capture と verifier が機械比較するため、同じ内容を目視しません。
+2. Issue #62 の派生描画 checkpoint は次の command で自動検証します。Playwright が target の `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で確認します。ユーザーによる reload / 目視確認は不要です。
+
+```powershell
+dotnet run --project src/Ghpmv.Cli -- setup `
+  --fixture-field-sum-render-check `
+  --fixture-org $env:GHPMV_TARGET_ORG `
+  --fixture-project <target-project-number> `
+  --browser-profile target
+```
+
+`Rendered Field sums verified` が両 View に出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=2` と exit code 0 になることを確認します。
+3. `ghpmv setup --fixture-field-sum-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` で Playwright が `View 1` の `Fixture Number 2` だけを解除・保存し、同じ verify command を再実行します。非ゼロ終了と `view 'View 1': field sum mismatch` を確認します。
+4. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence と Field sum の復元を同時に確認します。
+5. 7.4 の browser-assisted verify をもう一度実行し、`View: Match` により `Fixture Number 2` の復元と4 fixture Viewsの一致を機械確認します。
+
+この統合により追加実行は drift verify、修復用の再 import、最終 verify の 3 command だけです。証跡は 11、削除は 10 の既存手順へまとめます。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
@@ -648,11 +690,11 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 ### 8.4 Views
 
-- [ ] Table view の filter / visible fields / sort / group by / field sum が一致。
-- [ ] Board view の Column by / Swimlanes / Slice by が一致。
-- [ ] Roadmap view の date fields / zoom / markers が一致。
+- [ ] Table view の filter / visible fields / sort / group by / field sum は browser-assisted `verify` で `View: Match`。
+- [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
+- [ ] Roadmap view の group by / field sum / date fields / zoom / markers は browser-assisted `verify` で `View: Match`。
 - [ ] View 名が一致。
-- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` で一致。
+- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。
 - [ ] import を再実行しても既に正しい tab order は変化しない。
 
@@ -749,6 +791,13 @@ ghpmv commit/version:
 Export result:
 Import result:
 Verify result:
+
+Field sum source views:
+Field sum snapshot values:
+Field sum initial verify:
+Field sum rendered-header check:
+Field sum drift verify:
+Field sum rerun verify:
 
 Warnings:
 -

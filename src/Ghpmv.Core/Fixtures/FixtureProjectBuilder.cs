@@ -1505,6 +1505,7 @@ public sealed class FixtureProjectBuilder
                 },
                 new FieldSnapshot { Name = "Fixture Text", DataType = "TEXT" },
                 new FieldSnapshot { Name = "Fixture Number", DataType = "NUMBER" },
+                new FieldSnapshot { Name = "Fixture Number 2", DataType = "NUMBER" },
                 new FieldSnapshot { Name = "Fixture Date", DataType = "DATE" },
                 new FieldSnapshot
                 {

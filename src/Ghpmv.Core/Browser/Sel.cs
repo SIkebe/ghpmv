@@ -35,6 +35,10 @@ internal static class Sel
     public static ILocator ConfigurationMenuItem(ILocator menu, string label)
         => menu.GetByRole(AriaRole.Menuitem, new() { NameRegex = new Regex($"^{Regex.Escape(label)}:") });
 
+    /// <summary>Checkable entries in a View configuration child menu.</summary>
+    public static ILocator CheckboxOptions(ILocator menu)
+        => menu.GetByRole(AriaRole.Menuitemcheckbox).Or(menu.GetByRole(AriaRole.Option));
+
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
@@ -54,10 +58,22 @@ internal static class Sel
 
     /// <summary>"Save view" button (settings changes require an explicit save, D0).</summary>
     public static ILocator SaveViewButton(IPage page)
-        => page.GetByRole(AriaRole.Button, new() { Name = "Save view", Exact = true });
+        => page.GetByRole(AriaRole.Button, new() { Name = "Save view", Exact = true }).Last;
 
     /// <summary>Confirmation alertdialog ("Save display options for &lt;view&gt;?", D0).</summary>
-    public static ILocator SaveConfirmDialog(IPage page) => page.GetByRole(AriaRole.Alertdialog);
+    public static ILocator SaveConfirmDialog(IPage page) => page.GetByRole(AriaRole.Alertdialog).Last;
+
+    /// <summary>Status exposed while the current View has client-side changes that are not saved.</summary>
+    public static ILocator UnsavedChangesStatus(IPage page)
+        => page.GetByRole(AriaRole.Status, new() { Name = "Unsaved changes", Exact = true }).Last;
+
+    /// <summary>Visible grouped Table/Roadmap header contents containing count and aggregate labels.</summary>
+    public static ILocator GroupHeaderContents(IPage page)
+        => page.Locator("[class*='group-header-module__groupHeaderContent']:visible");
+
+    /// <summary>Visible numeric Field sum labels rendered inside grouped Table/Roadmap headers.</summary>
+    public static ILocator GroupHeaderAggregateLabels(IPage page)
+        => page.Locator("[class*='aggregate-labels-module__Label']:visible");
 
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)

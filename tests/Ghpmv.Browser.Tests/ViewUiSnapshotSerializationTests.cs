@@ -54,6 +54,20 @@ public class ViewUiSnapshotSerializationTests
                     VerticalGroupByFields = [],
                     VisibleFields = [],
                 },
+                new ViewSnapshot
+                {
+                    Number = 5,
+                    Name = "Empty sums",
+                    Layout = "TABLE_LAYOUT",
+                    GroupByFields = ["Status"],
+                    SortByFields = [],
+                    VerticalGroupByFields = [],
+                    VisibleFields = [],
+                    Ui = new ViewUiSnapshot
+                    {
+                        FieldSum = [],
+                    },
+                },
             ],
             Workflows = [],
             Items = [],
@@ -66,7 +80,7 @@ public class ViewUiSnapshotSerializationTests
             await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
             var loaded = await SnapshotFile.LoadAsync(directory, cancellationToken);
 
-            Assert.Equal(2, loaded.Views.Count);
+            Assert.Equal(3, loaded.Views.Count);
 
             var roadmap = loaded.Views[0];
             Assert.NotNull(roadmap.Ui);
@@ -80,6 +94,7 @@ public class ViewUiSnapshotSerializationTests
             Assert.Equal(["Fixture Sprint"], roadmap.Ui.Roadmap.Markers);
 
             Assert.Null(loaded.Views[1].Ui);
+            Assert.Empty(loaded.Views[2].Ui!.FieldSum!);
         }
         finally
         {

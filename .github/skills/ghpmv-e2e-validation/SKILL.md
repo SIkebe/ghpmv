@@ -1,6 +1,6 @@
 ---
 name: ghpmv-e2e-validation
-description: ghpmv の実環境動作確認を、ビルド、Playwright準備、source/target fixture、browser profile、export、mapping、import、verifyまで一問一答で安全に案内する。「動作確認したい」「ステップバイステップでガイド」「実環境で試したい」「fixtureを作って移行テスト」「browser automationを含めて検証」「E2E migration test」などの依頼で使用する。
+description: ghpmv の実環境動作確認を、ビルド、Playwright準備、source/target fixture、browser profile、export、mapping、import、verifyまで一問一答で安全に案内する。「動作確認したい」「ステップバイステップでガイド」「実環境で試したい」「fixtureを作って移行テスト」「browser automationを含めて検証」「Field sumをE2E検証」「E2E migration test」などの依頼で使用する。
 ---
 
 # ghpmv E2E Validation
@@ -16,7 +16,7 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 ## 最重要原則
 
 1. **一度に一つのステップだけ案内する。** コマンドを提示したら結果を確認し、成功するまで次へ進まない。
-2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付ける。resource 名など安全な推奨値を生成できる項目は、推奨値を最初の choice として `(Recommended)` を付け、別名は質問カードの自由入力で受け付ける。推奨値を安全に決められない login、organization、既存 repository 名などだけ choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
+2. **必要な質問だけを一つずつ、必ず対話用質問ツールで行う。** 選択式では choices を付ける。validation run が新規作成する Project / repository 名は run ID から安全に自動生成し、質問しない。推奨値を安全に決められない login、organization、既存 repository 名などだけ choices なしの質問カードを使う。command の終了、exit code、出力、生成ファイルなど agent が観測できる事実をユーザーへ質問してはならない。
 3. **token 値を会話へ貼らせない。** Windows PowerShell 5.1 と PowerShell 7 の両方で使える `Read-Host -AsSecureString` で入力し、ローカル環境変数へ設定させる。PowerShell 7.1 以降限定の `-MaskInput` は使用しない。
 4. **実リソース作成前に作成物を明示する。** repository、Issue、PR、Project、Views、Workflows が作成されることを伝える。
 5. **削除は明示的な同意なしに行わない。** cleanup は URL / name を再確認してから案内する。
@@ -35,6 +35,8 @@ description: ghpmv の実環境動作確認を、ビルド、Playwright準備、
 18. **現在の入力だけを案内する。** Browser sign-in 中に、後続 Step の PAT や token 入力を予告しない。ユーザーが今操作すべき browser または terminal と、その操作内容だけを平易な言葉で示す。
 19. **terminal canvas と shell tool を混同しない。** readiness を確認した `token execution terminal` への入力は、その terminal instance の `send_terminal_input` action だけで行う。`powershell`、`task`、別 process の shell tool で同じ command を実行してはならない。terminal canvas を開いて出力を読めた時点で「agent が terminal に直接入力できる」と扱い、command を本文へ貼ってユーザーに再実行させる fallback へ切り替えない。
 20. **`hidden prompt` という語をユーザーへ表示しない。** PAT 入力時は「右側のターミナルに PAT 入力欄を表示します。入力中の文字は画面に表示されません」と説明する。内部 marker、sentinel、env var の実装説明ではなく、いま入力する PAT の用途と Enter を押す操作だけを案内する。
+21. **Browser login の完了を自動監視する。** login command 送信後は同じ terminal output を5〜10秒間隔で読み、今回の sentinel または5分 timeoutまで監視を継続する。sentinel未到達のまま「待機中です」と返してturnを終了したり、`したよ`などの返信をユーザーへ要求したりしない。
+22. **待機は短い polling に限定する。** terminal output の更新待ちに別 process の `Start-Sleep` が必要な場合も1回5〜10秒までとし、各回の直後に同じ terminal の出力を再読する。30 / 60 / 90 / 120 / 180秒などの固定 sleep、command の想定所要時間を丸ごと sleep する処理、sentinel確認後も残る sleep は禁止する。runtime が即時 read を許す場合は `Start-Sleep` を使わず `read_terminal_output` を再実行する。
 
 ## 実行 session と terminal ownership
 
@@ -71,9 +73,11 @@ $global:LASTEXITCODE = 0; & { <command> }; $ghpmvInvocationSucceeded = $?; $ghpm
 
 terminal 出力取得 action で、今回送信した `<command-id>` と完全一致する `GHPMV_COMMAND_DONE:<command-id>:0` を読めた場合だけ成功とする。過去の command の sentinel を再利用しない。まだ今回の sentinel がなければ command 実行中として同じ instance の出力監視だけを継続し、ユーザーへ完了報告を求めず、command を再送しない。sentinel を確認した場合だけ in-flight state を clear して次の command へ進む。platform が process completion notification を提供する shell tool を使える非 secret command は、その通知と exit code を利用してよい。
 
+polling 間隔を作るための `Start-Sleep` は前項の上限を守り、必ず `read_terminal_output` 一回と対にする。例えば90秒かかる可能性がある command でも90秒 sleepを一回送らず、最初の出力 read後に必要な場合だけ5〜10秒 sleep → readを繰り返す。sentinelが早く出た場合は直ちに次へ進む。
+
 session の idle / interruption から復帰した場合は、新しい input を送る前に同じ terminal instance の full scrollback または十分な tail を読み、記録済み sentinel を検索する。`since_last_input` が空、画面が変化していない、または sentinel がまだないことだけで command 消失と判断しない。terminal process が確実に終了したかを観測できない状態では再実行せず、transport recovery を優先する。
 
-browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことを agent が確認して次へ進む。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
+browser login command も同様に agent が終了まで監視する。ユーザーには「開いた browser で `<expected-login>` として sign in してください」と現在の browser 操作だけを通知し、質問カードや「完了したら返答」を表示しない。この通知に PAT、token、後続 Step の準備を混ぜない。送信後は5〜10秒間隔で同じ terminal output を読み、command の `Signed in as '<reported-login>'` から login を取り出し、`<expected-login>` と大文字小文字を区別せず一致し、かつ exit code 0 になったことをagent自身が確認して次へ進む。まだ出力が変化していない場合も5分timeoutまでは監視を継続し、ユーザー返信待ちへ切り替えない。timeout、account mismatch、SSO failure の場合だけエラーを説明して再試行方法を質問する。
 
 | Step / 処理 | agent が自動確認するもの |
 |---|---|
@@ -83,9 +87,11 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
+| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、rendered-header DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
+| cleanup | resource inventory と明示同意、削除した各 resource の read-back |
 
 対話用質問ツールを使うのは、validation mode、host / organization / login / resource name、mapping の未知値、PAT の terminal 手入力、warning の許容、cleanup 同意など、ユーザーの判断または agent が観測できない入力が必要な場合に限る。
 
@@ -180,6 +186,273 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | source host type / web URL / API URL | `github.com`, `https://github.com`, `https://api.github.com/graphql` |
 | target host type / web URL / API / uploads URL | `ghec-dr`, `https://TENANT.ghe.com`, `https://api.TENANT.ghe.com`, `https://uploads.TENANT.ghe.com` |
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
+| browser-e2e field-sum contract | 下記の View / field 名と期待値 |
+| browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
+| resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
+
+`browser-e2e` の既存 round-trip は次の field-sum contract も常に検証する。別 scenario には分岐させず、settings に重複保存しない。
+
+| View | Layout / grouping | expected `FieldSum` |
+|---|---|---|
+| `View 1` | `TABLE_LAYOUT` / `Status` | `Count`, `Fixture Number`, `Fixture Number 2` |
+| `Fixture Roadmap` | `ROADMAP_LAYOUT` / `Status` | `Fixture Number 2` |
+| `Fixture Board` | `BOARD_LAYOUT` / `Status` | `Fixture Number` |
+| `Fixture Empty Sums` | `TABLE_LAYOUT` / `Status` | empty |
+
+required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
+
+## Feature checkpoint の実行時間最小化
+
+Issue ごとの機能検証を追加するときも、user-facing scenario selector や独立した full round trip を増やさない。次へ統合する。
+
+- fixture 作成・期待値記録: 既存 Step 5
+- `snapshot.json` / mapping の追加 assertion: 既存 Step 6 の同じ export 結果
+- target import assertion: 既存 Step 9 の同じ target Project
+- category Match: 既存 Step 10 の browser-assisted verify
+- deliberate drift: 既存 target 上の negative-test phase
+- repair: Status Updates、View order、Team link などの idempotence を確認する同じ `--project-number` re-import
+- 最終 verify、証跡、cleanup: 既存 report、resource inventory、cleanup consent
+
+追加の disposable target または native command は、fresh/existing、REST/browser、権限境界、destructive preview など、既存 command では別 code path を証明できない場合だけ許可する。追加理由と検証対象を明記し、resource inventory と cleanup に含める。同じ snapshot、mapping、target、verify command を再利用できる場合は複製しない。
+
+## Resource inventory と cleanup
+
+実 resource を作成する command の成功直後に、次を `resource inventory` へ追加する。既存 resource は `pre-existing` として参照記録だけを残し、cleanup 対象にしない。
+
+| 作成 Step | inventory entry |
+|---|---|
+| Step 5 `setup --fixture` | source Project（title / number / URL）と source repository（owner/name / URL） |
+| Step 7 GEI | target repository（owner/name / URL） |
+| Step 7 fixture seed | target seed Project（title / number / URL）と target repository（owner/name / URL） |
+| Step 9 import | imported target Project（title / number / URL） |
+
+Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
+
+Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
+
+1. `この run が作成した一覧内の Project / repository をすべて削除する`
+2. `target 側の一時 resource だけ削除し、source fixture は再利用のため残す`
+3. `一時 resource をすべて残し、削除せず URL を完了報告へ記録する`
+
+同意前に delete command を送らない。削除を選んだ場合は選択範囲を reverse creation order で一 resource ずつ削除し、各 command の sentinel / exit code と read-back を確認して `deleted` へ更新する。削除対象の title / owner / name / number が inventory と一致しなければ停止する。残す entry は `retained` とし、後から削除できるよう URL を報告する。
+
+### Project cleanup commands
+
+削除同意後、Project ごとに次の 3 command を別々の一意な command ID で送る。placeholder は inventory の実値へ置き換える。`<cleanup-token-env-var>` は side に対応する ghpmv token、`<cleanup-host>` は `github.com` または tenant host、`<owner-type>` は `organization` / `user`。
+
+1. **照合して node ID を保持する**
+
+```powershell
+function Stop-ProjectCleanup([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectCleanup 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupQuery = if ('<owner-type>' -eq 'organization') {
+    'query($login:String!,$number:Int!){organization(login:$login){projectV2(number:$number){id number title url}}}'
+} else {
+    'query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){id number title url}}}'
+}
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupResponseText = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number>
+    if ($LASTEXITCODE -ne 0) { Stop-ProjectCleanup 'Project cleanup lookup failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupResponse = $cleanupResponseText | ConvertFrom-Json
+$cleanupProject = if ('<owner-type>' -eq 'organization') { $cleanupResponse.data.organization.projectV2 } else { $cleanupResponse.data.user.projectV2 }
+if ($null -eq $cleanupProject) { Stop-ProjectCleanup 'Inventory Project was not found before deletion.'; return }
+if ($cleanupProject.number -ne <project-number> -or $cleanupProject.title -ne '<escaped-project-title>' -or $cleanupProject.url -ne '<project-url>') {
+    Stop-ProjectCleanup 'Live Project identity does not match the cleanup inventory.'
+    return
+}
+$global:GHPMV_CLEANUP_PROJECT_ID = $cleanupProject.id
+Write-Output ("GHPMV_CLEANUP_PROJECT_CONFIRMED:{0}" -f $cleanupProject.url)
+$global:LASTEXITCODE = 0
+```
+
+2. **照合済み Project を削除する**
+
+```powershell
+function Stop-ProjectDelete([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+if ([string]::IsNullOrWhiteSpace($global:GHPMV_CLEANUP_PROJECT_ID)) { Stop-ProjectDelete 'No confirmed Project node ID is available.'; return }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectDelete 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    gh api @cleanupHostArguments graphql -f query='mutation($projectId:ID!){deleteProjectV2(input:{projectId:$projectId}){clientMutationId}}' -F projectId=$global:GHPMV_CLEANUP_PROJECT_ID
+    if ($LASTEXITCODE -ne 0) { Stop-ProjectDelete 'Project deletion failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+Write-Output 'GHPMV_CLEANUP_PROJECT_DELETED'
+$global:LASTEXITCODE = 0
+```
+
+3. **同じ owner / number が存在しないことを read-back する**
+
+```powershell
+function Stop-ProjectReadBack([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-ProjectReadBack 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupQuery = if ('<owner-type>' -eq 'organization') {
+    'query($login:String!,$number:Int!){organization(login:$login){projectV2(number:$number){id}}}'
+} else {
+    'query($login:String!,$number:Int!){user(login:$login){projectV2(number:$number){id}}}'
+}
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupReadBackOutput = gh api @cleanupHostArguments graphql -f query=$cleanupQuery -f login='<owner-login>' -F number=<project-number> 2>&1
+    $cleanupReadBackExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupReadBackText = $cleanupReadBackOutput | Out-String
+$expectedNotFound = $cleanupReadBackExitCode -ne 0 -and
+    $cleanupReadBackText -match ('Could not resolve to a ProjectV2 with the number ' + [regex]::Escape('<project-number>'))
+if (!$expectedNotFound) {
+    if ($cleanupReadBackExitCode -ne 0) { Stop-ProjectReadBack 'Project cleanup read-back failed with an unexpected error.'; return }
+    $cleanupReadBack = $cleanupReadBackText | ConvertFrom-Json
+    $remainingProject = if ('<owner-type>' -eq 'organization') { $cleanupReadBack.data.organization.projectV2 } else { $cleanupReadBack.data.user.projectV2 }
+    if ($null -ne $remainingProject) { Stop-ProjectReadBack 'Project still exists after deletion.'; return }
+}
+Remove-Variable GHPMV_CLEANUP_PROJECT_ID -Scope Global -ErrorAction SilentlyContinue
+Write-Output 'GHPMV_CLEANUP_PROJECT_ABSENT'
+$global:LASTEXITCODE = 0
+```
+
+### Repository cleanup commands
+
+`created` repository がある場合は、最終 cleanup choices を表示する前に「repository も削除する意図があるか」を一問で確認する。削除しない回答なら repository entry を `retained` とし、Project だけの cleanup choices を表示する。削除する回答なら、次の credential を準備して permission preflight を通過してから、repository を含む最終 cleanup choices を表示する。
+
+- fixture repository + classic PAT: 該当 side の token に `delete_repo` があること
+- fixture repository + fine-grained PAT: 対象 repository が選択され、Administration: write、organization approval が Active であること
+- GEI target repository + destination token owner が organization owner: destination classic PAT に `delete_repo` があること
+- GEI target repository + destination token owner が Migrator: target organization owner の一時 classic PAT を `GHPMV_TARGET_CLEANUP_TOKEN` に準備し、`delete_repo` を付けること
+
+現在の classic PAT に `delete_repo` がない場合や、fine-grained PAT に対象 repository の Administration: write がない場合も、source は `GHPMV_SOURCE_CLEANUP_TOKEN`、target は `GHPMV_TARGET_CLEANUP_TOKEN` という一時 credential を使う。該当 host の classic PAT 作成 URL、organization owner / repository admin role、`delete_repo` scope、SSO authorization を示し、Step 4 と同じ一-token secure-input 手順で次を送る。
+
+```powershell
+$cleanupSecureToken = Read-Host "<cleanup-env-var> for <owner-login> on <cleanup-host> (classic PAT with delete_repo for repository cleanup)" -AsSecureString; [Environment]::SetEnvironmentVariable('<cleanup-env-var>', [System.Net.NetworkCredential]::new("", $cleanupSecureToken).Password, 'Process'); if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable('<cleanup-env-var>'))) { Remove-Item "Env:<cleanup-env-var>" -ErrorAction SilentlyContinue; Write-Output "GHPMV_REPOSITORY_CLEANUP_TOKEN_MISSING:<token-prompt-id>" } else { Write-Output "GHPMV_REPOSITORY_CLEANUP_TOKEN_READY:<token-prompt-id>" }
+```
+
+repository entry ごとに、削除用 token と permission を次の一 command で preflight する。`<cleanup-token-type>` は `classic` / `fine-grained`、fine-grained の `<administration-write-confirmed>` は作成 URL、repository selection、Active approval を確認した場合だけ `$true` に置き換える。
+
+```powershell
+function Stop-RepositoryCleanupPreflight([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryCleanupPreflight 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$cleanupAdministrationWriteConfirmed = <administration-write-confirmed>
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupPreflightResponse = gh api @cleanupHostArguments --include 'repos/<owner>/<repository>' 2>&1
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryCleanupPreflight 'Repository cleanup permission preflight failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupPreflightText = $cleanupPreflightResponse | Out-String
+$cleanupBodyMatch = [regex]::Match($cleanupPreflightText, '(?s)\{.*\}\s*$')
+if (!$cleanupBodyMatch.Success) { Stop-RepositoryCleanupPreflight 'Repository cleanup preflight returned no JSON body.'; return }
+$cleanupRepository = $cleanupBodyMatch.Value | ConvertFrom-Json
+if ($cleanupRepository.full_name -ne '<owner>/<repository>' -or $cleanupRepository.permissions.admin -ne $true) {
+    Stop-RepositoryCleanupPreflight 'Cleanup identity does not have effective repository admin access.'
+    return
+}
+if ('<cleanup-token-type>' -eq 'classic') {
+    $scopeMatch = [regex]::Match($cleanupPreflightText, '(?im)^x-oauth-scopes:\s*(.+)$')
+    $scopes = if ($scopeMatch.Success) { @($scopeMatch.Groups[1].Value -split ',' | ForEach-Object Trim) } else { @() }
+    if ('delete_repo' -notin $scopes) { Stop-RepositoryCleanupPreflight 'Classic cleanup PAT is missing delete_repo.'; return }
+}
+elseif (!$cleanupAdministrationWriteConfirmed) {
+    Stop-RepositoryCleanupPreflight 'Fine-grained cleanup PAT Administration: write and Active approval were not confirmed.'
+    return
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_PERMISSION_READY'
+$global:LASTEXITCODE = 0
+```
+
+preflight が失敗したら repository 削除を選択肢に出さず `retained` とし、権限を広げるかどうかを別ターンで確認する。成功後、repository ごとに次の 3 command を別々に送る。`pre-existing` entry には送らない。
+
+1. **full name / URL を inventory と照合する**
+
+```powershell
+function Stop-RepositoryCleanup([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryCleanup 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupRepositoryText = gh api @cleanupHostArguments 'repos/<owner>/<repository>'
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryCleanup 'Repository cleanup lookup failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupRepository = $cleanupRepositoryText | ConvertFrom-Json
+if ($cleanupRepository.full_name -ne '<owner>/<repository>' -or $cleanupRepository.html_url -ne '<repository-url>') {
+    Stop-RepositoryCleanup 'Live repository identity does not match the cleanup inventory.'
+    return
+}
+Write-Output ("GHPMV_CLEANUP_REPOSITORY_CONFIRMED:{0}" -f $cleanupRepository.html_url)
+$global:LASTEXITCODE = 0
+```
+
+2. **照合済み repository を削除する**
+
+```powershell
+function Stop-RepositoryDelete([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryDelete 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    gh api @cleanupHostArguments --method DELETE 'repos/<owner>/<repository>'
+    if ($LASTEXITCODE -ne 0) { Stop-RepositoryDelete 'Repository deletion failed.'; return }
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_DELETED'
+$global:LASTEXITCODE = 0
+```
+
+3. **HTTP 404 を read-back する**
+
+```powershell
+function Stop-RepositoryReadBack([string]$Message) { Write-Error $Message; $global:LASTEXITCODE = 1 }
+$cleanupToken = [Environment]::GetEnvironmentVariable('<cleanup-token-env-var>')
+if ([string]::IsNullOrWhiteSpace($cleanupToken)) { Stop-RepositoryReadBack 'Cleanup token is not available in the token execution terminal.'; return }
+$cleanupHostArguments = if ('<cleanup-host>' -eq 'github.com') { @() } else { @('--hostname', '<cleanup-host>') }
+$previousCleanupToken = $env:GH_TOKEN
+try {
+    $env:GH_TOKEN = $cleanupToken
+    $cleanupRepositoryReadBack = gh api @cleanupHostArguments 'repos/<owner>/<repository>' 2>&1
+    $cleanupRepositoryReadBackExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousCleanupToken) { Remove-Item Env:GH_TOKEN -ErrorAction SilentlyContinue } else { $env:GH_TOKEN = $previousCleanupToken }
+}
+$cleanupRepositoryReadBackText = $cleanupRepositoryReadBack | Out-String
+if ($cleanupRepositoryReadBackExitCode -eq 0 -or $cleanupRepositoryReadBackText -notmatch 'HTTP 404') {
+    Stop-RepositoryReadBack 'Repository read-back did not confirm HTTP 404.'
+    return
+}
+Write-Output 'GHPMV_CLEANUP_REPOSITORY_ABSENT'
+$global:LASTEXITCODE = 0
+```
 
 ## E2E settings の読み込み
 
@@ -192,9 +465,13 @@ Step 1の質問を始める前に、`GHPMV_E2E_SETTINGS`が設定されている
 - source / target browser login、collaborator login、EMUを含むuser mapping
 - fixture preparation、GEIまたはfixture-seedのrepository preparation mode
 - GEI source / target repository、visibility、token owner login、role status
+- Repository migrations ruleset bypass status
+- source / target account の Organization administrator 確認
+- source / target の Projects 有効化と private repository 作成 policy 確認
+- source / target の ghpmv PAT type (`classic` / `fine-grained`)
 - PATおよびbrowser stateを保持する**環境変数名**
 
-自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
+自動検出したlocal/shared fileでは、空文字、存在しないlocal resource、現在のhostと矛盾するURL、`classic` / `fine-grained` 以外の `tokenType`、またはschema validationに失敗する値を確定値として扱わず、その項目だけを通常どおり質問する。明示指定した`GHPMV_E2E_SETTINGS`のエラーだけはfallbackや質問による補完をせず停止する。JSONCにはPAT値、cookie、browser storage-state内容を保存させない。`tokenEnvironmentVariable`などの値は環境変数名であり、secretそのものではない。
 
 `browser-e2e`で`users.sourceBrowserLogin`と`users.targetBrowserLogin`が両方とも非空なら、source / target browser accountが同一か別かを質問しない。account identityは正規化した`webBaseUrl` hostとbrowser loginの組で機械判定する。同じhostでloginがcase-insensitiveに一致する場合だけ同一account、hostまたはloginが異なる場合は別accountとして記録する。どちらかのloginが空の場合だけ不足しているloginを一件ずつ質問し、両方確定後に同じ規則で判定する。
 
@@ -204,9 +481,11 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 
 このSkill内の`SOURCE_TOKEN`と`TARGET_TOKEN`は役割を示す既定名である。settingsを読み込んだ場合は、以後のrequired token inventory、readiness check、PAT入力prompt、preflight、fixture、export、import、verifyの全commandで、それぞれ`source.tokenEnvironmentVariable`と`target.tokenEnvironmentVariable`の実値へ置き換える。GEIも同様に`gei.sourceTokenEnvironmentVariable`と`gei.targetTokenEnvironmentVariable`を使う。設定した変数を別の固定名として再入力させたり、固定名だけを確認してmissingと判定したりしない。sentinelの表示名はsecretを含まないため従来の`GHPMV_SOURCE_TOKEN_READY`などを維持してよい。
 
+settings の `source.tokenType` / `target.tokenType` が `classic` または `fine-grained` なら、対応する ghpmv token type として記録し、同じ PAT type を質問しない。`null` または省略時だけ、選択経路で必要になった side を一件ずつ質問する。GEI source / destination credential は引き続き classic 固定であり、endpoint の `tokenType` を GEI credentialへ流用しない。
+
 同様に、command例にあるliteral `source` / `target` browser profileは既定値である。settingsを読み込んだ場合、`login`、fixture UI、export、import、verifyのすべての`--profile` / `--browser-profile`を、それぞれ`source.browserProfile` / `target.browserProfile`へ置き換える。profile名は`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`に一致し、sourceとtargetで異なることを使用前に検証する。生成するPowerShell commandでは、検証済みprofileも必ずsingle-quoted argument（例: `--profile 'source'`）として渡す。profile名が設定済みなのに固定名のstorage-stateを使ったり、unquotedでcommandへ展開したりしてはならない。
 
-設定済みでも、実resource作成の説明と同意、Organization administrator / GEI roleの現在状態、PAT permission / approval、warning許容、cleanup同意は省略しない。特に`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
+settings の `execution.fixturePreparation`、`execution.repositoryPreparationMode`、`gei.sourceRole`、`gei.targetRole`、`gei.repositoryMigrationsBypass`、endpoint の `tokenType`、`organizationAdministrator`、`projectsEnabled`、`privateRepositoryCreationAllowed` は明示的な非secret確認値として採用し、選択経路を満たす値なら同じ内容を対話用質問で再確認しない。未解決または否定値は各 gate の規則に従う。`tokenType=null` は Step 4 の選択質問、`organizationAdministrator=false/null` と policy の `false/null` は Step 1 の account / policy resolution、`repositoryMigrationsBypass=unconfirmed` と `migrator-pending` は settings または role が更新されるまで hard stop とする。実resource作成前の影響説明、選択済み PAT type に必要な permission / Active approval、warning許容、cleanup同意は省略しない。`migrator-pending`は`migrator-active`として扱わず、`createTemporaryTargetProject`は削除同意を意味しない。
 
 ## Step 1: 確認範囲を決める
 
@@ -228,15 +507,17 @@ settings由来のOrganization loginは`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0
 | `baseline-full` | 2 | build + deterministic tests + CLI smoke 完了後に終了する。token、browser、fixture、実環境操作を案内しない。 |
 | `read-only` | 2, 4, 6 | Step 2 は restore + build だけ実行する。source token だけを準備し、Step 6 の browser option なしの export 完了後に終了する。Step 3, 5, 7-10 は実行しない。 |
 | `api-only` | 2, 4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile を準備せず、browser option をすべて外して実行する。 |
-| `browser-e2e` | 2-4, 必要な場合だけ 5, 6-10 | Step 2 は restore + build だけ実行する。browser profile と source / target token を分け、fixture / GEI / browser enrichment を含む full flow を実行する。 |
+| `browser-e2e` | 2-10 | Step 2 は restore + build だけ実行する。Step 5 は source fixture の作成または既存 fixture contract の確認として必ず通り、browser profile、field-sum coverage、fixture / GEI / browser enrichment を含む full flow を実行する。 |
 
-`api-only` または `browser-e2e` では、既存 source Project を使うか fixture を作るかを一問で確認し、`fixture preparation` として記録する。`existing` の場合は Step 5 を実行せず、fixture 作成用権限を要求しない。
+`api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
-同じ mode では、target repository を GEI で移行するか fixture seed で作るかも Step 4 より前に一問で確認し、`repository preparation mode` として記録する。token の用途が決まるまで PAT の入力を求めない。
+`browser-e2e` の fixture preparation 質問では、既存 round-trip が grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が required Number fields と 4 Views を決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
+
+同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
 GEI は GitHub.com source と GHEC with data residency source の両方を扱う。data-residency sourceでは`gh gei migrate-repo --github-source-api-url <source-api-url>`、data-residency targetでは`--target-api-url <target-api-url> --target-uploads-url <target-uploads-url>`を使う。source / target endpointを取り違えたり、source hostをGitHub.comとして偽って続行してはならない。
 
-`GEI` を選んだ場合は、source と destination の token owner について、現在または予定している organization role を一人ずつ次の三択で確認し、`GEI source / destination role status` として記録する。
+`GEI` を選んだ場合は、settings の `gei.sourceRole` と `gei.targetRole` を `GEI source / destination role status` として記録し、設定済みなら質問しない。設定がない側だけ、token owner の現在または予定している organization role を次の三択で確認する。
 
 1. Organization owner
 2. Migrator（適用済み）
@@ -246,9 +527,9 @@ GEI は GitHub.com source と GHEC with data residency source の両方を扱う
 
 GEI roleは`GHPMV_GEI_SOURCE_TOKEN` / `GHPMV_GEI_TARGET_TOKEN`にだけ適用する。標準fixtureはsourceでorganization Issue Fieldを作成し、target importでも同じIssue Fieldを作成するため、GitHubの[Create issue field for an organization](https://docs.github.com/en/rest/orgs/issue-fields#create-issue-field-for-an-organization)仕様上、対応する`SOURCE_TOKEN` / `TARGET_TOKEN`のauthenticated userは各organizationのadministratorでなければならない。Migrator roleやclassic PATの`admin:org` scopeだけではadministrator roleを代替できない。
 
-`fixture preparation=create`ではsource ghpmv token/browser accountがsource organization administratorかを、`api-only` / `browser-e2e`ではtarget ghpmv token/browser accountがtarget organization administratorかを一人ずつ確認する。未適用または不明ならPAT作成・入力、Browser login、permission preflightへ進まない。administrator accountへ切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
+`fixture preparation=create`ではsource endpoint の `organizationAdministrator=true` を、`api-only` / `browser-e2e`ではtarget endpoint の `organizationAdministrator=true` を必須とする。settings で true なら質問せず記録する。false または null ならPAT作成・入力、Browser login、permission preflightへ進まず、administrator accountへ切り替えるかを一問で確認する。切り替える場合はlogin、token owner、browser profile、user mapping用target loginを同じaccountへ更新する。standard fixtureを使わず、snapshotにもorganization Issue Fieldがない既存Project経路だけはこのadministrator gateを要求しない。
 
-標準fixture経路では、source organizationでprivate repository作成がpolicy上許可されProjectsが有効であること、target organizationでもProjectsが有効であることを一問ずつ確認する。未確認ならPAT入力へ進まない。既存Project経路ではsource resourceを作成しないためrepository creation policyを質問せず、export後のsnapshotに応じてtarget側のIssue Field、collaborator、visibility、linked repository権限だけを要求する。
+標準fixture経路では、source endpoint の `privateRepositoryCreationAllowed=true` と `projectsEnabled=true`、target endpoint の `projectsEnabled=true` を必須とする。settings で true なら質問しない。false または null なら不足項目だけを一問で確認し、未確認のままPAT入力へ進まない。既存Project経路ではsource resourceを作成しないためrepository creation policyを要求せず、export後のsnapshotに応じてtarget側のIssue Field、collaborator、visibility、linked repository権限だけを要求する。
 
 `read-only`、`api-only`、`browser-e2e` では、host / account 値を次の順で一問ずつ確認する。
 
@@ -349,13 +630,13 @@ dotnet run --project src\Ghpmv.Cli -c Release --no-build -- login --profile <sou
 | `api-only` / `browser-e2e` + `fixture-seed` | `SOURCE_TOKEN`, `TARGET_TOKEN` |
 | `api-only` / `browser-e2e` + `GEI` | `SOURCE_TOKEN`, `TARGET_TOKEN`, `GHPMV_GEI_SOURCE_TOKEN`, `GHPMV_GEI_TARGET_TOKEN` |
 
-`SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用で、ユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
+`SOURCE_TOKEN` / `TARGET_TOKEN` は ghpmv 用である。settings の対応する `tokenType` が有効ならその値を採用して質問せず、未設定の side だけユーザーに token type を一つずつ選んでもらう。GEI 用の二件は classic PAT credential 固定であり、token type の質問をしない。GEI では source と destination の両方の classic PAT credential が必須である。別 token 値の発行は推奨だが、既存の classic PAT を再利用してもよい。再利用する場合も必要 scope の和集合、SSO authorization、organization role を満たし、workflow 上は二つの `GHPMV_GEI_*` env var を必ず ready にする。fine-grained PAT を GEI 用に再利用してはならない。
 
 secure input 順は `SOURCE_TOKEN`、`TARGET_TOKEN`、GEI 経路の場合は `GHPMV_GEI_SOURCE_TOKEN`、`GHPMV_GEI_TARGET_TOKEN` とする。各 readiness sentinel を確認してから次の一件を送る。
 
 `fixture preparation=create`では標準fixtureのcapabilityが既知なので、上記全inventoryを一つのphaseで準備する。`fixture preparation=existing`ではsnapshot内容がexportまで未確定のため、最初のphaseでは`SOURCE_TOKEN`だけを作成・入力する。Step 6の`requirements`結果を確認した後、`TARGET_TOKEN`とGEI tokenのtype / role / permission / URLを確定し、残りのsecure inputを同じterminalで行う。snapshot未確認のままtargetへ過剰なroleやpermissionを要求しない。
 
-**PAT の入力を求める前に、現在のphaseに必要な権限を classic / fine-grained の両方で提示する。** 現在phaseの token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。最後の token type 回答で URL 生成に必要な値がすべて揃った場合、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
+**PAT の入力を求める前に、現在のphaseで選択済みの token type に必要な権限を提示する。** token type が未設定で質問が必要な場合は、選択前に classic / fine-grained の差を示す。現在phaseの token type を state に記録し終えるまで URL の生成、readiness 質問、`Read-Host` のいずれにも進まない。settings だけで必要な token type がすべて確定した場合は PAT type 質問を挟まず、Step 3 完了後の同じ turn で token plan と作成 URL を表示して readiness question へ進む。最後の token type 回答で URL 生成に必要な値がすべて揃った場合も、その同じ turn の次の assistant 本文は必ず token plan と作成 URL を含める。「準備します」「次に URL を出します」という遷移文だけで停止したり、別の質問や terminal command を挟んだりしてはならない。
 
 token plan は `env var | host / organization | 用途 | type | role | scope / permission | creation URL` の表で表示する。標準fixtureの`SOURCE_TOKEN` / `TARGET_TOKEN`のroleは`organization administrator`、GEI tokenのroleは別途確認したownerまたはmigrator statusを表示する。fine-grained を選んだ side には pre-filled URL、classic を選んだ side と二つの GEI token には host に対応する classic PAT 作成ページ URL と scope を表示する。作成 URL を表示した同じ response で、現在phaseの全PATの準備状況を一つの readiness question で確認してから `Read-Host` へ進む。
 
@@ -443,9 +724,9 @@ GEI でこれから新規作成する target repository は `TARGET_TOKEN` 作�
 | token / 経路 | 必要な scope |
 |---|---|
 | source: 既存 Project の export | `read:project`。private repository の item / linked repository を読む場合は `repo` も追加。 |
-| source: `setup --fixture` + export | `repo`, `project`, `admin:org`。fixture が organization Issue Field を作成するため `admin:org` が必要。 |
+| source: `setup --fixture` + export | `repo`, `project`, `admin:org`。この run が作る fixture repository を cleanup する場合は `delete_repo` も準備する。fixture が organization Issue Field を作成するため `admin:org` が必要。 |
 | target: 既存または GEI 後 repository への import / verify | `project`, `read:org`。snapshot に organization Issue Field がある場合は `admin:org`、private target repository の item / linked repository 解決または Issue Field 値の書き込みには `repo` も追加。 |
-| target: fixture seed + import / verify | `repo`, `project`, `admin:org`。 |
+| target: fixture seed + import / verify | `repo`, `project`, `admin:org`。この run が作る fixture repository を cleanup する場合は `delete_repo` も準備する。 |
 
 Organization が要求する場合は classic PAT を SSO authorize する。
 
@@ -480,8 +761,8 @@ source / destination の role status が `migrator-pending` の間は、次の s
 | GEI token | token owner の role | 必要な classic PAT scope |
 |---|---|---|
 | source | Organization owner または source organization の migrator | `admin:org`, `repo` |
-| destination | Organization owner | `repo`, `admin:org`, `workflow` |
-| destination | destination organization の migrator | `repo`, `read:org`, `workflow` |
+| destination | Organization owner | `repo`, `admin:org`, `workflow`。migrated repository を cleanup する場合は `delete_repo` も追加。 |
+| destination | destination organization の migrator | `repo`, `read:org`, `workflow`。Migrator role だけでは repository 削除権限を保証しないため、cleanup には target organization owner の別 credential を使う。 |
 
 同じ classic PAT を `ghpmv` と GEI で再利用する場合は、該当する scope の和集合が必要になる。不要な `admin:org` を `ghpmv` 専用 token に追加させない。
 
@@ -581,16 +862,25 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 ## Step 5: Source fixture
 
-`api-only` または `browser-e2e` で `fixture preparation` が `create` の場合だけ実行する。`read-only` と `existing` の経路ではスキップし、source resource を作成しない。
+`api-only` または `browser-e2e` で `fixture preparation` が `create` の場合に resource 作成を実行する。`read-only` と通常の `existing` 経路ではスキップし、source resource を作成しない。`browser-e2e` + `existing` では書き込み command を実行せず、source Project number と固定 field-sum contract を記録する確認 Step として実行し、実データの合否は Step 6 で自動判定する。
+
+`browser-e2e` では fixture preparation にかかわらず、Step 5 の開始時に次を state へ記録する。
+
+- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`
+- Number field names: `Fixture Number`, `Fixture Number 2`
+- Grouping field: `Status`
+- expected FieldSum: session state の fixture contract 表
+
+`fixture preparation=existing` の source Project number が settings から確定済みなら質問しない。未確定ならProject numberだけを一問で確認する。contract は Step 6 の snapshot inspection が機械判定するため、ユーザーへ自己申告を求めず、それまで `browser-e2e field-sum status=fixture-pending` のままにする。
 
 source organization を確定した後、validation run ごとに `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成し、以後 source / target の resource 名で共用する。
 
-source fixture title と repository name は一つずつ確認するが、空の自由入力カードにしない。次の推奨値を各質問カードの最初の choice として表示し、choice label には `(Recommended)` を付ける。
+source fixture title と repository name は run ID から自動決定し、質問しない。
 
 - fixture title: `ghpmv E2E source <run-id>`
 - repository name: `ghpmv-e2e-source-<run-id>`
 
-質問文には作成される resource と推奨値を明記し、別名はカードの自由入力で受け付ける。推奨 choice が選択された場合、記録・command 利用時には label 末尾の ` (Recommended)` を除いた実値を使う。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
+実resource作成前の説明で自動決定した実値を明記する。E2E 作成 command では `--fixture-require-new` を必ず指定し、既存 Project title または repository を検出したら書き込み前に失敗させる。
 
 fixture title と repository name は PowerShell の single-quoted argument として渡す。ユーザーが別名を入力した場合は、値に含まれる `'` を `''` に置換してから single quotes で囲む。未 quote の値を command に展開しない。
 
@@ -650,6 +940,8 @@ source が data residency の場合は選択した source command に `--api-bas
 
 出力された source Project number を記録する。
 
+`fixture preparation=create` の成功後、出力された source Project title / number / URL を resource inventory に `created` として追加する。`source empty-repository fallback=selected` なら `<source-org>/<source-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。`browser-e2e` では作成された source fixture が上記 contract を持つことを前提にせず、Step 6 の gate で必ず確認する。
+
 `browser-e2e` の再試行も同じ combined command と同じ title / repository を使う。CLI は owned fixture の `fixture-ui-complete` marker を確認し、完了済みなら UI setup を自動で skipし、未完了なら再開する。marker-aware retry を迂回するため、通常の再試行で `--fixture-ui --fixture-project <source-project-number>` を実行しない。
 
 ### Fixture UI 再実行
@@ -657,7 +949,7 @@ source が data residency の場合は選択した source command に `--api-bas
 同じ Project に明示的に再実行すると non-default Views が重複する。次のどちらかを選んでもらう。
 
 1. 新しい fixture Project を作る（推奨）
-2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` を手動削除して再実行する
+2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` を手動削除して再実行する
 
 Workflow は再設定できる。warning が出た場合は、目視だけで終了せず、後続 export が UI settings を警告なしで取得できるか確認する。
 
@@ -719,6 +1011,56 @@ source が data residency の場合は、browser option の有無にかかわら
 
 warning がある場合、どの UI-only field が欠落したかを示して続行可否を確認する。
 
+### Field sum snapshot gate
+
+`browser-e2e` では export 成功直後、`requirements` や target resource 準備より前に、同じ token execution terminal で `snapshot.json` 自体を検査する。次の PowerShell を一つの command として送り、通常の一意な completion sentinel で監視する。
+
+```powershell
+function Stop-FieldSumSnapshotCheck([string]$Message) {
+    Write-Error $Message
+    $global:LASTEXITCODE = 1
+}
+$snapshotPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'snapshot.json'
+if (!(Test-Path -LiteralPath $snapshotPath)) { Stop-FieldSumSnapshotCheck "snapshot.json was not found: $snapshotPath"; return }
+$snapshot = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+$expectedViews = @(
+    [pscustomobject]@{ Name = 'View 1'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Count', 'Fixture Number', 'Fixture Number 2') },
+    [pscustomobject]@{ Name = 'Fixture Board'; Layout = 'BOARD_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number') },
+    [pscustomobject]@{ Name = 'Fixture Roadmap'; Layout = 'ROADMAP_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number 2') },
+    [pscustomobject]@{ Name = 'Fixture Empty Sums'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @() }
+)
+foreach ($requiredField in @('Fixture Number', 'Fixture Number 2')) {
+    $numberFields = @($snapshot.fields | Where-Object { $_.name -eq $requiredField -and $_.dataType -eq 'NUMBER' })
+    if ($numberFields.Count -ne 1) { Stop-FieldSumSnapshotCheck "Required NUMBER field '$requiredField' was not found exactly once in snapshot.json."; return }
+}
+foreach ($expected in $expectedViews) {
+    $matches = @($snapshot.views | Where-Object name -eq $expected.Name)
+    if ($matches.Count -ne 1) { Stop-FieldSumSnapshotCheck "Expected exactly one view '$($expected.Name)', found $($matches.Count)."; return }
+    $actual = $matches[0]
+    if ($actual.layout -ne $expected.Layout) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' layout mismatch: expected $($expected.Layout), actual $($actual.layout)."; return }
+    if ($null -eq $actual.ui) { Stop-FieldSumSnapshotCheck "View '$($expected.Name)' is missing browser-captured UI settings."; return }
+    $actualGroupBy = @($actual.groupByFields)
+    $actualFieldSum = @($actual.ui.fieldSum)
+    $expectedGroupBy = @($expected.GroupBy)
+    $expectedFieldSum = @($expected.FieldSum)
+    $groupByDifference = @(Compare-Object -ReferenceObject $expectedGroupBy -DifferenceObject $actualGroupBy -CaseSensitive)
+    if ($actualGroupBy.Count -ne $expectedGroupBy.Count -or $groupByDifference.Count -ne 0) {
+        Stop-FieldSumSnapshotCheck "View '$($expected.Name)' groupBy mismatch: expected [$($expected.GroupBy -join ', ')], actual [$($actualGroupBy -join ', ')]."
+        return
+    }
+    $fieldSumDifference = @(Compare-Object -ReferenceObject $expectedFieldSum -DifferenceObject $actualFieldSum -CaseSensitive)
+    if ($actualFieldSum.Count -ne $expectedFieldSum.Count -or $fieldSumDifference.Count -ne 0) {
+        Stop-FieldSumSnapshotCheck "View '$($expected.Name)' FieldSum mismatch: expected [$($expected.FieldSum -join ', ')], actual [$($actualFieldSum -join ', ')]."
+        return
+    }
+    Write-Output ("GHPMV_FIELD_SUM_VIEW:{0}:{1}" -f $expected.Name, ($actualFieldSum -join ', '))
+}
+Write-Output 'GHPMV_FIELD_SUM_SNAPSHOT_MATCH'
+$global:LASTEXITCODE = 0
+```
+
+`GHPMV_FIELD_SUM_SNAPSHOT_MATCH` と command exit code 0 の両方を確認した場合だけ `browser-e2e field-sum status=snapshot-match` とし、先へ進む。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
+
 `api-only` / `browser-e2e`では、target PAT入力またはtarget resource準備より前に同じterminalでsnapshot-driven capabilityを算出する。
 
 ```powershell
@@ -749,7 +1091,9 @@ Step 1 で記録した `repository preparation mode` の経路だけを実行す
 
 この経路へ入る前にsource / target hostと記録済みAPI URLを再確認する。data-residency sourceでは`--github-source-api-url`、data-residency targetでは`--target-api-url`と`--target-uploads-url`を必ず含める。
 
-`docs/MANUAL_TEST_PLAN.md` の §6 で role と ruleset を確認する。destination の ruleset がある場合、**Repository migrations** bypass を **Exempt** にする。既定の **Always allow** のまま進めない。
+settings の `gei.repositoryMigrationsBypass` を確認する。`exempt` または `not-applicable` なら質問せず進む。`unconfirmed` なら、destination の applicable ruleset で **Repository migrations** bypass を **Exempt** にするか、applicable rulesetがないことをsettingsへ記録するまで停止する。既定の **Always allow** のまま進めない。
+
+`fixture preparation=create` では source repository に `ghpmv-e2e-source-<run-id>`、target repository に `ghpmv-e2e-target-<run-id>` を自動使用し、名前を質問しない。`fixture preparation=existing` の場合だけ settings の `gei.sourceRepository` / `gei.targetRepository` を使う。実resource作成前の説明には解決済みの full name を表示する。
 
 `gh gei migrate-repo --help` で extension の現在の引数を確認した後、選択topologyに応じて次を設定する。
 
@@ -791,7 +1135,7 @@ finally {
 
 placeholderとresolved URL変数を記録済み実値へ置き換え、commandごとの一意なIDを付けたwrapperで同じterminal sessionに送信し、exit codeとmigration completionを監視する。PAT optionは追加せず、`GH_SOURCE_PAT`と`GH_PAT`のprocess environment経由だけで渡す。GitHubの[`gh-gei` data-residency source usage](https://github.com/github/gh-gei#github-to-github-usage-githubcom---githubcom)とdata-residency target手順に従い、source / destination organizationとtenant endpoint、tenant固有のIP allow listを確認する。
 
-target repository full name を記録する。まずexport済みsnapshotから、移行対象repositoryのsource Issue / PR numberを同じterminalで列挙する。
+target repository full name を記録し、target repository name / URL / creation Step を resource inventory に `created` として追加する。まずexport済みsnapshotから、移行対象repositoryのsource Issue / PR numberを同じterminalで列挙する。
 
 ```powershell
 $snapshot = Get-Content -LiteralPath (Join-Path $env:GHPMV_DEMO_SNAPSHOT 'snapshot.json') -Raw | ConvertFrom-Json
@@ -821,12 +1165,12 @@ downloadable migration log は完了後 24 時間以内に保存する。target 
 
 `ghpmv` 自体の短時間デモ用であり、GEI の検証にはならず、補助 Project が一つ増えることを説明してから実行する。
 
-target seed title と repository name も空の自由入力カードにしない。Step 5 で生成した run ID があれば同じ値を使う。`fixture preparation` が `existing` で Step 5 をスキップしたなど run ID がまだない場合は、ここで `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成して記録する。次の推奨値を各質問カードの最初の choice として `(Recommended)` 付きで表示する。
+target seed title と repository name もrun IDから自動決定し、質問しない。Step 5 で生成した run ID があれば同じ値を使う。`fixture preparation` が `existing` で Step 5 をスキップしたなど run ID がまだない場合は、ここで `yyyyMMdd-HHmmss` 形式の run ID を一度だけ生成して記録する。
 
 - target seed title: `ghpmv E2E target seed <run-id>`
 - target repository name: `ghpmv-e2e-target-<run-id>`
 
-別名はカードの自由入力で受け付け、command には ` (Recommended)` を除いた実値を渡す。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
+実resource作成前の説明で自動決定した実値を明記する。`--fixture-require-new` により既存 Project title または repository を書き込み前に検出し、明示的な error で停止する。Projects (classic) REST endpoint による事前確認は行わない。
 
 target seed title と repository name も `'` を `''` に置換したうえで PowerShell single-quoted argument として渡す。
 
@@ -852,6 +1196,8 @@ finally {
 target が data residency の場合は `--api-base-url <target-api-url>` を追加する。
 
 `target empty-repository fallback` が `selected` の場合だけ、上記 target command に `--fixture-allow-existing-empty-repo` も追加する。
+
+fixture seed 成功後、出力された target seed Project title / number / URL を resource inventory に `created` として追加する。`target empty-repository fallback=selected` なら `<target-org>/<target-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。import 先 Project とは別 entry にする。
 
 target 側の `setup --fixture-ui` は不要。
 
@@ -993,7 +1339,7 @@ finally {
 
 target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`github.com-to-ghec-dr` ではこの target command にだけ両方を付ける。
 
-生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project number を記録する。
+生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project title / number / URL を記録し、import が新規 Project を作成した場合は resource inventory に `created` として追加する。既存 Project を更新した場合は `pre-existing` として記録し cleanup 対象にしない。`browser-e2e` では View / Workflow browser warning が一つでもあれば成功扱いせず、その property と View 名を示して停止する。
 
 ## Step 10: Verify
 
@@ -1043,6 +1389,7 @@ try {
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
       --enable-browser-automation `
       --browser-profile target `
+      --fail-on-warning `
       --report-json "$env:GHPMV_DEMO_SNAPSHOT\verify-report.json"
 }
 finally {
@@ -1059,6 +1406,215 @@ target が data residency の場合は `--target-base-url <target-api-url>` と 
 - `PartialMatch`: warning の内容と許容理由を記録
 - `Mismatch`: 差分を直して再検証
 - `NotVerified`: 必要データが capture できていないため成功扱いにしない
+
+`browser-e2e` では generic な overall 結果確認に加え、同じ terminal で report file を検査する。
+
+```powershell
+function Stop-BrowserViewCheck([string]$Message) {
+    Write-Error $Message
+    $global:LASTEXITCODE = 1
+}
+$reportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'verify-report.json'
+if (!(Test-Path -LiteralPath $reportPath)) { Stop-BrowserViewCheck "verify-report.json was not found: $reportPath"; return }
+$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$viewCategories = @($report.categories | Where-Object category -eq 'View')
+if ($viewCategories.Count -ne 1) { Stop-BrowserViewCheck "Expected exactly one View category, found $($viewCategories.Count)."; return }
+if ($viewCategories[0].status -ne 'Match') { Stop-BrowserViewCheck "View category must be Match, but was $($viewCategories[0].status)."; return }
+$viewDifferences = @($report.differences | Where-Object category -eq 'View')
+if ($viewDifferences.Count -ne 0) { Stop-BrowserViewCheck "View category reported differences despite Match: $($viewDifferences.message -join '; ')"; return }
+Write-Output 'GHPMV_BROWSER_VIEW_MATCH'
+$global:LASTEXITCODE = 0
+```
+
+`GHPMV_BROWSER_VIEW_MATCH` と command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-view-match` とする。View の warning、`PartialMatch`、`NotVerified` は、overall status が許容可能でも `browser-e2e` の成功にしない。
+
+### Browser field-sum machine check
+
+初回 `View: Match` は browser-assisted exporter が target の各 View を Playwright で再読し、次を source snapshot と機械比較した結果である。
+
+- `View 1`: layout、Group by=`Status`、Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
+- `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
+- `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
+- `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
+
+このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。Issue #62 の派生描画 checkpoint も、初回 `View: Match` 後に次の Playwright command で自動検証する。ユーザーへ browser reload や自己申告を求めない。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-sum-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で検査する。両 View の `Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=2`、command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-render-observed` として deliberate drift へ進む。欠落は非ゼロ終了にし、対話用質問で補完しない。
+
+### Deliberate drift と repair
+
+初回の機械的な `View: Match` 後、同じ terminal で Playwright による deliberate drift command を送る。ユーザーへ手動変更を依頼しない。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-sum-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --fixture-repo <target-repository-short-name> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、同じ terminal で次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、`field sum mismatch` が存在する場合だけ semantic success とする。
+
+```powershell
+function Stop-FieldSumDriftCheck([string]$Message) {
+    Write-Error $Message
+    $global:LASTEXITCODE = 1
+}
+$driftReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-drift-report.json'
+Remove-Item -LiteralPath $driftReportPath -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+$driftNativeExitCode = 0
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $driftReportPath
+    $driftNativeExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+if ($driftNativeExitCode -eq 0) { Stop-FieldSumDriftCheck 'Deliberate field-sum drift was not detected; verify unexpectedly succeeded.'; return }
+if (!(Test-Path -LiteralPath $driftReportPath)) { Stop-FieldSumDriftCheck "Drift report was not created: $driftReportPath"; return }
+$driftReport = Get-Content -LiteralPath $driftReportPath -Raw | ConvertFrom-Json
+$driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
+$fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
+$nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
+$unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
+    $_.category -ne 'View' -and $_.status -notin @('Match', 'NotApplicable')
+})
+if ($driftViewCategories.Count -ne 1 -or
+    $driftViewCategories[0].status -ne 'Mismatch' -or
+    $fieldSumDifferences.Count -ne 1 -or
+    $nonInfoDifferences.Count -ne 1 -or
+    $nonInfoDifferences[0].category -ne 'View' -or
+    $nonInfoDifferences[0].message -ne $fieldSumDifferences[0].message -or
+    $unexpectedCategoryStatuses.Count -ne 0) {
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly the expected View 1 field-sum mismatch.'
+    return
+}
+Write-Output $fieldSumDifferences.message
+Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
+$global:LASTEXITCODE = 0
+```
+
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`GHPMV_FIELD_SUM_DRIFT_DETECTED` と wrapper exit code 0 を確認した場合だけ `browser-e2e field-sum status=drift-detected` とする。
+
+続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
+      --org <target-org> `
+      --project-number <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+data residency の target option と optional mapping は初回 import と同じにする。再 import 成功後、次の browser-assisted verify command を送る。
+
+```powershell
+$repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.json'
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $repairReportPath
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+続けて report 自体を検査する。
+
+```powershell
+function Stop-FieldSumRepairCheck([string]$Message) {
+    Write-Error $Message
+    $global:LASTEXITCODE = 1
+}
+$repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.json'
+if (!(Test-Path -LiteralPath $repairReportPath)) { Stop-FieldSumRepairCheck "Repair report was not created: $repairReportPath"; return }
+$repairReport = Get-Content -LiteralPath $repairReportPath -Raw | ConvertFrom-Json
+$repairViewCategories = @($repairReport.categories | Where-Object category -eq 'View')
+if ($repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
+    Stop-FieldSumRepairCheck "Repaired View category must be Match, actual: $($repairViewCategories.status -join ', ')."
+    return
+}
+$repairViewDifferences = @($repairReport.differences | Where-Object category -eq 'View')
+if ($repairViewDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired View still has differences: $($repairViewDifferences.message -join '; ')"; return }
+Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
+$global:LASTEXITCODE = 0
+```
+
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_SUM_REPAIR_MATCH` と command exit code 0 を確認した場合、browser-assisted verify が `View 1` の Field sum 復元と4 fixture Viewの一致を機械確認済みなので、追加の対話用質問を行わず `browser-e2e field-sum status=repair-match` とする。
+
+`browser-e2e` は `target-render-observed` と `repair-match` の両方へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
 ## Troubleshooting
 
@@ -1084,7 +1640,8 @@ target が data residency の場合は `--target-base-url <target-api-url>` と 
 - source / target Project URL または番号
 - export / import result
 - verify overall / category result
+- browser-e2e の field-sum snapshot / initial Match / rendered-header DOM check / drift / repair result
 - 許容した warning
-- 作成した一時リソースと snapshot directory
+- resource inventory の各 name / URL / cleanup 状態と snapshot directory
 
-cleanup はユーザーが明示的に希望した場合だけ、`docs/MANUAL_TEST_PLAN.md` の手順で行う。PR、commit、push は別途依頼されるまで行わない。
+cleanup は workflow 終了時に inventory を示して明示的な同意を質問し、削除を選んだ場合だけ `docs/MANUAL_TEST_PLAN.md` の手順で行う。残す選択では削除しない。PR、commit、push は別途依頼されるまで行わない。

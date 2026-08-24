@@ -58,6 +58,24 @@ public class ViewUiLogicTests
         => Assert.Equal(expected, ViewUiImporter.HasSortDirection(menuText, directionName));
 
     [Theory]
+    [InlineData("Sort by: Fixture Number (ascending)", "Fixture Number", "ASC", true)]
+    [InlineData("Sort by: Fixture Number, ascending", "Fixture Number", "ASC", true)]
+    [InlineData("Sort by:\nFixture Number\nDescending", "Fixture Number", "DESC", true)]
+    [InlineData("Sort by: Fixture Number 2, ascending", "Fixture Number", "ASC", false)]
+    [InlineData("Sort by: Fixture Number, descending", "Fixture Number", "ASC", false)]
+    [InlineData("Sort by: none", "Fixture Number", "ASC", false)]
+    public void SortMenuMatches_requires_the_exact_field_and_direction(
+        string menuText,
+        string field,
+        string direction,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            ViewUiImporter.SortMenuMatches(
+                menuText,
+                new SortByFieldSnapshot { Field = field, Direction = direction }));
+
+    [Theory]
     [InlineData("  Fixture   Sprint\nend ", "Fixture Sprint end")]
     [InlineData("   ", null)]
     public void NormalizeUiText_collapses_whitespace(string text, string? expected)
@@ -131,15 +149,232 @@ public class ViewUiLogicTests
         Assert.Single(warnings);
     }
 
+    [Theory]
+    [InlineData("TABLE_LAYOUT")]
+    [InlineData("BOARD_LAYOUT")]
+    [InlineData("ROADMAP_LAYOUT")]
+    public void Field_sum_plan_supports_every_layout(string layout)
+    {
+        var view = View("Grouped", layout) with
+        {
+            GroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Count", "Fixture Number", "Fixture Number 2"],
+            },
+        };
+
+        Assert.Equal(
+            ["Count", "Fixture Number", "Fixture Number 2"],
+            ViewUiImporter.FieldSumValuesToApply(view));
+    }
+
+    [Theory]
+    [InlineData("TABLE_LAYOUT")]
+    [InlineData("ROADMAP_LAYOUT")]
+    public void Field_sum_plan_skips_ungrouped_layouts_without_the_control(string layout)
+    {
+        var view = View("Ungrouped", layout) with
+        {
+            Ui = new ViewUiSnapshot(),
+        };
+
+        Assert.Null(ViewUiImporter.FieldSumValuesToApply(view));
+    }
+
+    [Fact]
+    public void Field_sum_plan_does_not_write_uncaptured_ui_state()
+    {
+        var view = View("Grouped", "TABLE_LAYOUT");
+
+        Assert.Null(ViewUiImporter.FieldSumValuesToApply(view));
+    }
+
+    [Fact]
+    public void Field_sum_plan_clears_when_captured_selection_is_empty()
+    {
+        var view = View("Grouped", "ROADMAP_LAYOUT") with
+        {
+            GroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot(),
+        };
+
+        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyList<string>>(
+            ViewUiImporter.FieldSumValuesToApply(view)));
+    }
+
+    [Fact]
+    public void Field_sum_plan_ignores_unknown_layouts()
+    {
+        var view = View("Unknown", "UNKNOWN_LAYOUT") with
+        {
+            Ui = new ViewUiSnapshot { FieldSum = ["Count"] },
+        };
+
+        Assert.Null(ViewUiImporter.FieldSumValuesToApply(view));
+    }
+
+    [Theory]
+    [InlineData("TABLE_LAYOUT", true, true)]
+    [InlineData("ROADMAP_LAYOUT", true, true)]
+    [InlineData("BOARD_LAYOUT", false, true)]
+    [InlineData("TABLE_LAYOUT", false, false)]
+    [InlineData("ROADMAP_LAYOUT", false, false)]
+    [InlineData("UNKNOWN_LAYOUT", true, false)]
+    public void Field_sum_control_availability_depends_on_layout_and_grouping(
+        string layout,
+        bool grouped,
+        bool expected)
+    {
+        var view = View("View", layout) with
+        {
+            GroupByFields = grouped ? ["Status"] : [],
+        };
+
+        Assert.Equal(expected, ViewUiImporter.FieldSumControlExpected(view));
+    }
+
+    [Fact]
+    public void Field_sum_persistence_match_is_order_independent()
+        => Assert.True(ViewUiImporter.FieldSumMatches(
+            ["Count", "Fixture Number"],
+            ["Fixture Number", "Count"]));
+
+    [Fact]
+    public void Field_sum_persistence_match_rejects_unavailable_or_incomplete_state()
+    {
+        Assert.False(ViewUiImporter.FieldSumMatches(["Count"], null));
+        Assert.False(ViewUiImporter.FieldSumMatches([], null));
+        Assert.False(ViewUiImporter.FieldSumMatches(
+            ["Count", "Fixture Number"],
+            ["Count"]));
+    }
+
+    [Fact]
+    public void Rendered_field_sum_observation_accepts_count_and_numeric_labels()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "View 1");
+
+        FieldSumRenderingObserver.ValidateObservation(
+            view,
+            ["Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0"],
+            ["Fixture Number: 3.14", "Fixture Number 2: 0"]);
+    }
+
+    [Fact]
+    public void Rendered_field_sum_observation_rejects_missing_numeric_label()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "Fixture Roadmap");
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => FieldSumRenderingObserver.ValidateObservation(
+                view,
+                ["Todo 2"],
+                []));
+
+        Assert.Contains("Fixture Number 2", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Persistence_check_accepts_saved_grouping_slice_and_unordered_field_sums()
+    {
+        var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                SliceBy = "Fixture Select",
+                FieldSum = ["Count", "Fixture Number"],
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: "Status",
+            ColumnBy: null,
+            SliceBy: "Fixture Select",
+            FieldSumAvailable: true,
+            FieldSum: ["Fixture Number", "Count"]);
+
+        Assert.Empty(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+    }
+
+    [Fact]
+    public void Persistence_check_reports_grouping_slice_and_field_sum_loss()
+    {
+        var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                SliceBy = "Fixture Select",
+                FieldSum = ["Count", "Fixture Number"],
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: null,
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: false,
+            FieldSum: []);
+
+        var differences = ViewUiImporter.CollectPersistenceDifferences(view, persisted);
+
+        Assert.Contains(differences, difference => difference.StartsWith("grouping expected", StringComparison.Ordinal));
+        Assert.Contains(differences, difference => difference.StartsWith("slice-by expected", StringComparison.Ordinal));
+        Assert.Contains(differences, difference => difference == "field-sum control is unavailable");
+        Assert.Equal(3, differences.Count);
+    }
+
+    [Fact]
+    public void Persistence_check_reports_board_column_loss()
+    {
+        var view = View("Board", "BOARD_LAYOUT", groupBy: ["Status"]) with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+            Ui = new ViewUiSnapshot { FieldSum = ["Fixture Number"] },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: "Status",
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: true,
+            FieldSum: ["Fixture Number"]);
+
+        var difference = Assert.Single(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+
+        Assert.StartsWith("column-by expected", difference, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, false, true, true)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, true, true, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, false, false, false)]
+    public void Disabled_checkbox_change_is_reported_only_when_state_cannot_match(
+        bool shouldBeChecked,
+        bool isChecked,
+        bool isDisabled,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            ViewUiImporter.DisabledCheckboxChangeRequired(shouldBeChecked, isChecked, isDisabled));
+
     [Fact]
     public void FixtureUiSnapshotFactory_creates_importable_standard_views_and_workflows()
     {
         var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
 
-        Assert.Equal(["View 1", "Fixture Board", "Fixture Roadmap"], snapshot.Views.Select(v => v.Name));
         Assert.Equal(
-            ["Fixture Roadmap", "View 1", "Fixture Board"],
+            ["View 1", "Fixture Board", "Fixture Roadmap", "Fixture Empty Sums"],
+            snapshot.Views.Select(v => v.Name));
+        Assert.Equal(
+            ["Fixture Roadmap", "View 1", "Fixture Board", "Fixture Empty Sums"],
             snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
+        Assert.Equal(
+            ["Count", "Fixture Number", "Fixture Number 2"],
+            snapshot.Views.Single(view => view.Name == "View 1").Ui!.FieldSum);
+        Assert.Equal(
+            ["Fixture Number 2"],
+            snapshot.Views.Single(view => view.Name == "Fixture Roadmap").Ui!.FieldSum);
+        Assert.Empty(snapshot.Views.Single(view => view.Name == "Fixture Empty Sums").Ui!.FieldSum!);
         Assert.Contains(snapshot.Fields, field =>
             field.Name == "Fixture Teams"
             && field.DataType == "MULTI_SELECT"
@@ -148,6 +383,44 @@ public class ViewUiLogicTests
         Assert.Contains(snapshot.Workflows, w => w.Name == "Auto-add secondary" && w.Ui?.Filter == "is:issue label:bug");
         Assert.Empty(ViewUiImporter.CollectPreflightWarnings(snapshot));
         Assert.Empty(WorkflowUiImporter.CollectPreflightWarnings(snapshot, WorkflowUiImporter.DefaultMaxAutoAddWorkflows));
+    }
+
+    [Fact]
+    public void FixtureUiSnapshotFactory_field_sum_drift_only_changes_View_1_field_sum()
+    {
+        var expected = FixtureUiSnapshotFactory.Create("fixture-repo");
+        var drifted = FixtureUiSnapshotFactory.CreateFieldSumDrift("fixture-repo");
+
+        Assert.Equal(expected.Views.Count, drifted.Views.Count);
+        foreach (var view in expected.Views)
+        {
+            var actual = Assert.Single(drifted.Views, candidate => candidate.Name == view.Name);
+            Assert.Equal(view.Number, actual.Number);
+            Assert.Equal(view.TabPosition, actual.TabPosition);
+            Assert.Equal(view.Layout, actual.Layout);
+            Assert.Equal(view.Filter, actual.Filter);
+            Assert.Equal(view.GroupByFields, actual.GroupByFields);
+            Assert.Equal(view.SortByFields, actual.SortByFields);
+            Assert.Equal(view.VerticalGroupByFields, actual.VerticalGroupByFields);
+            Assert.Equal(view.VisibleFields, actual.VisibleFields);
+            Assert.Equal(view.Ui!.SliceBy, actual.Ui!.SliceBy);
+            if (view.Name == "View 1")
+            {
+                Assert.Equal(["Count", "Fixture Number"], actual.Ui.FieldSum);
+            }
+            else
+            {
+                Assert.Equal(view.Ui.FieldSum, actual.Ui.FieldSum);
+            }
+
+            Assert.Equal(view.Ui.Roadmap?.StartField, actual.Ui.Roadmap?.StartField);
+            Assert.Equal(view.Ui.Roadmap?.TargetField, actual.Ui.Roadmap?.TargetField);
+            Assert.Equal(view.Ui.Roadmap?.Zoom, actual.Ui.Roadmap?.Zoom);
+            if (view.Ui.Roadmap is not null)
+            {
+                Assert.Equal(view.Ui.Roadmap.Markers, actual.Ui.Roadmap!.Markers);
+            }
+        }
     }
 
     [Fact]
@@ -339,6 +612,32 @@ public class ViewUiLogicTests
         var difference = Assert.Single(report.Differences, d => d.Category == "View");
         Assert.Equal(VerifySeverity.Error, difference.Severity);
         Assert.Contains("slice by mismatch", difference.Message, StringComparison.Ordinal);
+        Assert.Equal(VerifyStatus.Mismatch, report.Status);
+    }
+
+    [Theory]
+    [InlineData("TABLE_LAYOUT")]
+    [InlineData("BOARD_LAYOUT")]
+    [InlineData("ROADMAP_LAYOUT")]
+    public void Verifier_reports_field_sum_differences_for_every_layout(string layout)
+    {
+        var source = View("Grouped", layout) with
+        {
+            Ui = new ViewUiSnapshot { FieldSum = ["Count", "Fixture Number"] },
+        };
+        var target = source with
+        {
+            Ui = new ViewUiSnapshot { FieldSum = ["Fixture Number"] },
+        };
+
+        var report = ProjectVerifier.Compare(
+            Snapshot(["Fixture Number"], source),
+            Snapshot(["Fixture Number"], target));
+
+        var difference = Assert.Single(report.Differences, difference =>
+            difference.Category == "View"
+            && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
         Assert.Equal(VerifyStatus.Mismatch, report.Status);
     }
 
