@@ -102,7 +102,7 @@ public sealed class FieldDefaultUiExporter
         var entry = Sel.FieldSettingsEntry(page, fieldName);
         await entry.WaitForAsync().ConfigureAwait(false);
         await entry.ClickAsync().ConfigureAwait(false);
-        await Sel.FieldDefaultControl(page).WaitForAsync().ConfigureAwait(false);
+        await Sel.FieldSettingsHeading(page, fieldName).WaitForAsync().ConfigureAwait(false);
     }
 
     internal static async Task<FieldDefaultValueSnapshot> ReadDefaultValueAsync(
@@ -110,26 +110,20 @@ public sealed class FieldDefaultUiExporter
         FieldSnapshot field)
     {
         ArgumentNullException.ThrowIfNull(field);
-        var control = Sel.FieldDefaultControl(page);
-        var tagName = await control.EvaluateAsync<string>("element => element.tagName.toLowerCase()")
-            .ConfigureAwait(false);
-        var raw = tagName is "input" or "textarea"
-            ? await control.InputValueAsync().ConfigureAwait(false)
-            : await control.InnerTextAsync().ConfigureAwait(false);
-
         return field.DataType switch
         {
             "TEXT" => new FieldDefaultValueSnapshot
             {
-                Text = string.IsNullOrEmpty(raw) ? null : raw,
+                Text = EmptyTextToNull(await Sel.FieldDefaultControl(page).InputValueAsync().ConfigureAwait(false)),
             },
-            "NUMBER" => new FieldDefaultValueSnapshot { Number = ParseNumber(raw) },
+            "NUMBER" => new FieldDefaultValueSnapshot
+            {
+                Number = ParseNumber(await Sel.FieldDefaultControl(page).InputValueAsync().ConfigureAwait(false)),
+            },
             "SINGLE_SELECT" => new FieldDefaultValueSnapshot
             {
-                SingleSelectOptionName = NormalizeSingleSelectValue(
-                    raw,
-                    field.Options?.Select(option => option.Name).ToHashSet(StringComparer.Ordinal)
-                        ?? []),
+                SingleSelectOptionName = await ReadSingleSelectDefaultAsync(page, field.Options ?? [])
+                    .ConfigureAwait(false),
             },
             _ => throw new InvalidOperationException(
                 $"Field type '{field.DataType}' does not support a browser default value."),
@@ -138,52 +132,36 @@ public sealed class FieldDefaultUiExporter
 
     internal static double? ParseNumber(string? value)
     {
-        value = EmptyToNull(value);
+        value = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
         return value is null
             ? null
             : double.Parse(value, NumberStyles.Float, CultureInfo.InvariantCulture);
     }
 
-    internal static string? NormalizeSingleSelectValue(
-        string? value,
-        IReadOnlySet<string> optionNames)
+    internal static async Task<string?> ReadSingleSelectDefaultAsync(
+        IPage page,
+        IReadOnlyList<SingleSelectOptionSnapshot> options)
     {
-        ArgumentNullException.ThrowIfNull(optionNames);
-        value = EmptyToNull(value);
-        if (value is null)
+        foreach (var option in options)
         {
-            return null;
-        }
-        if (optionNames.Contains(value))
-        {
-            return value;
-        }
-
-        const string labelPrefix = "Default value:";
-        if (value.StartsWith(labelPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            var labelledValue = EmptyToNull(value[labelPrefix.Length..]);
-            if (labelledValue is not null && optionNames.Contains(labelledValue))
+            await Sel.FieldOptionActionsButton(page, option.Name).ClickAsync().ConfigureAwait(false);
+            var menu = Sel.FieldOptionActionsMenu(page, option.Name);
+            await menu.WaitForAsync().ConfigureAwait(false);
+            if (await menu.GetByRole(
+                    AriaRole.Menuitem,
+                    new() { Name = "Unset as default", Exact = true })
+                .CountAsync().ConfigureAwait(false) > 0)
             {
-                return labelledValue;
+                await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+                return option.Name;
             }
 
-            value = labelledValue;
+            await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
         }
 
-        if (value is null
-            || value.Equals("Select a default value", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("Choose a default value", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("No default value", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("None", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        throw new FormatException(
-            $"Single-select default control value '{value}' did not match any field option.");
+        return null;
     }
 
-    private static string? EmptyToNull(string? value)
-        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string? EmptyTextToNull(string? value)
+        => string.IsNullOrEmpty(value) ? null : value;
 }

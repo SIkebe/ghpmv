@@ -230,19 +230,17 @@ public sealed class FieldDefaultUiImporter
                     .ConfigureAwait(false);
                 break;
             case "SINGLE_SELECT":
-                await ApplySingleSelectAsync(page, control, field.DefaultValue!.SingleSelectOptionName)
+                await ApplySingleSelectAsync(
+                    page,
+                    current.SingleSelectOptionName,
+                    field.DefaultValue!.SingleSelectOptionName)
                     .ConfigureAwait(false);
                 break;
         }
 
-        var save = Sel.SaveFieldSettingsButton(page);
-        await save.WaitForAsync().ConfigureAwait(false);
-        await save.ClickAsync().ConfigureAwait(false);
-        await Sel.FieldDefaultControl(page).WaitForAsync(new()
-        {
-            State = WaitForSelectorState.Hidden,
-            Timeout = 10_000,
-        }).ConfigureAwait(false);
+        // Field settings auto-save. As with View persistence, leave enough time for the
+        // request to become durable before navigation can cancel it, then verify by reload.
+        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
 
         await FieldDefaultUiExporter.OpenFieldSettingsAsync(
             page,
@@ -263,44 +261,32 @@ public sealed class FieldDefaultUiImporter
 
     private static async Task ApplySingleSelectAsync(
         IPage page,
-        ILocator control,
+        string? currentOptionName,
         string? optionName)
     {
-        await control.ClickAsync().ConfigureAwait(false);
         if (optionName is not null)
         {
-            var option = Sel.FieldDefaultOption(page, optionName);
-            await option.WaitForAsync().ConfigureAwait(false);
-            await option.ClickAsync().ConfigureAwait(false);
+            await Sel.FieldOptionActionsButton(page, optionName).ClickAsync().ConfigureAwait(false);
+            var menu = Sel.FieldOptionActionsMenu(page, optionName);
+            await menu.WaitForAsync().ConfigureAwait(false);
+            await menu.GetByRole(
+                    AriaRole.Menuitem,
+                    new() { Name = "Set as default", Exact = true })
+                .ClickAsync().ConfigureAwait(false);
             return;
         }
 
-        var clear = Sel.ClearFieldDefaultButton(page);
-        try
+        if (currentOptionName is not null)
         {
-            await clear.WaitForAsync(new()
-            {
-                State = WaitForSelectorState.Visible,
-                Timeout = 1_000,
-            }).ConfigureAwait(false);
-            await clear.ClickAsync().ConfigureAwait(false);
+            await Sel.FieldOptionActionsButton(page, currentOptionName).ClickAsync().ConfigureAwait(false);
+            var menu = Sel.FieldOptionActionsMenu(page, currentOptionName);
+            await menu.WaitForAsync().ConfigureAwait(false);
+            await menu.GetByRole(
+                    AriaRole.Menuitem,
+                    new() { Name = "Unset as default", Exact = true })
+                .ClickAsync().ConfigureAwait(false);
             return;
         }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-        {
-            // Some picker variants expose only an editable combobox.
-        }
-
-        var tagName = await control.EvaluateAsync<string>("element => element.tagName.toLowerCase()")
-            .ConfigureAwait(false);
-        if (tagName == "input")
-        {
-            await control.FillAsync(string.Empty).ConfigureAwait(false);
-            await control.PressAsync("Escape").ConfigureAwait(false);
-            return;
-        }
-
-        throw new InvalidOperationException("the single-select default picker exposed no clear action");
     }
 
     private static string Display(FieldSnapshot field)

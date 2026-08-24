@@ -39,16 +39,22 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
 
-## Field default UI contract (2026-08-24)
+## Field default UI contract (2026-08-25 live discovery)
 
-GitHub Docs と public schema introspection で Text / Number / Single-select default が browser-only であることを確認した。実装は Project の `/settings` から field name の entry を開き、accessible name `Default value` の textbox / spinbutton / combobox / button と `Save` / `Save changes` を使用する。Single-select picker は option name で選択し、clear actionまたは空 selectionで解除する。
+GitHub Docs と public schema introspection で Text / Number / Single-select default が browser-only であることを確認し、GitHub.com の一時Project #72で実UIを再確認した。Project `/settings` の`list "Fields"`内にfield nameのlinkがあり、custom fieldは`/settings/fields/{databaseId}`へ遷移する。
+
+- Text: `textbox "Default value"`（placeholder=`Enter default text`）
+- Number: `spinbutton "Default value"`
+- Single-select: 各optionの`button "Open field actions for <option>"` → 同名menu → `menuitem "Set as default"` / default optionでは`menuitem "Unset as default"`
+- Text / Number とSingle-select actionsはいずれもauto-saveで、field pageにSave buttonはない。保存後は`Saved!`が表示される
+- default Single-select optionはoption list上で`<option> Default`と表示される
 
 1. export は item values から推測せず、各 supported field の settings control を直接読む。
 2. `defaultValue: null` は未取得、`defaultValue: {}` は取得済み clear として区別する。
 3. Number は invariant format で読み書きし、`0` と negative を null と区別する。
-4. Single-select は option node ID を snapshot に保存せず、target option name へ再解決する。
-5. import は source item の作成・値適用後に default を保存する。既存 item values は変更せず、新規 item のみ GitHub が自動入力する。
-6. 保存後は settings を再度開いて意味的に read-back し、不一致を warning にする。
+4. Single-select はoption action menuの`Unset as default`を全optionで探して読み、targetではoption nameのaction menuから`Set as default`を選ぶ。option node IDは保存しない。
+5. importはtarget defaultsをitem作成前にclearし、source itemの作成・値適用後にsource defaultsをauto-saveする。既存 item valuesは変更せず、新規itemのみGitHubが自動入力する。
+6. auto-save後は2秒待ってsettingsを再度開き、意味的にread-backして不一致をwarningにする。
 7. `setup --fixture-field-default-check` は disposable draft を API で作成し、GraphQL read-back で4 defaultsを確認して item ID / title を返す。draft は resource inventory に追加し、明示的なcleanup同意後に `--fixture-field-default-cleanup-item` / `--fixture-field-default-cleanup-title` で削除する。
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
