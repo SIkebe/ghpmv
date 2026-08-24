@@ -95,6 +95,45 @@ internal static class Sel
     public static ILocator SsoContinueButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { Name = "Continue", Exact = true });
 
+    // === Project field defaults (implementation contract 2026-08-24) ===
+
+    private static readonly Regex FieldDefaultControlName = new("^Default value($|:)");
+    private static readonly Regex ClearFieldDefaultName = new("^(Clear|Remove)( selection| default value)?$", RegexOptions.IgnoreCase);
+
+    /// <summary>A field entry on the Project settings page.</summary>
+    public static ILocator FieldSettingsEntry(IPage page, string fieldName)
+        => page.GetByRole(AriaRole.Link, new() { Name = fieldName, Exact = true })
+            .Or(page.GetByRole(AriaRole.Button, new() { Name = fieldName, Exact = true }))
+            .Or(page.GetByText(fieldName, new() { Exact = true }))
+            .First;
+
+    /// <summary>Text, number, or single-select control labelled "Default value".</summary>
+    public static ILocator FieldDefaultControl(IPage page)
+        => page.GetByRole(AriaRole.Textbox, new() { NameRegex = FieldDefaultControlName })
+            .Or(page.GetByRole(AriaRole.Spinbutton, new() { NameRegex = FieldDefaultControlName }))
+            .Or(page.GetByRole(AriaRole.Combobox, new() { NameRegex = FieldDefaultControlName }))
+            .Or(page.GetByRole(AriaRole.Button, new() { NameRegex = FieldDefaultControlName }))
+            .First;
+
+    /// <summary>Clear action exposed by the single-select default picker.</summary>
+    public static ILocator ClearFieldDefaultButton(IPage page)
+        => page.GetByRole(AriaRole.Button, new() { NameRegex = ClearFieldDefaultName })
+            .Or(page.GetByRole(AriaRole.Menuitem, new() { NameRegex = ClearFieldDefaultName }))
+            .First;
+
+    /// <summary>An option in the open single-select default picker.</summary>
+    public static ILocator FieldDefaultOption(IPage page, string optionName)
+        => page.GetByRole(AriaRole.Option, new() { Name = optionName, Exact = true })
+            .Or(page.GetByRole(AriaRole.Menuitemradio, new() { Name = optionName, Exact = true }))
+            .Or(page.GetByRole(AriaRole.Menuitem, new() { Name = optionName, Exact = true }))
+            .Last;
+
+    /// <summary>Save action in the field settings editor.</summary>
+    public static ILocator SaveFieldSettingsButton(IPage page)
+        => page.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true })
+            .Or(page.GetByRole(AriaRole.Button, new() { Name = "Save changes", Exact = true }))
+            .Last;
+
     // === Workflows (M7 discovery, 2026-07-05) ===
 
     // Saved Auto-add entries carry a kebab button whose label is appended to the link name.

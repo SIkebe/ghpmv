@@ -1,0 +1,251 @@
+using System.Globalization;
+using Ghpmv.Core.Export;
+using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Snapshot;
+
+namespace Ghpmv.Core.Browser;
+
+/// <summary>Functionally verifies fixture defaults by creating and removing one target draft.</summary>
+public sealed class FieldDefaultFixtureObserver
+{
+    private readonly GitHubGraphQLClient _client;
+
+    public FieldDefaultFixtureObserver(GitHubGraphQLClient client)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        _client = client;
+    }
+
+    public Action<string>? OnProgress { get; set; }
+
+    public async Task ValidateStandardFixtureAsync(
+        string organization,
+        int projectNumber,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(organization);
+        var expected = FixtureUiSnapshotFactory.Create();
+        var title = $"ghpmv-default-check-{Guid.NewGuid():N}";
+        var projectId = await ResolveProjectIdAsync(organization, projectNumber, cancellationToken)
+            .ConfigureAwait(false);
+        string? itemId = null;
+        try
+        {
+            var data = await _client.MutationAsync(
+                "addProjectV2DraftIssue",
+                """
+                mutation($projectId: ID!, $title: String!, $clientMutationId: String!) {
+                  addProjectV2DraftIssue(input: {
+                    projectId: $projectId,
+                    title: $title,
+                    clientMutationId: $clientMutationId
+                  }) {
+                    projectItem { id }
+                  }
+                }
+                """,
+                new { projectId, title },
+                MutationRetryPolicy.Create,
+                target: projectId,
+                requiredResultPath: "projectItem.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            itemId = data
+                .GetProperty("addProjectV2DraftIssue")
+                .GetProperty("projectItem")
+                .GetProperty("id")
+                .GetString()
+                ?? throw new GitHubGraphQLException("The field-default check draft returned no item id.");
+
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var snapshot = await new ProjectExporter(_client)
+                    .ExportAsync(organization, projectNumber, cancellationToken)
+                    .ConfigureAwait(false);
+                var draft = snapshot.Items.SingleOrDefault(item =>
+                    string.Equals(item.Draft?.Title, title, StringComparison.Ordinal));
+                if (draft is not null)
+                {
+                    ValidateDraftDefaults(expected.Fields, draft);
+                    OnProgress?.Invoke(
+                        $"Fixture field defaults verified on new draft '{title}': fields={expected.Fields.Count(field => field.DefaultValue is not null)}");
+                    return;
+                }
+
+                if (DateTimeOffset.UtcNow >= deadline)
+                {
+                    throw new TimeoutException(
+                        $"The field-default check draft '{title}' was not visible within 30 seconds.");
+                }
+
+                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            var cleanupIds = itemId is not null
+                ? [itemId]
+                : await FindMatchingDraftItemIdsAsync(projectId, title, CancellationToken.None)
+                    .ConfigureAwait(false);
+            foreach (var cleanupId in cleanupIds)
+            {
+                await DeleteAndConfirmDraftAsync(projectId, cleanupId, title).ConfigureAwait(false);
+            }
+
+            var remaining = await FindMatchingDraftItemIdsAsync(
+                projectId,
+                title,
+                CancellationToken.None).ConfigureAwait(false);
+            if (remaining.Count > 0)
+            {
+                ThrowCleanupFailure(title);
+            }
+        }
+    }
+
+    internal static void ValidateDraftDefaults(
+        IReadOnlyList<FieldSnapshot> fields,
+        ItemSnapshot draft)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        ArgumentNullException.ThrowIfNull(draft);
+        if (draft.Draft is null)
+        {
+            throw new InvalidOperationException("The field-default check item is not a draft issue.");
+        }
+
+        var values = draft.FieldValues.ToDictionary(value => value.FieldName, StringComparer.Ordinal);
+        foreach (var field in fields.Where(field => field.DefaultValue is not null))
+        {
+            values.TryGetValue(field.Name, out var actual);
+            var matches = field.DataType switch
+            {
+                "TEXT" => string.Equals(
+                    field.DefaultValue!.Text,
+                    actual?.Text,
+                    StringComparison.Ordinal),
+                "NUMBER" => field.DefaultValue!.Number == actual?.Number,
+                "SINGLE_SELECT" => string.Equals(
+                    field.DefaultValue!.SingleSelectOptionName,
+                    actual?.SingleSelectOptionName,
+                    StringComparison.Ordinal),
+                _ => true,
+            };
+            if (!matches)
+            {
+                throw new InvalidOperationException(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"new draft field '{field.Name}' did not receive its expected default"));
+            }
+        }
+    }
+
+    private async Task<string> ResolveProjectIdAsync(
+        string organization,
+        int projectNumber,
+        CancellationToken cancellationToken)
+    {
+        var data = await _client.QueryAsync(
+            """
+            query($login: String!, $number: Int!) {
+              organization(login: $login) {
+                projectV2(number: $number) { id }
+              }
+            }
+            """,
+            new { login = organization, number = projectNumber },
+            cancellationToken).ConfigureAwait(false);
+        return data.GetProperty("organization").GetProperty("projectV2").GetProperty("id").GetString()
+            ?? throw new GitHubGraphQLException(
+                $"Fixture Project '{organization}/projects/{projectNumber}' returned no id.");
+    }
+
+    private async Task<IReadOnlyList<string>> FindMatchingDraftItemIdsAsync(
+        string projectId,
+        string title,
+        CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+        await foreach (var node in _client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 100, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes {
+                      id
+                      type
+                      content { ... on DraftIssue { title } }
+                    }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            var content = node.GetProperty("content");
+            if (string.Equals(node.GetProperty("type").GetString(), "DRAFT_ISSUE", StringComparison.Ordinal)
+                && content.ValueKind == System.Text.Json.JsonValueKind.Object
+                && string.Equals(content.GetProperty("title").GetString(), title, StringComparison.Ordinal)
+                && node.GetProperty("id").GetString() is { } id)
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private async Task DeleteAndConfirmDraftAsync(
+        string projectId,
+        string itemId,
+        string title)
+    {
+        Exception? deletionException = null;
+        try
+        {
+            await _client.MutationAsync(
+                "deleteProjectV2Item",
+                """
+                mutation($projectId: ID!, $itemId: ID!, $clientMutationId: String!) {
+                  deleteProjectV2Item(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    clientMutationId: $clientMutationId
+                  }) {
+                    deletedItemId
+                  }
+                }
+                """,
+                new { projectId, itemId },
+                MutationRetryPolicy.Create,
+                target: itemId,
+                requiredResultPath: "deletedItemId",
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or TimeoutException)
+        {
+            deletionException = exception;
+        }
+
+        var remaining = await FindMatchingDraftItemIdsAsync(
+            projectId,
+            title,
+            CancellationToken.None).ConfigureAwait(false);
+        if (remaining.Contains(itemId, StringComparer.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"The field-default check draft '{title}' could not be deleted.",
+                deletionException);
+        }
+    }
+
+    private static void ThrowCleanupFailure(string title)
+        => throw new InvalidOperationException(
+            $"The field-default check draft '{title}' still exists after cleanup.");
+}

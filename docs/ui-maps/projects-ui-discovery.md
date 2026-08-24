@@ -39,6 +39,18 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
 
+## Field default UI contract (2026-08-24)
+
+GitHub Docs と public schema introspection で Text / Number / Single-select default が browser-only であることを確認した。実装は Project の `/settings` から field name の entry を開き、accessible name `Default value` の textbox / spinbutton / combobox / button と `Save` / `Save changes` を使用する。Single-select picker は option name で選択し、clear actionまたは空 selectionで解除する。
+
+1. export は item values から推測せず、各 supported field の settings control を直接読む。
+2. `defaultValue: null` は未取得、`defaultValue: {}` は取得済み clear として区別する。
+3. Number は invariant format で読み書きし、`0` と negative を null と区別する。
+4. Single-select は option node ID を snapshot に保存せず、target option name へ再解決する。
+5. import は source item の作成・値適用後に default を保存する。既存 item values は変更せず、新規 item のみ GitHub が自動入力する。
+6. 保存後は settings を再度開いて意味的に read-back し、不一致を warning にする。
+7. `setup --fixture-field-default-check` は disposable draft を API で作成し、GraphQL read-back で4 defaultsを確認して draftを削除する。
+
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
@@ -48,6 +60,7 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
+- Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
 
 ## M7 E2E 実走で確定した追加知見(2026-07-05)

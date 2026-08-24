@@ -87,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field sums | snapshot の 4 View contract、target `View: Match`、rendered-header DOM check、drift report、repair report |
+| browser-e2e field defaults / sums | typed defaults と4 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -188,6 +188,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 | browser-e2e field-sum contract | 下記の View / field 名と期待値 |
 | browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
+| browser-e2e field-default contract | `Fixture Text=既定値 🌏`, `Fixture Number=-7`, `Fixture Number 2=0`, `Fixture Select=Beta` |
+| browser-e2e field-default status | `fixture-pending`, `snapshot-match`, `target-field-match`, `new-draft-observed`, `drift-detected`, `repair-match` |
 | resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
 
 `browser-e2e` の既存 round-trip は次の field-sum contract も常に検証する。別 scenario には分岐させず、settings に重複保存しない。
@@ -200,6 +202,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | `Fixture Empty Sums` | `TABLE_LAYOUT` / `Status` | empty |
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
+
+同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
 ## Feature checkpoint の実行時間最小化
 
@@ -226,7 +230,7 @@ Issue ごとの機能検証を追加するときも、user-facing scenario selec
 | Step 7 fixture seed | target seed Project（title / number / URL）と target repository（owner/name / URL） |
 | Step 9 import | imported target Project（title / number / URL） |
 
-Project 内の Views / Workflows は親 Project の nested resource として同じ entry に記録する。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
+Project 内の Views / Workflows と field-default functional check の disposable draft は親 Project の nested resource として同じ entry に記録する。check draft は command 内の `finally` deletion後に `deleted` とする。各 entry は `created`, `retained`, `deleted` の cleanup 状態に加え、owner type、host、cleanup に使う token environment variable、token type、削除 permission の確認状態を持つ。command が失敗した場合も部分作成を確認し、作成済み resource があれば inventory へ追加する。
 
 Step 10 と `browser-e2e` の field-sum drift / repair が完了した場合だけでなく、最初の `created` entry 記録後に fixture、GEI、mapping、import、verify、drift、repair のいずれかが失敗した場合も、終了前に cleanup consent へ遷移する。失敗内容を示した後、cleanup 対象の `created` entry を name / URL / number 付きで一覧表示し、対話用質問ツールで一度だけ明示的な同意を確認する。Cancel / Skipped は delete command を送らず全 entry を `retained` として pause する。選択肢は次のように resource への影響を含める。
 
@@ -511,7 +515,7 @@ settings の `execution.fixturePreparation`、`execution.repositoryPreparationMo
 
 `api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
-`browser-e2e` の fixture preparation 質問では、既存 round-trip が grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が required Number fields と 4 Views を決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
+`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、4 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
 
 同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
@@ -1023,6 +1027,23 @@ function Stop-FieldSumSnapshotCheck([string]$Message) {
 $snapshotPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'snapshot.json'
 if (!(Test-Path -LiteralPath $snapshotPath)) { Stop-FieldSumSnapshotCheck "snapshot.json was not found: $snapshotPath"; return }
 $snapshot = Get-Content -LiteralPath $snapshotPath -Raw | ConvertFrom-Json
+$expectedDefaults = @(
+    [pscustomobject]@{ Name = 'Fixture Text'; Type = 'TEXT'; Property = 'text'; Value = '既定値 🌏' },
+    [pscustomobject]@{ Name = 'Fixture Number'; Type = 'NUMBER'; Property = 'number'; Value = -7 },
+    [pscustomobject]@{ Name = 'Fixture Number 2'; Type = 'NUMBER'; Property = 'number'; Value = 0 },
+    [pscustomobject]@{ Name = 'Fixture Select'; Type = 'SINGLE_SELECT'; Property = 'singleSelectOptionName'; Value = 'Beta' }
+)
+foreach ($expected in $expectedDefaults) {
+    $matches = @($snapshot.fields | Where-Object { $_.name -eq $expected.Name -and $_.dataType -eq $expected.Type })
+    if ($matches.Count -ne 1) { Stop-FieldSumSnapshotCheck "Expected exactly one $($expected.Type) field '$($expected.Name)'."; return }
+    if ($null -eq $matches[0].defaultValue) { Stop-FieldSumSnapshotCheck "Field '$($expected.Name)' has no browser-captured defaultValue."; return }
+    $actual = $matches[0].defaultValue.($expected.Property)
+    if ($actual -ne $expected.Value) {
+        Stop-FieldSumSnapshotCheck "Field '$($expected.Name)' default mismatch: expected '$($expected.Value)', actual '$actual'."
+        return
+    }
+    Write-Output ("GHPMV_FIELD_DEFAULT:{0}:{1}" -f $expected.Name, $actual)
+}
 $expectedViews = @(
     [pscustomobject]@{ Name = 'View 1'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Count', 'Fixture Number', 'Fixture Number 2') },
     [pscustomobject]@{ Name = 'Fixture Board'; Layout = 'BOARD_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number') },
@@ -1056,10 +1077,11 @@ foreach ($expected in $expectedViews) {
     Write-Output ("GHPMV_FIELD_SUM_VIEW:{0}:{1}" -f $expected.Name, ($actualFieldSum -join ', '))
 }
 Write-Output 'GHPMV_FIELD_SUM_SNAPSHOT_MATCH'
+Write-Output 'GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-`GHPMV_FIELD_SUM_SNAPSHOT_MATCH` と command exit code 0 の両方を確認した場合だけ `browser-e2e field-sum status=snapshot-match` とし、先へ進む。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
+`GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH`、`GHPMV_FIELD_SUM_SNAPSHOT_MATCH`、command exit code 0 をすべて確認した場合だけ両 feature status を `snapshot-match` とし、先へ進む。zero は null と区別し、Single-select は source option ID でなく `singleSelectOptionName=Beta` を要求する。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
 
 `api-only` / `browser-e2e`では、target PAT入力またはtarget resource準備より前に同じterminalでsnapshot-driven capabilityを算出する。
 
@@ -1339,7 +1361,7 @@ finally {
 
 target が data residency の場合は `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`github.com-to-ghec-dr` ではこの target command にだけ両方を付ける。
 
-生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project title / number / URL を記録し、import が新規 Project を作成した場合は resource inventory に `created` として追加する。既存 Project を更新した場合は `pre-existing` として記録し cleanup 対象にしない。`browser-e2e` では View / Workflow browser warning が一つでもあれば成功扱いせず、その property と View 名を示して停止する。
+生成されなかった optional mapping file の引数だけを外す。出力の `result` と target Project title / number / URL を記録し、import が新規 Project を作成した場合は resource inventory に `created` として追加する。既存 Project を更新した場合は `pre-existing` として記録し cleanup 対象にしない。`browser-e2e` では `field-defaults: imported=4 warnings=0` を要求し、Field default / View / Workflow browser warning が一つでもあれば成功扱いせず、その field/property/View 名を示して停止する。
 
 ## Step 10: Verify
 
@@ -1417,16 +1439,44 @@ function Stop-BrowserViewCheck([string]$Message) {
 $reportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'verify-report.json'
 if (!(Test-Path -LiteralPath $reportPath)) { Stop-BrowserViewCheck "verify-report.json was not found: $reportPath"; return }
 $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+$fieldCategories = @($report.categories | Where-Object category -eq 'Field')
+$fieldDifferences = @($report.differences | Where-Object category -eq 'Field')
+if ($fieldCategories.Count -ne 1 -or $fieldCategories[0].status -ne 'Match' -or $fieldDifferences.Count -ne 0) {
+    Stop-BrowserViewCheck "Field category must be Match without differences; status=$($fieldCategories.status -join ', ') differences=$($fieldDifferences.message -join '; ')"
+    return
+}
 $viewCategories = @($report.categories | Where-Object category -eq 'View')
 if ($viewCategories.Count -ne 1) { Stop-BrowserViewCheck "Expected exactly one View category, found $($viewCategories.Count)."; return }
 if ($viewCategories[0].status -ne 'Match') { Stop-BrowserViewCheck "View category must be Match, but was $($viewCategories[0].status)."; return }
 $viewDifferences = @($report.differences | Where-Object category -eq 'View')
 if ($viewDifferences.Count -ne 0) { Stop-BrowserViewCheck "View category reported differences despite Match: $($viewDifferences.message -join '; ')"; return }
 Write-Output 'GHPMV_BROWSER_VIEW_MATCH'
+Write-Output 'GHPMV_BROWSER_FIELD_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-`GHPMV_BROWSER_VIEW_MATCH` と command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-view-match` とする。View の warning、`PartialMatch`、`NotVerified` は、overall status が許容可能でも `browser-e2e` の成功にしない。
+`GHPMV_BROWSER_FIELD_MATCH`、`GHPMV_BROWSER_VIEW_MATCH`、command exit code 0 を確認した場合だけ field-default status=`target-field-match`、field-sum status=`target-view-match` とする。Field / View の warning、`PartialMatch`、`NotVerified` は、overall status が許容可能でも `browser-e2e` の成功にしない。
+
+続けて同じ target に disposable draft を一件作成し、GitHub が4 defaultsを自動入力することを API read-back で確認する。command は成功/失敗にかかわらず draftを `finally` cleanupするため、target Project の nested resource inventory に一時 draftとして記録し、完了後 `deleted` に更新する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-default-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number>
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4` と exit code 0 を確認した場合だけ field-default status=`new-draft-observed` とする。初回 verify の `Item: Match` と合わせ、import 済み既存 item values が変化せず、新規 draftだけに defaults が入ったことを合格条件とする。
 
 ### Browser field-sum machine check
 
@@ -1461,7 +1511,27 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 
 ### Deliberate drift と repair
 
-初回の機械的な `View: Match` 後、同じ terminal で Playwright による deliberate drift command を送る。ユーザーへ手動変更を依頼しない。
+初回の機械的な `Field: Match` / `View: Match` と new-draft functional check 後、同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-field-default-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-default drift applied: ... fields=4 warnings=0` と exit code 0 を確認してから既存 Field sum drift commandへ進む。drift は Text / zero Number / Single-selectを変更し、negative Number defaultをclearする。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1504,7 +1574,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories View `
+      --categories Field,View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
@@ -1518,28 +1588,33 @@ finally {
 if ($driftNativeExitCode -eq 0) { Stop-FieldSumDriftCheck 'Deliberate field-sum drift was not detected; verify unexpectedly succeeded.'; return }
 if (!(Test-Path -LiteralPath $driftReportPath)) { Stop-FieldSumDriftCheck "Drift report was not created: $driftReportPath"; return }
 $driftReport = Get-Content -LiteralPath $driftReportPath -Raw | ConvertFrom-Json
+$driftFieldCategories = @($driftReport.categories | Where-Object category -eq 'Field')
 $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
+$fieldDefaultDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'Field' -and $_.message -match 'default value mismatch' })
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
 $nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
 $unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
-    $_.category -ne 'View' -and $_.status -notin @('Match', 'NotApplicable')
+    $_.category -notin @('Field', 'View') -and $_.status -notin @('Match', 'NotApplicable')
 })
-if ($driftViewCategories.Count -ne 1 -or
+if ($driftFieldCategories.Count -ne 1 -or
+    $driftFieldCategories[0].status -ne 'Mismatch' -or
+    $fieldDefaultDifferences.Count -ne 4 -or
+    $driftViewCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
-    $nonInfoDifferences.Count -ne 1 -or
-    $nonInfoDifferences[0].category -ne 'View' -or
-    $nonInfoDifferences[0].message -ne $fieldSumDifferences[0].message -or
+    $nonInfoDifferences.Count -ne 5 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly the expected View 1 field-sum mismatch.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches and the expected View 1 field-sum mismatch.'
     return
 }
+Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
+Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`GHPMV_FIELD_SUM_DRIFT_DETECTED` と wrapper exit code 0 を確認した場合だけ `browser-e2e field-sum status=drift-detected` とする。
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`GHPMV_FIELD_DEFAULT_DRIFT_DETECTED`、`GHPMV_FIELD_SUM_DRIFT_DETECTED`、wrapper exit code 0 を確認した場合だけ両 feature status=`drift-detected` とする。
 
 続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
 
@@ -1581,7 +1656,7 @@ try {
       --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
       --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
       --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories View `
+      --categories Field,View `
       --enable-browser-automation `
       --browser-profile target `
       --fail-on-warning `
@@ -1603,20 +1678,23 @@ function Stop-FieldSumRepairCheck([string]$Message) {
 $repairReportPath = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'field-sum-repair-report.json'
 if (!(Test-Path -LiteralPath $repairReportPath)) { Stop-FieldSumRepairCheck "Repair report was not created: $repairReportPath"; return }
 $repairReport = Get-Content -LiteralPath $repairReportPath -Raw | ConvertFrom-Json
+$repairFieldCategories = @($repairReport.categories | Where-Object category -eq 'Field')
 $repairViewCategories = @($repairReport.categories | Where-Object category -eq 'View')
-if ($repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
-    Stop-FieldSumRepairCheck "Repaired View category must be Match, actual: $($repairViewCategories.status -join ', ')."
+if ($repairFieldCategories.Count -ne 1 -or $repairFieldCategories[0].status -ne 'Match' -or
+    $repairViewCategories.Count -ne 1 -or $repairViewCategories[0].status -ne 'Match') {
+    Stop-FieldSumRepairCheck "Repaired Field and View categories must be Match; Field=$($repairFieldCategories.status -join ', ') View=$($repairViewCategories.status -join ', ')."
     return
 }
-$repairViewDifferences = @($repairReport.differences | Where-Object category -eq 'View')
-if ($repairViewDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired View still has differences: $($repairViewDifferences.message -join '; ')"; return }
+$repairDifferences = @($repairReport.differences | Where-Object category -in @('Field', 'View'))
+if ($repairDifferences.Count -ne 0) { Stop-FieldSumRepairCheck "Repaired Field/View still has differences: $($repairDifferences.message -join '; ')"; return }
+Write-Output 'GHPMV_FIELD_DEFAULT_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_SUM_REPAIR_MATCH` と command exit code 0 を確認した場合、browser-assisted verify が `View 1` の Field sum 復元と4 fixture Viewの一致を機械確認済みなので、追加の対話用質問を行わず `browser-e2e field-sum status=repair-match` とする。
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_DEFAULT_REPAIR_MATCH`、`GHPMV_FIELD_SUM_REPAIR_MATCH`、command exit code 0 を確認後、`--fixture-field-default-check` をもう一度実行する。修復後の new draftにも4 defaultsが入った場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
 
-`browser-e2e` は `target-render-observed` と `repair-match` の両方へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
+`browser-e2e` は field-defaultの`new-draft-observed` / `repair-match` と field-sumの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
 ## Troubleshooting
 
@@ -1642,7 +1720,7 @@ target が data residency の場合は repair import / verify にも初回と同
 - source / target Project URL または番号
 - export / import result
 - verify overall / category result
-- browser-e2e の field-sum snapshot / initial Match / rendered-header DOM check / drift / repair result
+- browser-e2e の field-default / field-sum snapshot、initial Field/View Match、new-draft functional check、rendered-header DOM check、drift / repair result
 - 許容した warning
 - resource inventory の各 name / URL / cleanup 状態と snapshot directory
 

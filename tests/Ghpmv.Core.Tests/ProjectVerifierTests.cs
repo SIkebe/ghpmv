@@ -41,8 +41,20 @@ public class ProjectVerifierTests
                     Option("2", "In Progress", "YELLOW"),
                     Option("3", "Done", "GREEN"),
                 ],
+                DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "In Progress" },
             },
-            new FieldSnapshot { Name = "Estimate", DataType = "NUMBER" },
+            new FieldSnapshot
+            {
+                Name = "Estimate",
+                DataType = "NUMBER",
+                DefaultValue = new FieldDefaultValueSnapshot { Number = -5 },
+            },
+            new FieldSnapshot
+            {
+                Name = "Notes",
+                DataType = "TEXT",
+                DefaultValue = new FieldDefaultValueSnapshot { Text = "既定 🚀" },
+            },
             new FieldSnapshot
             {
                 Name = "Sprint",
@@ -499,6 +511,78 @@ public class ProjectVerifierTests
 
         Assert.Contains(report.Differences, d =>
             d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains("data type mismatch", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("Estimate")]
+    [InlineData("Status")]
+    [InlineData("Notes")]
+    public void Captured_field_default_difference_is_an_error(string fieldName)
+    {
+        var target = WithFields(BuildSnapshot(), field => field.Name == fieldName
+            ? field with
+            {
+                DefaultValue = field.DataType switch
+                {
+                    "NUMBER" => new FieldDefaultValueSnapshot { Number = 0 },
+                    "SINGLE_SELECT" => new FieldDefaultValueSnapshot { SingleSelectOptionName = "Done" },
+                    _ => new FieldDefaultValueSnapshot { Text = "different" },
+                },
+            }
+            : field);
+
+        var report = ProjectVerifier.Compare(BuildSnapshot(), target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Category == VerifyCategories.Field
+            && difference.Message.Contains($"field '{fieldName}': default value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Single_select_default_is_compared_by_name_not_option_id()
+    {
+        var target = WithFields(BuildSnapshot(), field => field.Name == "Status"
+            ? field with
+            {
+                Options = field.Options!.Select(option => option with { Id = "target-" + option.Id }).ToList(),
+            }
+            : field);
+
+        var report = ProjectVerifier.Compare(BuildSnapshot(), target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == VerifyCategories.Field
+            && difference.Message.Contains("default value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Captured_cleared_default_matches_captured_cleared_target()
+    {
+        var source = WithFields(BuildSnapshot(), field => field.Name == "Estimate"
+            ? field with { DefaultValue = new FieldDefaultValueSnapshot() }
+            : field);
+        var target = WithFields(BuildSnapshot(), field => field.Name == "Estimate"
+            ? field with { DefaultValue = new FieldDefaultValueSnapshot() }
+            : field);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == VerifyCategories.Field
+            && difference.Message.Contains("default value mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Captured_source_default_with_uncaptured_target_is_not_verified()
+    {
+        var target = WithFields(BuildSnapshot(), field => field with { DefaultValue = null });
+
+        var report = ProjectVerifier.Compare(BuildSnapshot(), target);
+
+        Assert.Equal(
+            VerifyStatus.NotVerified,
+            report.Categories.Single(category => category.Category == VerifyCategories.Field).Status);
     }
 
     [Fact]

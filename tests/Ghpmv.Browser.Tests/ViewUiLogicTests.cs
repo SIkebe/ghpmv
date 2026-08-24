@@ -408,6 +408,7 @@ public class ViewUiLogicTests
             {
                 Assert.Equal(["Count", "Fixture Number"], actual.Ui.FieldSum);
             }
+
             else
             {
                 Assert.Equal(view.Ui.FieldSum, actual.Ui.FieldSum);
@@ -421,6 +422,27 @@ public class ViewUiLogicTests
                 Assert.Equal(view.Ui.Roadmap.Markers, actual.Ui.Roadmap!.Markers);
             }
         }
+    }
+
+    [Fact]
+    public void FixtureUiSnapshotFactory_creates_typed_defaults_and_all_type_drift()
+    {
+        var expected = FixtureUiSnapshotFactory.Create("fixture-repo");
+        var drifted = FixtureUiSnapshotFactory.CreateFieldDefaultDrift("fixture-repo");
+
+        Assert.Equal("既定値 🌏", expected.Fields.Single(field => field.Name == "Fixture Text").DefaultValue!.Text);
+        Assert.Equal(-7, expected.Fields.Single(field => field.Name == "Fixture Number").DefaultValue!.Number);
+        Assert.Equal(0, expected.Fields.Single(field => field.Name == "Fixture Number 2").DefaultValue!.Number);
+        Assert.Equal(
+            "Beta",
+            expected.Fields.Single(field => field.Name == "Fixture Select").DefaultValue!.SingleSelectOptionName);
+
+        Assert.Equal("drifted text", drifted.Fields.Single(field => field.Name == "Fixture Text").DefaultValue!.Text);
+        Assert.Null(drifted.Fields.Single(field => field.Name == "Fixture Number").DefaultValue!.Number);
+        Assert.Equal(99, drifted.Fields.Single(field => field.Name == "Fixture Number 2").DefaultValue!.Number);
+        Assert.Equal(
+            "Gamma",
+            drifted.Fields.Single(field => field.Name == "Fixture Select").DefaultValue!.SingleSelectOptionName);
     }
 
     [Fact]

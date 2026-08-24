@@ -36,6 +36,19 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | name / number / enabled | GraphQL `ProjectV2Workflow` | **UI**(enable は保存操作に内包) |
 | トリガー条件・対象(issue/PR)・Set する Status 値・フィルター・対象リポジトリ | ❌ API に無い → **UI で読む** | **UI** |
 
+### Field default のソースマップ
+
+| プロパティ | export(読み) | import(書き) | 備考 |
+|---|---|---|---|
+| Text default | **UI** | **UI** | Unicode と明示 clear を保持 |
+| Number default | **UI** | **UI** | zero / negative を invariant number として保持 |
+| Single-select default | **UI** | **UI** | source option ID は保存せず option name で target option を選択 |
+| Date default | 対象外 | 対象外 | GitHub が default を提供しない |
+
+`FieldSnapshot.defaultValue = null` は API-only snapshot の「未取得」であり target を変更しない。
+present object の typed member が null の場合は「取得済み・default なし」として target を clear する。
+import は source item の作成・値適用後に defaults を設定し、既存 item へ GitHub の自動値を混入させない。
+
 ### Insights chart の discovery source map (#48)
 
 2026-08-16 の再調査でも REST / GraphQL に chart / insight API は無い。実 UI の確定事項と未解消 blocker は
@@ -49,7 +62,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | Y-axis aggregation / Number field | **UI** | **UI** | Count 以外は Number field 必須 |
 | historical data points | 対象外 | 対象外 | target item history から生成。設定だけを移行・verify |
 
-つまり完全移行には **export/import の両側で Playwright が必要**(group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細、Insights chart 設定)。API-only import でも View の基本構成は作成される。
+つまり完全移行には **export/import の両側で Playwright が必要**(field defaults、group/sort、Slice by、Field sum、Roadmap 設定、Workflow 詳細、Insights chart 設定)。API-only import でも field/options と View の基本構成は作成されるが、captured defaults は target 上で保持されるだけで適用されない。
 
 ---
 
@@ -325,6 +338,7 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
   4. "Fixture Empty Sums" — grouped Table, Field sum=[]
 - Workflows: W-1〜W-8 を非デフォルト Status 値で有効化、W-9 を 2 本(別リポ + 別フィルター)。1 つは disabled のまま設定を持たせる(§4.3 の D0 論点の検証用)
 - Items: issue 10 / PR 3 / draft 3(archived 2 を含む)
+- Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 
 ## 8. 既知のリスクと v1 スコープ外
 

@@ -49,16 +49,74 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
+    /// <summary>
+    /// Creates deliberate target drift for every supported field-default type. The negative
+    /// Number default is cleared so the same operation also exercises explicit removal.
+    /// </summary>
+    public static ProjectSnapshot CreateFieldDefaultDrift(string repositoryName = "fixture-repo")
+    {
+        var snapshot = Create(repositoryName);
+        return snapshot with
+        {
+            Fields = snapshot.Fields.Select(field => field.Name switch
+            {
+                "Fixture Text" => field with
+                {
+                    DefaultValue = new FieldDefaultValueSnapshot { Text = "drifted text" },
+                },
+                "Fixture Number" => field with
+                {
+                    DefaultValue = new FieldDefaultValueSnapshot(),
+                },
+                "Fixture Number 2" => field with
+                {
+                    DefaultValue = new FieldDefaultValueSnapshot { Number = 99 },
+                },
+                "Fixture Select" => field with
+                {
+                    DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Gamma" },
+                },
+                _ => field,
+            }).ToList(),
+        };
+    }
+
     private static IReadOnlyList<FieldSnapshot> CreateFields() =>
     [
         new FieldSnapshot { Name = "Title", DataType = "TITLE" },
         new FieldSnapshot { Name = "Assignees", DataType = "ASSIGNEES" },
         new FieldSnapshot { Name = "Status", DataType = "SINGLE_SELECT" },
-        new FieldSnapshot { Name = "Fixture Text", DataType = "TEXT" },
-        new FieldSnapshot { Name = "Fixture Number", DataType = "NUMBER" },
-        new FieldSnapshot { Name = "Fixture Number 2", DataType = "NUMBER" },
+        new FieldSnapshot
+        {
+            Name = "Fixture Text",
+            DataType = "TEXT",
+            DefaultValue = new FieldDefaultValueSnapshot { Text = "既定値 🌏" },
+        },
+        new FieldSnapshot
+        {
+            Name = "Fixture Number",
+            DataType = "NUMBER",
+            DefaultValue = new FieldDefaultValueSnapshot { Number = -7 },
+        },
+        new FieldSnapshot
+        {
+            Name = "Fixture Number 2",
+            DataType = "NUMBER",
+            DefaultValue = new FieldDefaultValueSnapshot { Number = 0 },
+        },
         new FieldSnapshot { Name = "Fixture Date", DataType = "DATE" },
-        new FieldSnapshot { Name = "Fixture Select", DataType = "SINGLE_SELECT" },
+        new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED", Description = "First" },
+                new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE", Description = "Second" },
+                new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN", Description = "Third" },
+            ],
+            DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Beta" },
+        },
         new FieldSnapshot { Name = "Fixture Sprint", DataType = "ITERATION" },
         new FieldSnapshot
         {

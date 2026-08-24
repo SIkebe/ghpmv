@@ -258,7 +258,7 @@ public sealed class ProjectVerifier
         }
         if (Includes(includedCategories, VerifyCategories.Field))
         {
-            CompareFields(source.Fields, target.Fields, differences);
+            CompareFields(source.Fields, target.Fields, differences, notVerified);
         }
         if (Includes(includedCategories, VerifyCategories.View))
         {
@@ -563,7 +563,11 @@ public sealed class ProjectVerifier
 
     // ----- fields -----
 
-    private static void CompareFields(IReadOnlyList<FieldSnapshot> source, IReadOnlyList<FieldSnapshot> target, List<VerifyDifference> differences)
+    private static void CompareFields(
+        IReadOnlyList<FieldSnapshot> source,
+        IReadOnlyList<FieldSnapshot> target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
     {
         var unmatchedTarget = target.ToList();
 
@@ -595,6 +599,7 @@ public sealed class ProjectVerifier
             CompareOptions(field, other, differences);
             CompareIterations(field, other, differences);
             CompareIssueFieldConfiguration(field, other, differences);
+            CompareDefaultValue(field, other, differences, notVerified);
         }
 
         foreach (var extra in unmatchedTarget)
@@ -710,6 +715,58 @@ public sealed class ProjectVerifier
                 $"field '{source.Name}': Issue Field visibility mismatch (source {source.IssueField.Visibility}, target {target.IssueField.Visibility})");
         }
     }
+
+    private static void CompareDefaultValue(
+        FieldSnapshot source,
+        FieldSnapshot target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source.DefaultValue is null)
+        {
+            return;
+        }
+
+        if (target.DefaultValue is null)
+        {
+            notVerified.Add(FieldCategory);
+            return;
+        }
+
+        var matches = source.DataType switch
+        {
+            "TEXT" => string.Equals(
+                source.DefaultValue.Text,
+                target.DefaultValue.Text,
+                StringComparison.Ordinal),
+            "NUMBER" => source.DefaultValue.Number == target.DefaultValue.Number,
+            "SINGLE_SELECT" => string.Equals(
+                source.DefaultValue.SingleSelectOptionName,
+                target.DefaultValue.SingleSelectOptionName,
+                StringComparison.Ordinal),
+            _ => false,
+        };
+        if (!matches)
+        {
+            AddError(
+                differences,
+                FieldCategory,
+                $"field '{source.Name}': default value mismatch (source {DisplayDefault(source)}, target {DisplayDefault(target)})");
+        }
+    }
+
+    private static string DisplayDefault(FieldSnapshot field)
+        => field.DataType switch
+        {
+            "TEXT" => field.DefaultValue?.Text is { } text ? $"'{text}'" : "<cleared>",
+            "NUMBER" => field.DefaultValue?.Number is { } number
+                ? number.ToString("R", CultureInfo.InvariantCulture)
+                : "<cleared>",
+            "SINGLE_SELECT" => field.DefaultValue?.SingleSelectOptionName is { } option
+                ? $"'{option}'"
+                : "<cleared>",
+            _ => "<unsupported>",
+        };
 
     private static Dictionary<string, IterationSnapshot> MergeIterations(IterationConfigurationSnapshot? configuration)
     {

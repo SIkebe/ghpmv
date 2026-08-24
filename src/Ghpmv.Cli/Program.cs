@@ -125,6 +125,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
         ViewUiExporter? uiExporter = null;
         WorkflowUiExporter? workflowExporter = null;
         CollaboratorUiExporter? collaboratorExporter = null;
+        FieldDefaultUiExporter? fieldDefaultExporter = null;
         if (enableBrowserAutomation)
         {
             session = new BrowserSession(new BrowserSessionOptions
@@ -137,18 +138,23 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             uiExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
             workflowExporter = new WorkflowUiExporter(session) { OnProgress = Console.Error.WriteLine };
             collaboratorExporter = new CollaboratorUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            fieldDefaultExporter = new FieldDefaultUiExporter(session) { OnProgress = Console.Error.WriteLine };
         }
 
         // Installs the browser enrichment hook for one project number.
         void SetBrowserHook(int number)
         {
-            if (uiExporter is null || workflowExporter is null || collaboratorExporter is null)
+            if (uiExporter is null
+                || workflowExporter is null
+                || collaboratorExporter is null
+                || fieldDefaultExporter is null)
             {
                 return;
             }
 
             exporter.PostExportAsync = async (snapshot, ct) =>
             {
+                snapshot = await fieldDefaultExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
                 snapshot = await uiExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
                 snapshot = await workflowExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
                 return await collaboratorExporter.EnrichAsync(snapshot, org, ownerType, number, ct);
@@ -188,7 +194,8 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
             }
         }
 
-        foreach (var warning in (uiExporter?.Warnings ?? [])
+        foreach (var warning in (fieldDefaultExporter?.Warnings ?? [])
+            .Concat(uiExporter?.Warnings ?? [])
             .Concat(workflowExporter?.Warnings ?? [])
             .Concat(collaboratorExporter?.Warnings ?? []))
         {
@@ -541,6 +548,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             OrganizationMapping = organizationMapping,
             TeamMapping = teamMapping,
             BrowserViewEnrichmentPlanned = enableBrowserAutomation,
+            BrowserFieldDefaultEnrichmentPlanned = enableBrowserAutomation,
             OnProgress = Console.Error.WriteLine,
             BeforeWriteAsync = ValidateImportBeforeWriteAsync,
             OperationLogDirectory = inDirectory,
@@ -616,11 +624,36 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var viewWarnings = result.ViewWarningCount;
+        var fieldDefaultWarnings = 0;
+        var fieldDefaultsImported = 0;
         var workflowWarnings = 0;
         var workflowsImported = 0;
         if (enableBrowserAutomation)
         {
             System.Diagnostics.Debug.Assert(session is not null);
+            var fieldDefaultImporter = new FieldDefaultUiImporter(session)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await fieldDefaultImporter.ImportAsync(
+                snapshot,
+                org,
+                ownerType,
+                result.ProjectNumber,
+                cancellationToken);
+            foreach (var warning in fieldDefaultImporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            fieldDefaultWarnings = fieldDefaultImporter.Warnings.Count;
+            fieldDefaultsImported = fieldDefaultImporter.AppliedCount;
+            await PersistUnresolvedWarningsAsync(
+                importer.Warnings.Count + fieldDefaultWarnings,
+                itemResult.Warnings.Count,
+                viewWarnings,
+                workflowWarningCount: 0);
+
             var viewImporter = new ViewUiImporter(session)
             {
                 OnProgress = Console.Error.WriteLine,
@@ -639,7 +672,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
             viewWarnings += viewImporter.Warnings.Count;
             await PersistUnresolvedWarningsAsync(
-                importer.Warnings.Count,
+                importer.Warnings.Count + fieldDefaultWarnings,
                 itemResult.Warnings.Count,
                 viewWarnings,
                 workflowWarningCount: 0);
@@ -660,7 +693,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             workflowWarnings = workflowImporter.Warnings.Count;
             workflowsImported = workflowImporter.ImportedCount;
             await PersistUnresolvedWarningsAsync(
-                importer.Warnings.Count,
+                importer.Warnings.Count + fieldDefaultWarnings,
                 itemResult.Warnings.Count,
                 viewWarnings,
                 workflowWarnings);
@@ -684,7 +717,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var previousWarningState = completedProjectLog.HasUnresolvedWarnings;
         var importMarkedComplete = completedProjectLog.TryMarkImportCompleted(
                 enableBrowserAutomation,
-                importer.Warnings.Count,
+                importer.Warnings.Count + fieldDefaultWarnings,
                 itemResult.Warnings.Count,
                 viewWarnings,
                 workflowWarnings);
@@ -705,6 +738,8 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
         if (enableBrowserAutomation)
         {
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"field-defaults: imported={fieldDefaultsImported} warnings={fieldDefaultWarnings}"));
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }
@@ -862,6 +897,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     try
     {
         var browserCategoriesRequested = includedCategories is null
+            || includedCategories.Contains(VerifyCategories.Field)
             || includedCategories.Contains(VerifyCategories.View)
             || includedCategories.Contains(VerifyCategories.Workflow)
             || includedCategories.Contains(VerifyCategories.Collaborator);
@@ -907,8 +943,13 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         ViewUiExporter? viewExporter = null;
         WorkflowUiExporter? workflowExporter = null;
         CollaboratorUiExporter? collaboratorExporter = null;
+        FieldDefaultUiExporter? fieldDefaultExporter = null;
         if (session is not null)
         {
+            if (includedCategories is null || includedCategories.Contains(VerifyCategories.Field))
+            {
+                fieldDefaultExporter = new FieldDefaultUiExporter(session) { OnProgress = Console.Error.WriteLine };
+            }
             if (includedCategories is null || includedCategories.Contains(VerifyCategories.View))
             {
                 viewExporter = new ViewUiExporter(session) { OnProgress = Console.Error.WriteLine };
@@ -923,6 +964,15 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
             }
             verifier.PostExportAsync = async (target, ct) =>
             {
+                if (fieldDefaultExporter is not null)
+                {
+                    target = await fieldDefaultExporter.EnrichAsync(
+                        target,
+                        org,
+                        ownerType,
+                        projectNumber,
+                        ct);
+                }
                 if (viewExporter is not null)
                 {
                     target = await viewExporter.EnrichAsync(target, org, ownerType, projectNumber, ct);
@@ -941,14 +991,19 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
         var report = await verifier.VerifyAsync(snapshot, org, projectNumber, cancellationToken);
+        var fieldDefaultWarnings = fieldDefaultExporter?.Warnings ?? [];
         var viewWarnings = viewExporter?.Warnings ?? [];
         var workflowWarnings = workflowExporter?.Warnings ?? [];
         var collaboratorWarnings = collaboratorExporter?.Warnings ?? [];
         report = report
+            .WithWarnings(VerifyCategories.Field, fieldDefaultWarnings)
             .WithWarnings("View", viewWarnings)
             .WithWarnings("Workflow", workflowWarnings)
             .WithWarnings("Collaborator", collaboratorWarnings);
-        foreach (var warning in viewWarnings.Concat(workflowWarnings).Concat(collaboratorWarnings))
+        foreach (var warning in fieldDefaultWarnings
+            .Concat(viewWarnings)
+            .Concat(workflowWarnings)
+            .Concat(collaboratorWarnings))
         {
             Console.Error.WriteLine($"warning: {warning}");
         }
@@ -1060,6 +1115,14 @@ var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-ren
 {
     Description = "Verify visible grouped-header Field sum rendering on an existing standard fixture Project.",
 };
+var fixtureFieldDefaultCheckOption = new Option<bool>("--fixture-field-default-check")
+{
+    Description = "Create a disposable draft and verify that the standard fixture field defaults are applied.",
+};
+var fixtureFieldDefaultDriftOption = new Option<bool>("--fixture-field-default-drift")
+{
+    Description = "Apply deliberate Text, Number, and Single-select default drift to an existing fixture Project.",
+};
 var fixtureOption = new Option<bool>("--fixture")
 {
     Description = "Create the standard API-backed test fixture repository/project.",
@@ -1108,6 +1171,8 @@ setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
 setupCommand.Options.Add(fixtureFieldSumDriftOption);
 setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
+setupCommand.Options.Add(fixtureFieldDefaultCheckOption);
+setupCommand.Options.Add(fixtureFieldDefaultDriftOption);
 setupCommand.Options.Add(fixtureOrgOption);
 setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
@@ -1140,22 +1205,32 @@ setupCommand.Validators.Add(result =>
 
     if (!result.GetValue(fixtureUiOption)
         && !result.GetValue(fixtureFieldSumDriftOption)
-        && !result.GetValue(fixtureFieldSumRenderCheckOption))
+        && !result.GetValue(fixtureFieldSumRenderCheckOption)
+        && !result.GetValue(fixtureFieldDefaultCheckOption)
+        && !result.GetValue(fixtureFieldDefaultDriftOption))
     {
         return;
     }
 
     if ((result.GetValue(fixtureFieldSumDriftOption)
-            || result.GetValue(fixtureFieldSumRenderCheckOption))
+            || result.GetValue(fixtureFieldSumRenderCheckOption)
+            || result.GetValue(fixtureFieldDefaultCheckOption)
+            || result.GetValue(fixtureFieldDefaultDriftOption))
         && (result.GetValue(fixtureOption) || result.GetValue(fixtureUiOption)))
     {
-        result.AddError("Field-sum drift/render checks cannot be combined with --fixture or --fixture-ui.");
+        result.AddError("Fixture checks and drift operations cannot be combined with --fixture or --fixture-ui.");
     }
 
-    if (result.GetValue(fixtureFieldSumDriftOption)
-        && result.GetValue(fixtureFieldSumRenderCheckOption))
+    var fixtureBrowserOperationCount = new[]
     {
-        result.AddError("--fixture-field-sum-drift and --fixture-field-sum-render-check cannot be combined.");
+        result.GetValue(fixtureFieldSumDriftOption),
+        result.GetValue(fixtureFieldSumRenderCheckOption),
+        result.GetValue(fixtureFieldDefaultCheckOption),
+        result.GetValue(fixtureFieldDefaultDriftOption),
+    }.Count(enabled => enabled);
+    if (fixtureBrowserOperationCount > 1)
+    {
+        result.AddError("Only one fixture check or drift operation can run at a time.");
     }
 
     if (result.GetResult(baseUrlOption) is { Implicit: false }
@@ -1181,9 +1256,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureOption)
         && !parseResult.GetValue(fixtureUiOption)
         && !parseResult.GetValue(fixtureFieldSumDriftOption)
-        && !parseResult.GetValue(fixtureFieldSumRenderCheckOption))
+        && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
+        && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
+        && !parseResult.GetValue(fixtureFieldDefaultDriftOption))
     {
-        Console.Error.WriteLine("Nothing to install or check. Use --browsers, --fixture, --fixture-ui, --fixture-field-sum-drift, or --fixture-field-sum-render-check.");
+        Console.Error.WriteLine("Nothing to install or check. Use --browsers, --fixture, --fixture-ui, or a fixture check/drift option.");
         return 1;
     }
 
@@ -1287,6 +1364,103 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             Console.Error.WriteLine(
                 $"Fixture field-sum rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
             return 0;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    if (parseResult.GetValue(fixtureFieldDefaultCheckOption))
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var observer = new FieldDefaultFixtureObserver(client)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await observer.ValidateStandardFixtureAsync(org, projectNumber, cancellationToken);
+            Console.Error.WriteLine(
+                $"Fixture field defaults functionally verified: project=#{projectNumber} fields=4");
+            return 0;
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
+    if (parseResult.GetValue(fixtureFieldDefaultDriftOption))
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                ? parseResult.GetValue(baseUrlOption)
+                : null;
+            await using var browserSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+
+            var importer = new FieldDefaultUiImporter(browserSession)
+            {
+                OnProgress = Console.Error.WriteLine,
+            };
+            await importer.ImportAsync(
+                FixtureUiSnapshotFactory.CreateFieldDefaultDrift(
+                    parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo"),
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                cancellationToken);
+            foreach (var warning in importer.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            Console.Error.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Fixture field-default drift applied: project=#{projectNumber} fields={importer.AppliedCount} warnings={importer.Warnings.Count}"));
+            return importer.Warnings.Count == 0 ? 0 : 1;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
         {
@@ -1586,6 +1760,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             OperationLogDirectory = fixtureViewOperationDirectory,
             BrowserViewEnrichmentPlanned = true,
+            BrowserFieldDefaultEnrichmentPlanned = true,
             OnProgress = Console.Error.WriteLine,
         };
         var viewNumbers = await apiViewImporter.ImportViewsIntoAsync(
@@ -1594,6 +1769,18 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             projectNumber.Value,
             cancellationToken);
         var viewImporter = new ViewUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
+        var fieldDefaultImporter = new FieldDefaultUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
+        await fieldDefaultImporter.ImportAsync(
+            snapshot,
+            org,
+            ProjectOwnerType.Organization,
+            projectNumber.Value,
+            cancellationToken);
+        foreach (var warning in fieldDefaultImporter.Warnings)
+        {
+            Console.Error.WriteLine($"warning: {warning}");
+        }
+
         await viewImporter.EnrichAsync(
             snapshot,
             org,
@@ -1614,8 +1801,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"Fixture UI applied: views={viewNumbers.Count} workflows={workflowImporter.ImportedCount} viewWarnings={apiViewImporter.Warnings.Count + viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
+            $"Fixture UI applied: fieldDefaults={fieldDefaultImporter.AppliedCount} views={viewNumbers.Count} workflows={workflowImporter.ImportedCount} fieldDefaultWarnings={fieldDefaultImporter.Warnings.Count} viewWarnings={apiViewImporter.Warnings.Count + viewImporter.Warnings.Count} workflowWarnings={workflowImporter.Warnings.Count}"));
         var uiSetupSucceeded = apiViewImporter.Warnings.Count == 0
+            && fieldDefaultImporter.Warnings.Count == 0
             && viewImporter.Warnings.Count == 0
             && workflowImporter.Warnings.Count == 0;
         if (uiSetupSucceeded)

@@ -127,8 +127,9 @@ public sealed record ProjectInfoSnapshot
 /// <summary>
 /// A project field (built-in or custom). <see cref="Options"/> is set for
 /// SINGLE_SELECT and MULTI_SELECT fields, <see cref="IterationConfiguration"/> for
-/// ITERATION fields, and <see cref="IssueField"/> when an organization Issue Field
-/// is linked into the project.
+/// ITERATION fields, <see cref="IssueField"/> when an organization Issue Field
+/// is linked into the project, and <see cref="DefaultValue"/> when browser automation
+/// captured the field's default.
 /// </summary>
 public sealed record FieldSnapshot
 {
@@ -142,6 +143,23 @@ public sealed record FieldSnapshot
     public IterationConfigurationSnapshot? IterationConfiguration { get; init; }
 
     public IssueFieldConfigurationSnapshot? IssueField { get; init; }
+
+    /// <summary>
+    /// Browser-captured default for TEXT, NUMBER, or SINGLE_SELECT fields. Null means
+    /// the default was not captured; a present object with a null typed member means
+    /// the source field was captured with no configured default.
+    /// </summary>
+    public FieldDefaultValueSnapshot? DefaultValue { get; init; }
+}
+
+public sealed record FieldDefaultValueSnapshot
+{
+    public string? Text { get; init; }
+
+    public double? Number { get; init; }
+
+    /// <summary>Single-select defaults are persisted by option name, never by node ID.</summary>
+    public string? SingleSelectOptionName { get; init; }
 }
 
 public sealed record SingleSelectOptionSnapshot
