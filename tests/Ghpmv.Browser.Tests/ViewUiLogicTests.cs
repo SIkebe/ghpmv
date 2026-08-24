@@ -58,6 +58,23 @@ public class ViewUiLogicTests
         => Assert.Equal(expected, ViewUiImporter.HasSortDirection(menuText, directionName));
 
     [Theory]
+    [InlineData("Sort by: Fixture Number, ascending", "Fixture Number", "ASC", true)]
+    [InlineData("Sort by:\nFixture Number\nDescending", "Fixture Number", "DESC", true)]
+    [InlineData("Sort by: Fixture Number 2, ascending", "Fixture Number", "ASC", false)]
+    [InlineData("Sort by: Fixture Number, descending", "Fixture Number", "ASC", false)]
+    [InlineData("Sort by: none", "Fixture Number", "ASC", false)]
+    public void SortMenuMatches_requires_the_exact_field_and_direction(
+        string menuText,
+        string field,
+        string direction,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            ViewUiImporter.SortMenuMatches(
+                menuText,
+                new SortByFieldSnapshot { Field = field, Direction = direction }));
+
+    [Theory]
     [InlineData("  Fixture   Sprint\nend ", "Fixture Sprint end")]
     [InlineData("   ", null)]
     public void NormalizeUiText_collapses_whitespace(string text, string? expected)

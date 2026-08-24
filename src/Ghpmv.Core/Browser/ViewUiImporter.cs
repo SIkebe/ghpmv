@@ -531,12 +531,16 @@ public sealed class ViewUiImporter
 
         if (view.SortByFields.Count > 0)
         {
-            await TryEnsureSortFieldVisibleAsync(
-                page,
-                view.SortByFields[0].Field,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
-            await TrySetSortAsync(page, view.SortByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            var sort = view.SortByFields[0];
+            if (!await IsSortAlreadyAppliedAsync(page, sort, cancellationToken).ConfigureAwait(false))
+            {
+                await TryEnsureSortFieldVisibleAsync(
+                    page,
+                    sort.Field,
+                    view.Name,
+                    cancellationToken).ConfigureAwait(false);
+                await TrySetSortAsync(page, sort, view.Name, cancellationToken).ConfigureAwait(false);
+            }
         }
         else
         {
@@ -961,6 +965,40 @@ public sealed class ViewUiImporter
 
     internal static bool HasSortDirection(string? menuText, string directionName)
         => menuText?.Contains(directionName, StringComparison.OrdinalIgnoreCase) == true;
+
+    internal static bool SortMenuMatches(string? menuText, SortByFieldSnapshot sort)
+    {
+        ArgumentNullException.ThrowIfNull(sort);
+        var value = ViewUiExporter.ParseMenuValue(menuText);
+        var directionName = string.Equals(sort.Direction, "DESC", StringComparison.Ordinal)
+            ? "Descending"
+            : "Ascending";
+        var fieldValue = value?
+            .Replace("Ascending", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("Descending", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Trim(' ', ',', '\r', '\n');
+        return value is not null
+            && string.Equals(fieldValue, sort.Field, StringComparison.Ordinal)
+            && HasSortDirection(menuText, directionName);
+    }
+
+    private static async Task<bool> IsSortAlreadyAppliedAsync(
+        IPage page,
+        SortByFieldSnapshot sort,
+        CancellationToken cancellationToken)
+    {
+        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var item = Sel.ConfigurationMenuItem(menu, "Sort by");
+            return await item.CountAsync().ConfigureAwait(false) > 0
+                && SortMenuMatches(await item.First.InnerTextAsync().ConfigureAwait(false), sort);
+        }
+        finally
+        {
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     private async Task TryEnsureSortFieldVisibleAsync(
         IPage page,
