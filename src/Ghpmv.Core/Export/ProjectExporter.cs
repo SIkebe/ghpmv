@@ -47,8 +47,8 @@ public sealed class ProjectExporter
     public Action<string>? OnProgress { get; set; }
 
     /// <summary>
-    /// Optional follow-up API sections to export after project metadata, Views, Workflows,
-    /// and linked repositories. Full exports include every section by default.
+    /// Snapshot sections to export in addition to project metadata, Workflows, and linked
+    /// repositories from the metadata query. Full exports include every section by default.
     /// </summary>
     public ProjectExportSections Sections { get; init; } = ProjectExportSections.All;
 

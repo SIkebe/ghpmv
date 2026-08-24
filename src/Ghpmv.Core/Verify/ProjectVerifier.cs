@@ -106,9 +106,12 @@ public sealed class ProjectVerifier
             Sections = RequiredExportSections(IncludedCategories),
         };
         var target = await exporter.ExportAsync(targetOrgLogin, targetProjectNumber, cancellationToken).ConfigureAwait(false);
-        var effectiveTeamMapping = OwnerType == ProjectOwnerType.User
-            ? ReadOnlyDictionary<string, string>.Empty
-            : BuildEffectiveTeamMapping(source.LinkedTeams, TeamMapping, targetOrgLogin);
+        var needsTeamMapping = OwnerType == ProjectOwnerType.Organization
+            && (Includes(IncludedCategories, VerifyCategories.TeamLink)
+                || Includes(IncludedCategories, VerifyCategories.Collaborator));
+        var effectiveTeamMapping = needsTeamMapping
+            ? BuildEffectiveTeamMapping(source.LinkedTeams, TeamMapping, targetOrgLogin)
+            : ReadOnlyDictionary<string, string>.Empty;
         return CompareCore(
             source,
             target,
@@ -206,23 +209,43 @@ public sealed class ProjectVerifier
         ArgumentNullException.ThrowIfNull(organizationMapping);
         ArgumentNullException.ThrowIfNull(teamMapping);
 
-        source = ProjectFilterTransformer.TransformSnapshot(
-            source,
-            userMapping,
-            repositoryMapping,
-            organizationMapping);
-
-        if (repositoryMapping.Count > 0)
+        var verifyViews = Includes(includedCategories, VerifyCategories.View);
+        var verifyWorkflows = Includes(includedCategories, VerifyCategories.Workflow);
+        if (verifyViews || verifyWorkflows)
         {
-            source = ApplyRepositoryMapping(source, repositoryMapping);
+            var scopedSource = source with
+            {
+                Views = verifyViews ? source.Views : [],
+                Workflows = verifyWorkflows ? source.Workflows : [],
+            };
+            var transformedSource = ProjectFilterTransformer.TransformSnapshot(
+                scopedSource,
+                userMapping,
+                repositoryMapping,
+                organizationMapping);
+            source = source with
+            {
+                Views = verifyViews ? transformedSource.Views : source.Views,
+                Workflows = verifyWorkflows ? transformedSource.Workflows : source.Workflows,
+            };
         }
 
-        if (userMapping.Count > 0)
+        if (repositoryMapping.Count > 0
+            && (Includes(includedCategories, VerifyCategories.Item)
+                || Includes(includedCategories, VerifyCategories.LinkedRepository)
+                || verifyWorkflows))
+        {
+            source = ApplyRepositoryMapping(source, repositoryMapping, includedCategories);
+        }
+
+        if (userMapping.Count > 0 && Includes(includedCategories, VerifyCategories.Collaborator))
         {
             source = ApplyUserMapping(source, userMapping);
         }
 
-        if (teamMapping.Count > 0)
+        if (teamMapping.Count > 0
+            && (Includes(includedCategories, VerifyCategories.TeamLink)
+                || Includes(includedCategories, VerifyCategories.Collaborator)))
         {
             source = ApplyTeamMapping(source, teamMapping);
         }
@@ -370,33 +393,43 @@ public sealed class ProjectVerifier
         {
             sections |= ProjectExportSections.Views;
         }
-        if (Includes(includedCategories, VerifyCategories.TeamLink))
+        if (Includes(includedCategories, VerifyCategories.TeamLink)
+            || Includes(includedCategories, VerifyCategories.Collaborator))
         {
             sections |= ProjectExportSections.LinkedTeams;
         }
         return sections;
     }
 
-    private static ProjectSnapshot ApplyRepositoryMapping(ProjectSnapshot source, IReadOnlyDictionary<string, string> repositoryMapping)
+    private static ProjectSnapshot ApplyRepositoryMapping(
+        ProjectSnapshot source,
+        IReadOnlyDictionary<string, string> repositoryMapping,
+        IReadOnlySet<string>? includedCategories)
     {
         return source with
         {
-            Items = source.Items.Select(item => item.Repository is { Length: > 0 } repository
-                    && repositoryMapping.TryGetValue(repository, out var mappedRepository)
-                ? item with { Repository = mappedRepository }
-                : item).ToList(),
-            LinkedRepositories = source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
-                ? mappedRepository
-                : repository).ToList(),
-            Workflows = source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
-                ? workflow with
-                {
-                    Ui = workflow.Ui with
+            Items = Includes(includedCategories, VerifyCategories.Item)
+                ? source.Items.Select(item => item.Repository is { Length: > 0 } repository
+                        && repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                    ? item with { Repository = mappedRepository }
+                    : item).ToList()
+                : source.Items,
+            LinkedRepositories = Includes(includedCategories, VerifyCategories.LinkedRepository)
+                ? source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                    ? mappedRepository
+                    : repository).ToList()
+                : source.LinkedRepositories,
+            Workflows = Includes(includedCategories, VerifyCategories.Workflow)
+                ? source.Workflows.Select(workflow => workflow.Ui?.Repository is { Length: > 0 } repository
+                    ? workflow with
                     {
-                        Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
-                    },
-                }
-                : workflow).ToList(),
+                        Ui = workflow.Ui with
+                        {
+                            Repository = ResolveRepositoryForVerification(repository, repositoryMapping),
+                        },
+                    }
+                    : workflow).ToList()
+                : source.Workflows,
         };
     }
 
