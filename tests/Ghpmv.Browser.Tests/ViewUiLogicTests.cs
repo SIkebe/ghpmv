@@ -306,6 +306,23 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Rendered_roadmap_observation_rejects_dates_when_the_view_hides_them()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(
+            candidate => candidate.Name == "Fixture Roadmap Dates Hidden");
+
+        FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(
+            view,
+            titleTruncated: true,
+            datesRendered: false);
+        Assert.Throws<InvalidOperationException>(
+            () => FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(
+                view,
+                titleTruncated: true,
+                datesRendered: true));
+    }
+
+    [Fact]
     public void Persistence_check_accepts_saved_grouping_slice_and_unordered_field_sums()
     {
         var view = View("Table", "TABLE_LAYOUT", groupBy: ["Status"]) with
@@ -449,14 +466,17 @@ public class ViewUiLogicTests
         var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
 
         Assert.Equal(
-            ["View 1", "Fixture Board", "Fixture Roadmap", "Fixture Empty Sums"],
+            ["View 1", "Fixture Board", "Fixture Roadmap", "Fixture Empty Sums", "Fixture Roadmap Dates Hidden"],
             snapshot.Views.Select(v => v.Name));
         Assert.Equal(
-            ["Fixture Roadmap", "View 1", "Fixture Board", "Fixture Empty Sums"],
+            ["Fixture Roadmap", "View 1", "Fixture Board", "Fixture Empty Sums", "Fixture Roadmap Dates Hidden"],
             snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
         var roadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
         Assert.True(roadmap.TruncateTitles);
         Assert.True(roadmap.ShowDateFields);
+        var datesHidden = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap Dates Hidden").Ui!.Roadmap!;
+        Assert.True(datesHidden.TruncateTitles);
+        Assert.False(datesHidden.ShowDateFields);
         Assert.Equal(
             ["Count", "Fixture Number", "Fixture Number 2"],
             snapshot.Views.Single(view => view.Name == "View 1").Ui!.FieldSum);

@@ -61,11 +61,12 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
   - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
+  - 5=Fixture Roadmap Dates Hidden (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Truncate titles=on, Show date fields=off
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)

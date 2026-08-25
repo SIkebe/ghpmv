@@ -317,6 +317,9 @@ public class BrowserRoundTripTests
                 Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
                     && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
+                Assert.DoesNotContain(driftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("Fixture Roadmap Dates Hidden", StringComparison.Ordinal));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -425,6 +428,9 @@ public class BrowserRoundTripTests
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
         Assert.True(sourceRoadmap.Ui.Roadmap?.TruncateTitles);
         Assert.True(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
+        var sourceDatesHidden = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap Dates Hidden");
+        Assert.True(sourceDatesHidden.Ui!.Roadmap?.TruncateTitles);
+        Assert.False(sourceDatesHidden.Ui.Roadmap?.ShowDateFields);
 
         var sourceEmptySums = Assert.Single(source.Views, view => view.Name == "Fixture Empty Sums");
         Assert.Equal(["Status"], sourceEmptySums.GroupByFields);

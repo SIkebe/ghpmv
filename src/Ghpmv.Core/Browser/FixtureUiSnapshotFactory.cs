@@ -229,6 +229,31 @@ public static class FixtureUiSnapshotFactory
                 FieldSum = [],
             },
         },
+        new ViewSnapshot
+        {
+            Number = 5,
+            TabPosition = 4,
+            Name = "Fixture Roadmap Dates Hidden",
+            Layout = "ROADMAP_LAYOUT",
+            Filter = null,
+            GroupByFields = ["Status"],
+            SortByFields = [],
+            VerticalGroupByFields = [],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Fixture Number 2"],
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    StartField = "Fixture Date",
+                    TargetField = "Fixture Sprint end",
+                    Zoom = "Quarter",
+                    Markers = ["Fixture Date"],
+                    TruncateTitles = true,
+                    ShowDateFields = false,
+                },
+            },
+        },
     ];
 
     private static IReadOnlyList<WorkflowSnapshot> CreateWorkflows(string repositoryName) =>

@@ -31,7 +31,7 @@ public sealed partial class FieldSumRenderingObserver
         ArgumentNullException.ThrowIfNull(viewNumbers);
 
         var expectedViews = FixtureUiSnapshotFactory.Create().Views
-            .Where(view => view.Name is "View 1" or "Fixture Roadmap")
+            .Where(view => view.Name is "View 1" or "Fixture Roadmap" or "Fixture Roadmap Dates Hidden")
             .ToArray();
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         foreach (var view in expectedViews)
@@ -118,6 +118,11 @@ public sealed partial class FieldSumRenderingObserver
         if (roadmap.ShowDateFields is true && !datesRendered)
         {
             throw new InvalidOperationException($"view '{view.Name}': item date fields were not visibly rendered");
+        }
+
+        if (roadmap.ShowDateFields is false && datesRendered)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': item date fields were rendered despite being disabled");
         }
     }
 

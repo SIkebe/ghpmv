@@ -336,6 +336,7 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
   2. "Fixture Board" — Board, Column by, swimlane, Field sum=[Fixture Number]
   3. "Fixture Roadmap" — grouped Roadmap, Field sum=[Fixture Number 2], Dates, Zoom, Markers
   4. "Fixture Empty Sums" — grouped Table, Field sum=[]
+  5. "Fixture Roadmap Dates Hidden" — grouped Roadmap, Truncate titles=on, Show date fields=off
 - Workflows: W-1〜W-8 を非デフォルト Status 値で有効化、W-9 を 2 本(別リポ + 別フィルター)。1 つは disabled のまま設定を持たせる(§4.3 の D0 論点の検証用)
 - Items: issue 10 / PR 3 / draft 3(archived 2 を含む)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
