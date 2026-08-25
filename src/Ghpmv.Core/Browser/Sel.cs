@@ -86,7 +86,7 @@ internal static class Sel
 
     /// <summary>Semantic date/time elements rendered within one Roadmap item.</summary>
     public static ILocator RoadmapItemDateElements(ILocator item)
-        => item.Locator("time, relative-time");
+        => item.Locator("time:visible, relative-time:visible");
 
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)
