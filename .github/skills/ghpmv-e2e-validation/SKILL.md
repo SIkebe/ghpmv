@@ -205,6 +205,8 @@ required Number fields は `Fixture Number` と `Fixture Number 2`。source / ta
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
+Roadmap の `Truncate titles` / `Show date fields` は2026-08-25 live discoveryでfresh BrowserSessionへ永続化されないことを確認済みである。`browser-e2e`ではこのcheckpointを `unsupported / not applicable` と記録し、snapshot・target import・drift・repairの期待値に含めない。GitHub UIがdurable stateを提供するまで、同一session内のread-backを成功証跡として扱わない。
+
 ## Feature checkpoint の実行時間最小化
 
 Issue ごとの機能検証を追加するときも、user-facing scenario selector や独立した full round trip を増やさない。次へ統合する。

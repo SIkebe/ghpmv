@@ -20,6 +20,7 @@ public class ProjectVerifierTests
     private static ProjectSnapshot BuildSnapshot() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
         Project = new ProjectInfoSnapshot
         {
             Title = "Fixture",
@@ -27,6 +28,7 @@ public class ProjectVerifierTests
             Readme = "# Readme",
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields =
         [

@@ -16,7 +16,10 @@ public class ViewUiSnapshotSerializationTests
         var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
+            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
             Fields = [],
             Views =
             [
@@ -109,7 +112,10 @@ public class ViewUiSnapshotSerializationTests
         var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
+            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
             Fields = [],
             Views = [],
             Workflows =

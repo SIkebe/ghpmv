@@ -202,7 +202,10 @@ public class WorkflowUiLogicTests
     private static ProjectSnapshot Snapshot(params WorkflowSnapshot[] workflows) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
         Fields = [],
         Views = [],
         Workflows = workflows.Select((w, i) => w with { Number = i + 1 }).ToList(),

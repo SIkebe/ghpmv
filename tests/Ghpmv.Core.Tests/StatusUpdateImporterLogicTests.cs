@@ -545,7 +545,9 @@ public class StatusUpdateImporterLogicTests
     private static ProjectSnapshot CreateSnapshot(params StatusUpdateSnapshot[] updates) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
         Fields = [],
         Views = [],
         Workflows = [],

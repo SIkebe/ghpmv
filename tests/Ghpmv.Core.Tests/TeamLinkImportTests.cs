@@ -272,7 +272,9 @@ public class TeamLinkImportTests
     private static ProjectSnapshot Snapshot(params LinkedTeamSnapshot[] teams) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
         Fields = [],
         Views = [],
         Workflows = [],

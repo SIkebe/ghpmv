@@ -721,7 +721,10 @@ public class ViewUiLogicTests
     private static ProjectSnapshot Snapshot(IReadOnlyList<string> fields, params ViewSnapshot[] views) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
         Fields = [.. fields.Select(f => new FieldSnapshot { Name = f, DataType = "TEXT" })],
         Views = views,
         Workflows = [],

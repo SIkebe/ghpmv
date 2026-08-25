@@ -367,11 +367,15 @@ public class ItemImporterTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                StatusUpdates = [],
+                LinkedRepositories = [],
+                LinkedTeams = [],
                 Project = new ProjectInfoSnapshot
                 {
                     Title = targetProjectTitle,
                     Public = false,
                     Closed = false,
+                    Template = false,
                 },
                 Fields = [],
                 Views = [],

@@ -290,8 +290,8 @@ public class SnapshotTests
         const string Json =
             """
             {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
+              "schemaVersion": 2,
+              "project": { "title": "T", "public": false, "closed": false, "template": false },
               "fields": [
                 { "name": "Text", "dataType": "TEXT" },
                 { "name": "Number", "dataType": "NUMBER" },
@@ -299,7 +299,10 @@ public class SnapshotTests
               ],
               "views": [],
               "workflows": [],
-              "items": []
+              "items": [],
+              "statusUpdates": [],
+              "linkedRepositories": [],
+              "linkedTeams": []
             }
             """;
 
@@ -307,35 +310,6 @@ public class SnapshotTests
 
         Assert.NotNull(restored);
         Assert.All(restored.Fields, field => Assert.Null(field.DefaultValue));
-    }
-
-    [Fact]
-    public void View_without_tab_position_remains_backward_compatible()
-    {
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [],
-              "views": [{
-                "number": 7,
-                "name": "Legacy",
-                "layout": "TABLE_LAYOUT",
-                "groupByFields": [],
-                "sortByFields": [],
-                "verticalGroupByFields": [],
-                "visibleFields": []
-              }],
-              "workflows": [],
-              "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.Null(Assert.Single(restored!.Views).TabPosition);
-        Assert.Equal(1, restored.SchemaVersion);
     }
 
     [Fact]

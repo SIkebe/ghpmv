@@ -898,11 +898,15 @@ public class CliImportTests
     private static ProjectSnapshot MinimalSnapshot() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = "Roadmap",
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views = [],
@@ -913,11 +917,15 @@ public class CliImportTests
     private static ProjectSnapshot SnapshotWithDownstreamContent() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = "Roadmap",
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views =

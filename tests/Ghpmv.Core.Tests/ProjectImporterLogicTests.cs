@@ -1157,6 +1157,9 @@ public class ProjectImporterLogicTests
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
@@ -1164,6 +1167,7 @@ public class ProjectImporterLogicTests
             Readme = "must not be applied",
             Public = true,
             Closed = true,
+            Template = false,
         },
         Fields = [],
         Views = [],

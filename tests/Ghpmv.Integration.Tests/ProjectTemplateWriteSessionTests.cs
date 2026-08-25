@@ -278,11 +278,14 @@ public class ProjectTemplateWriteSessionTests
     private static ProjectSnapshot SnapshotWithStatusUpdates(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views = [],

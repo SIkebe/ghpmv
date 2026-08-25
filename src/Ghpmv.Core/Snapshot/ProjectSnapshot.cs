@@ -22,7 +22,7 @@ public sealed record ProjectSnapshot
     public required IReadOnlyList<ItemSnapshot> Items { get; init; }
 
     /// <summary>Project status update history in reverse chronological order.</summary>
-    public IReadOnlyList<StatusUpdateSnapshot> StatusUpdates { get; init; } = [];
+    public required IReadOnlyList<StatusUpdateSnapshot> StatusUpdates { get; init; }
 
     /// <summary>
     /// Project collaborators (users/teams with an explicit project role). Null when not
@@ -38,12 +38,12 @@ public sealed record ProjectSnapshot
     /// <summary>
     /// Repositories linked to the project, in "owner/name" form.
     /// </summary>
-    public IReadOnlyList<string> LinkedRepositories { get; init; } = [];
+    public required IReadOnlyList<string> LinkedRepositories { get; init; }
 
     /// <summary>
     /// Teams linked to an organization-owned Project. User-owned Project exports use an empty list.
     /// </summary>
-    public IReadOnlyList<LinkedTeamSnapshot> LinkedTeams { get; init; } = [];
+    public required IReadOnlyList<LinkedTeamSnapshot> LinkedTeams { get; init; }
 }
 
 /// <summary>A historical Project status update.</summary>
@@ -113,7 +113,7 @@ public sealed record ProjectInfoSnapshot
     public required bool Closed { get; init; }
 
     /// <summary>Whether an organization-owned Project is a template.</summary>
-    public bool Template { get; init; }
+    public required bool Template { get; init; }
 }
 
 /// <summary>

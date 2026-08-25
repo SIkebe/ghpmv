@@ -25,11 +25,15 @@ public static class FixtureUiSnapshotFactory
                 Readme = null,
                 Public = false,
                 Closed = false,
+                Template = false,
             },
             Fields = CreateFields(),
             Views = CreateViews(),
             Workflows = CreateWorkflows(repositoryName),
             Items = [],
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
         };
     }
 

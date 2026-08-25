@@ -178,6 +178,8 @@ public class ProjectTemplateIntegrationTests
     private static ProjectSnapshot Snapshot(string title, bool template, bool includeStatusUpdate) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,

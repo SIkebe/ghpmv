@@ -359,7 +359,9 @@ public class ProjectTemplateWriteSessionTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+                LinkedRepositories = [],
+                LinkedTeams = [],
+                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
                 Fields = [],
                 Views = [],
                 Workflows = [],
