@@ -59,10 +59,9 @@ public sealed class FieldDefaultFixtureObserver
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
-                reconciledIds = await WaitForMatchingDraftItemIdsAsync(
+                reconciledIds = await ReconcileDraftInventoryAfterSideEffectAsync(
                     projectId,
-                    title,
-                    CancellationToken.None).ConfigureAwait(false);
+                    title).ConfigureAwait(false);
                 var ids = reconciledIds.Count == 0
                     ? "(none found)"
                     : string.Join(",", reconciledIds);
@@ -73,10 +72,9 @@ public sealed class FieldDefaultFixtureObserver
                     exception);
             }
 
-            reconciledIds = await WaitForMatchingDraftItemIdsAsync(
+            reconciledIds = await ReconcileDraftInventoryAfterSideEffectAsync(
                 projectId,
-                title,
-                cancellationToken).ConfigureAwait(false);
+                title).ConfigureAwait(false);
             if (reconciledIds.Count == 1)
             {
                 itemId = reconciledIds[0];
@@ -319,20 +317,54 @@ public sealed class FieldDefaultFixtureObserver
             token => FindMatchingDraftItemIdsAsync(projectId, title, token),
             TimeSpan.FromSeconds(30),
             TimeSpan.FromMilliseconds(500),
-            cancellationToken);
+            cancellationToken,
+            IsReconciliationFailure);
+
+    private async Task<IReadOnlyList<string>> ReconcileDraftInventoryAfterSideEffectAsync(
+        string projectId,
+        string title)
+    {
+        try
+        {
+            return await WaitForMatchingDraftItemIdsAsync(
+                projectId,
+                title,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (IsReconciliationFailure(exception))
+        {
+            IReadOnlyList<string> reconciledIds = [];
+            OnProgress?.Invoke(
+                $"Field-default check draft reconciliation failed: ids=(none found) title='{title}' cleanup=pending");
+            throw new InvalidOperationException(
+                $"Field-default check draft reconciliation failed; {FormatDraftInventory(title, reconciledIds)}.",
+                exception);
+        }
+    }
 
     internal static async Task<IReadOnlyList<string>> PollForMatchesAsync(
         Func<CancellationToken, Task<IReadOnlyList<string>>> queryAsync,
         TimeSpan timeout,
         TimeSpan pollInterval,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<Exception, bool>? shouldRetry = null)
     {
         ArgumentNullException.ThrowIfNull(queryAsync);
         var deadline = DateTimeOffset.UtcNow.Add(timeout);
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var matches = await queryAsync(cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<string> matches;
+            try
+            {
+                matches = await queryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (shouldRetry?.Invoke(exception) is true
+                && DateTimeOffset.UtcNow < deadline)
+            {
+                await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
             if (matches.Count > 0 || DateTimeOffset.UtcNow >= deadline)
             {
                 return matches;
@@ -353,6 +385,9 @@ public sealed class FieldDefaultFixtureObserver
             : string.Join(",", matchingIds);
         return $"inventory title '{title}' and matching item IDs [{ids}] before cleanup";
     }
+
+    private static bool IsReconciliationFailure(Exception exception)
+        => exception is GitHubGraphQLException or HttpRequestException or TimeoutException;
 
     private async Task DeleteAndConfirmDraftAsync(
         string projectId,

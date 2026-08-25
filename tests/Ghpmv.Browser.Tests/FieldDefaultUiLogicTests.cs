@@ -262,6 +262,28 @@ public class FieldDefaultUiLogicTests
     }
 
     [Fact]
+    public async Task PollForMatchesAsync_retries_transient_reconciliation_failures()
+    {
+        var attempts = 0;
+
+        var matches = await FieldDefaultFixtureObserver.PollForMatchesAsync(
+            _ =>
+            {
+                attempts++;
+                return attempts == 1
+                    ? Task.FromException<IReadOnlyList<string>>(new HttpRequestException("transient"))
+                    : Task.FromResult<IReadOnlyList<string>>(["PVTI_reconciled"]);
+            },
+            TimeSpan.FromSeconds(1),
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken,
+            exception => exception is HttpRequestException);
+
+        Assert.Equal(2, attempts);
+        Assert.Equal(["PVTI_reconciled"], matches);
+    }
+
+    [Fact]
     public void FormatDraftInventory_includes_every_duplicate_item_id()
         => Assert.Equal(
             "inventory title 'duplicate' and matching item IDs [PVTI_first,PVTI_second] before cleanup",
