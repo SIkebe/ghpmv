@@ -36,9 +36,18 @@ public static class SnapshotFile
         {
             using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
             var root = document.RootElement;
-            var schemaVersion = root.TryGetProperty("schemaVersion", out var schemaVersionElement)
-                ? schemaVersionElement.GetInt32()
-                : 0;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException($"'{path}' must contain a JSON object.");
+            }
+
+            if (!root.TryGetProperty("schemaVersion", out var schemaVersionElement)
+                || schemaVersionElement.ValueKind != JsonValueKind.Number
+                || !schemaVersionElement.TryGetInt32(out var schemaVersion))
+            {
+                throw new InvalidDataException($"'{path}' is missing required integer 'schemaVersion'.");
+            }
+
             if (schemaVersion != ProjectSnapshot.CurrentSchemaVersion)
             {
                 throw new InvalidDataException(

@@ -518,6 +518,33 @@ public class SnapshotTests
         }
     }
 
+    [Theory]
+    [InlineData("[]", "must contain a JSON object")]
+    [InlineData("null", "must contain a JSON object")]
+    [InlineData("""{"schemaVersion":"2"}""", "missing required integer 'schemaVersion'")]
+    public async Task SnapshotFile_normalizes_malformed_root_and_schema_version_errors(
+        string json,
+        string expectedMessage)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-malformed-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                json,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains(expectedMessage, exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public void Roundtrip_preserves_status_updates()
     {
