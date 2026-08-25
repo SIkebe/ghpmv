@@ -250,6 +250,15 @@ public class BrowserRoundTripTests
                     TargetOrg,
                     result.ProjectNumber,
                     cancellationToken);
+                await new FieldSumRenderingObserver(targetSession).ValidateStandardFixtureAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
 
                 var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
                 await viewImporter.ApplyFieldSumAsync(
@@ -305,6 +314,9 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.DoesNotContain(driftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
