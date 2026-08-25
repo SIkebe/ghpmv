@@ -95,6 +95,61 @@ internal static class Sel
     public static ILocator SsoContinueButton(IPage page)
         => page.GetByRole(AriaRole.Button, new() { Name = "Continue", Exact = true });
 
+    // === Project field defaults (implementation contract 2026-08-24) ===
+
+    private static readonly Regex FieldDefaultControlName = new("^Default value($|:)");
+    private static readonly Regex CreateDraftOptionName = new("^Create a draft");
+    /// <summary>A field entry on the Project settings page.</summary>
+    public static ILocator FieldSettingsEntry(IPage page, string fieldName)
+        => page.GetByRole(AriaRole.Link, new() { Name = fieldName, Exact = true })
+            .Or(page.GetByRole(AriaRole.Button, new() { Name = fieldName, Exact = true }))
+            .First;
+
+    /// <summary>Heading of one custom field's settings page.</summary>
+    public static ILocator FieldSettingsHeading(IPage page, string fieldName)
+        => page.GetByRole(AriaRole.Heading, new()
+        {
+            Name = $"{fieldName} field settings",
+            Exact = true,
+            Level = 2,
+        });
+
+    /// <summary>Text, number, or single-select control labelled "Default value".</summary>
+    public static ILocator FieldDefaultControl(IPage page)
+        => page.GetByRole(AriaRole.Textbox, new() { NameRegex = FieldDefaultControlName })
+            .Or(page.GetByRole(AriaRole.Spinbutton, new() { NameRegex = FieldDefaultControlName }))
+            .Or(page.GetByRole(AriaRole.Combobox, new() { NameRegex = FieldDefaultControlName }))
+            .Or(page.GetByRole(AriaRole.Button, new() { NameRegex = FieldDefaultControlName }))
+            .First;
+
+    /// <summary>Project item-entry combobox used to create a draft.</summary>
+    public static ILocator ProjectItemEntry(IPage page)
+        => page.GetByRole(AriaRole.Combobox, new()
+        {
+            Name = "Start typing to create an item, or type hashtag to select a repository",
+            Exact = true,
+        }).First;
+
+    /// <summary>"Create a draft" option in the Project item discovery menu.</summary>
+    public static ILocator CreateDraftOption(IPage page)
+        => page.GetByRole(AriaRole.Option, new() { NameRegex = CreateDraftOptionName });
+
+    /// <summary>Actions button for one Single-select option.</summary>
+    public static ILocator FieldOptionActionsButton(IPage page, string optionName)
+        => page.GetByRole(AriaRole.Button, new()
+        {
+            Name = $"Open field actions for {optionName}",
+            Exact = true,
+        });
+
+    /// <summary>Open actions menu for one Single-select option.</summary>
+    public static ILocator FieldOptionActionsMenu(IPage page, string optionName)
+        => page.GetByRole(AriaRole.Menu, new()
+        {
+            Name = $"Open field actions for {optionName}",
+            Exact = true,
+        });
+
     // === Workflows (M7 discovery, 2026-07-05) ===
 
     // Saved Auto-add entries carry a kebab button whose label is appended to the link name.

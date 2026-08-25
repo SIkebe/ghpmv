@@ -425,7 +425,9 @@ public class FixtureProjectBuilderTests
         }
 
         foreach (var property in typeof(FieldSnapshot).GetProperties()
-                     .Where(property => property.Name is not nameof(FieldSnapshot.Name) and not nameof(FieldSnapshot.DataType)))
+                     .Where(property => property.Name is not nameof(FieldSnapshot.Name)
+                         and not nameof(FieldSnapshot.DataType)
+                         and not nameof(FieldSnapshot.DefaultValue)))
         {
             Assert.Contains(snapshot.Fields, field => property.GetValue(field) is not null);
         }

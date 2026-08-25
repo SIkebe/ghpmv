@@ -21,7 +21,18 @@ public class SnapshotTests
         Fields =
         [
             new FieldSnapshot { Name = "Title", DataType = "TITLE" },
-            new FieldSnapshot { Name = "Fixture Text", DataType = "TEXT" },
+            new FieldSnapshot
+            {
+                Name = "Fixture Text",
+                DataType = "TEXT",
+                DefaultValue = new FieldDefaultValueSnapshot { Text = "既定値 🚀" },
+            },
+            new FieldSnapshot
+            {
+                Name = "Fixture Number",
+                DataType = "NUMBER",
+                DefaultValue = new FieldDefaultValueSnapshot { Number = -42.5 },
+            },
             new FieldSnapshot
             {
                 Name = "Fixture Select",
@@ -31,6 +42,7 @@ public class SnapshotTests
                     new SingleSelectOptionSnapshot { Id = "o1", Name = "Alpha", Color = "RED", Description = "First" },
                     new SingleSelectOptionSnapshot { Id = "o2", Name = "Beta", Color = "BLUE", Description = null },
                 ],
+                DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Beta" },
             },
             new FieldSnapshot
             {
@@ -166,6 +178,9 @@ public class SnapshotTests
         Assert.NotNull(select.Options);
         Assert.Equal(["Alpha", "Beta"], select.Options.Select(o => o.Name));
         Assert.Equal(["RED", "BLUE"], select.Options.Select(o => o.Color));
+        Assert.Equal("Beta", select.DefaultValue!.SingleSelectOptionName);
+        Assert.Equal("既定値 🚀", restored.Fields.Single(f => f.Name == "Fixture Text").DefaultValue!.Text);
+        Assert.Equal(-42.5, restored.Fields.Single(f => f.Name == "Fixture Number").DefaultValue!.Number);
 
         var multiSelect = restored.Fields.Single(f => f.Name == "Fixture Teams");
         Assert.Equal("MULTI_SELECT", multiSelect.DataType);
@@ -208,6 +223,7 @@ public class SnapshotTests
             Assert.Equal(expected.IterationTitle, actual.IterationTitle);
             Assert.Equal(expected.IsIssueField, actual.IsIssueField);
         }
+
         Assert.Equal(
             ["Platform", "SDK"],
             issue.FieldValues.Single(value => value.FieldName == "Fixture Teams").MultiSelectOptionNames);
@@ -238,6 +254,59 @@ public class SnapshotTests
             Assert.Equal(expected.CreatedAt, actual.CreatedAt);
             Assert.Equal(expected.UpdatedAt, actual.UpdatedAt);
         }
+    }
+
+    [Fact]
+    public void Captured_cleared_default_round_trips_as_present_empty_object()
+    {
+        var original = CreateFullSnapshot() with
+        {
+            Fields =
+            [
+                new FieldSnapshot
+                {
+                    Name = "Fixture Number",
+                    DataType = "NUMBER",
+                    DefaultValue = new FieldDefaultValueSnapshot(),
+                },
+            ],
+        };
+
+        var json = JsonSerializer.Serialize(original, SnapshotJsonContext.Default.ProjectSnapshot);
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(
+            JsonValueKind.Object,
+            document.RootElement.GetProperty("fields")[0].GetProperty("defaultValue").ValueKind);
+
+        var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
+        var defaultValue = Assert.Single(restored!.Fields).DefaultValue;
+        Assert.NotNull(defaultValue);
+        Assert.Null(defaultValue.Number);
+    }
+
+    [Fact]
+    public void Fields_without_default_value_deserialize_as_uncaptured()
+    {
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [
+                { "name": "Text", "dataType": "TEXT" },
+                { "name": "Number", "dataType": "NUMBER" },
+                { "name": "Select", "dataType": "SINGLE_SELECT", "options": [] }
+              ],
+              "views": [],
+              "workflows": [],
+              "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.All(restored.Fields, field => Assert.Null(field.DefaultValue));
     }
 
     [Fact]

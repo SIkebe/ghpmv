@@ -251,6 +251,16 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Checkbox_selection_match_supports_roadmap_markers()
+    {
+        Assert.True(ViewUiImporter.CheckboxSelectionMatches(
+            ["Fixture Date", "Fixture Sprint"],
+            ["Fixture Sprint", "Fixture Date"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(["Fixture Date"], []));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches([], null));
+    }
+
+    [Fact]
     public void Rendered_field_sum_observation_accepts_count_and_numeric_labels()
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "View 1");
@@ -408,6 +418,7 @@ public class ViewUiLogicTests
             {
                 Assert.Equal(["Count", "Fixture Number"], actual.Ui.FieldSum);
             }
+
             else
             {
                 Assert.Equal(view.Ui.FieldSum, actual.Ui.FieldSum);
@@ -421,6 +432,27 @@ public class ViewUiLogicTests
                 Assert.Equal(view.Ui.Roadmap.Markers, actual.Ui.Roadmap!.Markers);
             }
         }
+    }
+
+    [Fact]
+    public void FixtureUiSnapshotFactory_creates_typed_defaults_and_all_type_drift()
+    {
+        var expected = FixtureUiSnapshotFactory.Create("fixture-repo");
+        var drifted = FixtureUiSnapshotFactory.CreateFieldDefaultDrift("fixture-repo");
+
+        Assert.Equal("既定値 🌏", expected.Fields.Single(field => field.Name == "Fixture Text").DefaultValue!.Text);
+        Assert.Equal(-7, expected.Fields.Single(field => field.Name == "Fixture Number").DefaultValue!.Number);
+        Assert.Equal(0, expected.Fields.Single(field => field.Name == "Fixture Number 2").DefaultValue!.Number);
+        Assert.Equal(
+            "Beta",
+            expected.Fields.Single(field => field.Name == "Fixture Select").DefaultValue!.SingleSelectOptionName);
+
+        Assert.Equal("drifted text", drifted.Fields.Single(field => field.Name == "Fixture Text").DefaultValue!.Text);
+        Assert.Null(drifted.Fields.Single(field => field.Name == "Fixture Number").DefaultValue!.Number);
+        Assert.Equal(99, drifted.Fields.Single(field => field.Name == "Fixture Number 2").DefaultValue!.Number);
+        Assert.Equal(
+            "Gamma",
+            drifted.Fields.Single(field => field.Name == "Fixture Select").DefaultValue!.SingleSelectOptionName);
     }
 
     [Fact]

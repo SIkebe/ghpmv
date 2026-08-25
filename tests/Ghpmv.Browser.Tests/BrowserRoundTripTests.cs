@@ -89,8 +89,15 @@ public class BrowserRoundTripTests
             var sourceViewExporter = new ViewUiExporter(sourceSession);
             var sourceWorkflowExporter = new WorkflowUiExporter(sourceSession);
             var sourceCollaboratorExporter = new CollaboratorUiExporter(sourceSession);
+            var sourceFieldDefaultExporter = new FieldDefaultUiExporter(sourceSession);
             var source = await new ProjectExporter(sourceClient)
                 .ExportAsync(SourceOrg, FixtureProjectNumber, cancellationToken);
+            source = await sourceFieldDefaultExporter.EnrichAsync(
+                source,
+                SourceOrg,
+                ProjectOwnerType.Organization,
+                FixtureProjectNumber,
+                cancellationToken);
             source = await sourceViewExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
             source = await sourceWorkflowExporter.EnrichAsync(source, SourceOrg, FixtureProjectNumber, cancellationToken);
             source = await sourceCollaboratorExporter.EnrichAsync(
@@ -103,11 +110,13 @@ public class BrowserRoundTripTests
             Assert.Empty(sourceViewExporter.Warnings);
             Assert.Empty(sourceWorkflowExporter.Warnings);
             Assert.Empty(sourceCollaboratorExporter.Warnings);
+            Assert.Empty(sourceFieldDefaultExporter.Warnings);
             Assert.False(
                 sourceViewExporter.GraphQlPositionMatchesDomOrder,
                 "GraphQL POSITION now matches the saved-tab DOM order. Re-evaluate replacing the browser read path with the public API.");
             AssertSourceViews(source);
             AssertSourceWorkflows(source);
+            AssertSourceFieldDefaults(source);
             var collaborator = Assert.Single(source.Collaborators!, candidate =>
                 string.Equals(candidate.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("USER", collaborator.Type);
@@ -126,11 +135,13 @@ public class BrowserRoundTripTests
                 }).ToList(),
             };
 
+            var operationLogDirectory = CreateOperationLogDirectory();
             var importer = new ProjectImporter(targetClient)
             {
-                OperationLogDirectory = CreateOperationLogDirectory(),
+                OperationLogDirectory = operationLogDirectory,
                 BeforeWriteAsync = validateTargetAuthentication,
                 BrowserViewEnrichmentPlanned = true,
+                BrowserFieldDefaultEnrichmentPlanned = true,
                 OrganizationMapping = OrganizationMapping,
                 RepositoryMapping = RepositoryMapping,
                 UserMapping = userMapping,
@@ -138,6 +149,22 @@ public class BrowserRoundTripTests
             var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
             try
             {
+                var initialItemResult = await new ItemImporter(targetClient)
+                {
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                }.ImportAsync(snapshot, result, operationLogDirectory, cancellationToken);
+                Assert.Empty(initialItemResult.Warnings);
+
+                var fieldDefaultImporter = new FieldDefaultUiImporter(targetSession);
+                await fieldDefaultImporter.ImportAsync(
+                    snapshot,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Empty(fieldDefaultImporter.Warnings);
+
                 var initialViewReport = await new ProjectVerifier(targetClient)
                 {
                     OrganizationMapping = OrganizationMapping,
@@ -176,6 +203,7 @@ public class BrowserRoundTripTests
                 var targetViewExporter = new ViewUiExporter(targetSession);
                 var targetWorkflowExporter = new WorkflowUiExporter(targetSession);
                 var targetCollaboratorExporter = new CollaboratorUiExporter(targetSession);
+                var targetFieldDefaultExporter = new FieldDefaultUiExporter(targetSession);
                 var browserVerificationCount = 0;
                 var verifier = new ProjectVerifier(targetClient)
                 {
@@ -185,6 +213,12 @@ public class BrowserRoundTripTests
                     PostExportAsync = async (target, ct) =>
                     {
                         browserVerificationCount++;
+                        target = await targetFieldDefaultExporter.EnrichAsync(
+                            target,
+                            TargetOrg,
+                            ProjectOwnerType.Organization,
+                            result.ProjectNumber,
+                            ct);
                         target = await targetViewExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
                         target = await targetWorkflowExporter.EnrichAsync(target, TargetOrg, result.ProjectNumber, ct);
                         reExported = await targetCollaboratorExporter.EnrichAsync(
@@ -201,6 +235,7 @@ public class BrowserRoundTripTests
                 Assert.Empty(targetViewExporter.Warnings);
                 Assert.Empty(targetWorkflowExporter.Warnings);
                 Assert.Empty(targetCollaboratorExporter.Warnings);
+                Assert.Empty(targetFieldDefaultExporter.Warnings);
                 Assert.Equal(
                     VerifyCategories.All,
                     matchReport.Categories.Select(category => category.Category));
@@ -210,6 +245,11 @@ public class BrowserRoundTripTests
                 var target = Assert.IsType<ProjectSnapshot>(reExported);
                 AssertRoundTrippedViews(snapshot, target);
                 AssertRoundTrippedWorkflows(snapshot, target);
+                AssertRoundTrippedFieldDefaults(snapshot, target);
+                await new FieldDefaultFixtureObserver(targetClient, targetSession).ValidateStandardFixtureAsync(
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
 
                 var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
                 await viewImporter.ApplyFieldSumAsync(
@@ -231,8 +271,20 @@ public class BrowserRoundTripTests
                     "is:issue label:documentation",
                     cancellationToken);
                 await SetCollaboratorAsync(targetClient, result.ProjectId, targetUserId, "READER", cancellationToken);
+                var driftedDefaults = ApplyFieldDefaultDrift(snapshot);
+                await fieldDefaultImporter.ImportAsync(
+                    driftedDefaults,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Empty(fieldDefaultImporter.Warnings);
 
                 var driftReport = await verifier.VerifyAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.Field
+                    && difference.Message.Contains("default value mismatch", StringComparison.Ordinal));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
@@ -246,7 +298,69 @@ public class BrowserRoundTripTests
                     && difference.Category == VerifyCategories.Collaborator
                     && difference.Message.Contains("role mismatch", StringComparison.Ordinal));
 
-                Assert.Equal(2, browserVerificationCount);
+                var repairResult = await new ProjectImporter(targetClient)
+                {
+                    OnConflict = ConflictAction.Update,
+                    OperationLogDirectory = operationLogDirectory,
+                    BeforeWriteAsync = validateTargetAuthentication,
+                    BrowserViewEnrichmentPlanned = true,
+                    BrowserFieldDefaultEnrichmentPlanned = true,
+                    OrganizationMapping = OrganizationMapping,
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                }.ImportIntoAsync(snapshot, TargetOrg, result.ProjectNumber, cancellationToken);
+                await fieldDefaultImporter.ImportAsync(
+                    FieldDefaultUiImporter.CreateClearedDefaultsSnapshot(snapshot),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    repairResult.ProjectNumber,
+                    cancellationToken);
+                Assert.Empty(fieldDefaultImporter.Warnings);
+
+                var repairItemResult = await new ItemImporter(targetClient)
+                {
+                    RepositoryMapping = RepositoryMapping,
+                    UserMapping = userMapping,
+                    ReapplyCompletedFieldValues = true,
+                }.ImportAsync(snapshot, repairResult, operationLogDirectory, cancellationToken);
+                Assert.Empty(repairItemResult.Warnings);
+
+                await fieldDefaultImporter.ImportAsync(
+                    snapshot,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    repairResult.ProjectNumber,
+                    cancellationToken);
+                await viewImporter.EnrichAsync(
+                    snapshot,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    repairResult.ProjectNumber,
+                    repairResult.ViewNumbers,
+                    cancellationToken);
+                await workflowImporter.ImportAsync(
+                    snapshot,
+                    TargetOrg,
+                    repairResult.ProjectNumber,
+                    cancellationToken);
+                Assert.Empty(fieldDefaultImporter.Warnings);
+                Assert.Empty(viewImporter.Warnings);
+                Assert.Empty(workflowImporter.Warnings);
+
+                var repairReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.All(
+                    repairReport.Categories,
+                    category => Assert.Equal(VerifyStatus.Match, category.Status));
+                await new FieldDefaultFixtureObserver(targetClient, targetSession).ValidateStandardFixtureAsync(
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+
+                Assert.Equal(3, browserVerificationCount);
             }
             finally
             {
@@ -303,6 +417,33 @@ public class BrowserRoundTripTests
         var sourceDisabled = Assert.Single(source.Workflows, workflow => workflow.Name == "Code changes requested");
         Assert.False(sourceDisabled.Enabled);
         Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
+    }
+
+    private static void AssertSourceFieldDefaults(ProjectSnapshot source)
+    {
+        var expected = FixtureUiSnapshotFactory.Create();
+        foreach (var expectedField in expected.Fields.Where(field => field.DefaultValue is not null))
+        {
+            var actual = Assert.Single(source.Fields, field => field.Name == expectedField.Name);
+            Assert.NotNull(actual.DefaultValue);
+            Assert.True(FieldDefaultUiImporter.ValuesEqual(
+                expectedField.DataType,
+                expectedField.DefaultValue!,
+                actual.DefaultValue!));
+        }
+    }
+
+    private static ProjectSnapshot ApplyFieldDefaultDrift(ProjectSnapshot snapshot)
+    {
+        var drift = FixtureUiSnapshotFactory.CreateFieldDefaultDrift().Fields
+            .Where(field => field.DefaultValue is not null)
+            .ToDictionary(field => field.Name, field => field.DefaultValue, StringComparer.Ordinal);
+        return snapshot with
+        {
+            Fields = snapshot.Fields.Select(field => drift.TryGetValue(field.Name, out var defaultValue)
+                ? field with { DefaultValue = defaultValue }
+                : field).ToList(),
+        };
     }
 
     private static ProjectSnapshot BuildRoundTripSnapshot(
@@ -379,6 +520,21 @@ public class BrowserRoundTripTests
                     ? TargetFixtureRepository
                     : expected.Ui.Repository,
                 actual.Ui.Repository);
+        }
+
+    }
+
+    private static void AssertRoundTrippedFieldDefaults(ProjectSnapshot snapshot, ProjectSnapshot target)
+    {
+        foreach (var expected in snapshot.Fields.Where(field => field.DefaultValue is not null))
+        {
+            var actual = Assert.Single(target.Fields, field =>
+                field.Name == expected.Name && field.DataType == expected.DataType);
+            Assert.NotNull(actual.DefaultValue);
+            Assert.True(FieldDefaultUiImporter.ValuesEqual(
+                expected.DataType,
+                expected.DefaultValue!,
+                actual.DefaultValue!));
         }
     }
 

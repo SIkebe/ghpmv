@@ -118,6 +118,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Project `gpm-fixture`
 - Organization Project template 属性（`setup --fixture` の全 API fixture 作成後に template 化）
 - custom fields(Text / Number / Date / Single-select / Multi-select (`Fixture Areas`) / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
+- browser-only field defaults: `Fixture Text=既定値 🌏`、`Fixture Number=-7`、`Fixture Number 2=0`、`Fixture Select=Beta`（Date は対象外）
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
 - Status Updates 5 件（`INACTIVE` / `ON_TRACK` / `AT_RISK` / `OFF_TRACK` / `COMPLETE`、日付 null/値あり、Markdown 本文）
@@ -582,7 +583,7 @@ dotnet run --project src/Ghpmv.Cli -- import `
 
 出力された target Project URL と project number を控えます。
 
-stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` が出ることを確認します。再実行確認は 7.4 の Field sum drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
+stdout の既存行に加えて `status-updates: created=... resumed=... already-complete=...` と `field-defaults: imported=... warnings=0` が出ることを確認します。browser-assisted importはtarget defaultsをitem作成前にclearし、itemsがskipなしで完了した後にsource defaultsを適用します。再実行確認は 7.4 の Field sum / field-default drift 後に一度だけ行い、同じ snapshot directory と `--project-number <target-project-number>` で drift の修復と idempotence を同時に検証します。`created=0`、`already-complete=5` となり、UI の履歴件数、Field、View が増えず、既存 item values が変わらないことが合格条件です。`--project-number` は既存 Project を常に更新するため `--on-conflict` とは併用しません。
 
 template 化は import の最終書き込み段です。stderr で Items / Status Updates / API View / browser View enrichment・tab order / Workflows の完了後に `Marking the target project as a template as the final import stage...` が出ることを確認します。Organization の **Projects → Templates** と Create project ダイアログで target Project がテンプレートとして表示されることも確認します。
 
@@ -609,9 +610,9 @@ dotnet run --project src/Ghpmv.Cli -- verify `
   --no-update-check
 ```
 
-`--enable-browser-automation` を付けた verify は、比較前に target の View / Workflow UI 設定と explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
+`--enable-browser-automation` を付けた verify は、比較前に target の field defaults、View / Workflow UI 設定、explicit collaborators を再取得します。選択した profile が target host に未認証、または API token と別アカウントの場合は、target の読み取り開始前に明確なエラーと非ゼロ終了になります。
 
-同じverifyを先に`--enable-browser-automation` / `--browser-profile`なしでも実行し、API-readableなView設定を確認します。API-only verifyではsaved-tab orderとUI-only設定は`View` categoryの`NotVerified`として扱われます。続くbrowser-assisted verifyでDOM tab orderを含む完全一致を確認します。
+同じverifyを先に`--enable-browser-automation` / `--browser-profile`なしでも実行し、API-readableなField/View設定を確認します。captured defaults を持つ snapshot の API-only verify は `Field`、saved-tab orderとUI-only設定は`View` categoryの`NotVerified`として扱われます。続くbrowser-assisted verifyでdefaultsとDOM tab orderを含む完全一致を確認します。
 
 source / target の repository 名、user login、または Team slug が異なる場合、`verify` にも import と同じ `--repo-mapping` / `--user-mapping` / `--team-mapping` を渡してください。これにより Issue / PR item、linked repository、explicit user collaborator、linked Team は target 側の名前へ正規化して比較されます。生成されていない optional mapping の引数は外してください。
 
@@ -623,7 +624,7 @@ OK: the target project matches the snapshot.
 
 human-readable category table と `verify-report.json` の両方に `StatusUpdate: Match` が additive に含まれ、`Project: Match` に template 属性の一致が反映されることを確認します。Status Updates は note 追加後の本文、status、startDate、targetDate、snapshot sequence を比較し、target API が新しく付けた creator/createdAt 自体は比較対象外です。
 
-Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
+Field defaults と Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
 
 1. 初回 browser-assisted verify で `View: Match` を確認します。Group by、Field sum menu の完全な選択集合、空集合は Playwright capture と verifier が機械比較するため、同じ内容を目視しません。
 2. Issue #62 の派生描画 checkpoint は次の command で自動検証します。Playwright が target の `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で確認します。ユーザーによる reload / 目視確認は不要です。
@@ -637,17 +638,20 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 ```
 
 `Rendered Field sums verified` が両 View に出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=2` と exit code 0 になることを確認します。
-3. `ghpmv setup --fixture-field-sum-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` で Playwright が `View 1` の `Fixture Number 2` だけを解除・保存し、同じ verify command を再実行します。非ゼロ終了と `view 'View 1': field sum mismatch` を確認します。
-4. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence と Field sum の復元を同時に確認します。
-5. 7.4 の browser-assisted verify をもう一度実行し、`View: Match` により `Fixture Number 2` の復元と4 fixture Viewsの一致を機械確認します。
+3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
+4. `ghpmv setup --fixture-field-default-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` と既存の `--fixture-field-sum-drift` を同じ target に実行します。前者は Text / zero Number / Single-select を変更し、negative Number default を clear します。
+5. browser-assisted verify を `--categories Field,View` で再実行し、4 件の `default value mismatch` と `view 'View 1': field sum mismatch` を確認します。
+6. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence、field defaults、Field sum の復元を同時に確認します。
+7. browser-assisted verify を `--categories Field,Item,View` で実行します。`Field: Match` / `View: Match`に加え、`Item`差分がcleanup同意待ちのinventory済みcheck draft 1件だけで、source由来itemの値差分がないことを確認します。その後`--fixture-field-default-check`を再実行して修復後の新規draftにdefaultsが適用されることを機械確認し、このdraftもinventoryへ追加します。
 
-この統合により追加実行は drift verify、修復用の再 import、最終 verify の 3 command だけです。証跡は 11、削除は 10 の既存手順へまとめます。
+この統合で追加実行するのは、初回functional check、field-default drift、field-sum drift、drift verify、修復用re-import、repair verify、修復後functional checkの7 commandです。同じsnapshot / target / mappingsを再利用し、証跡は11、draftとProjectの削除は10の既存cleanup同意へまとめます。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
 | 症状 | よくある原因 | 対応 |
 |---|---|---|
 | Issue / PR item が skip | `repository-mappings.csv` 不足、target repo 不可視、Issue / PR number 不一致 | mapping、token visibility、GEI 結果を確認。 |
+| `field defaults were deferred because ... item(s) were skipped` | skipped item が後続runで作成された際にGitHub defaultを誤って継承する危険がある | mappingを修正して同じsnapshot/targetへ再importし、itemsがskipなしになったrunでdefaultsを適用する。 |
 | `saml_failure` | PAT の organization SSO authorization 漏れ | GitHub settings で token / GitHub CLI を Authorize。 |
 | Browser session expired | `ghpmv login --profile ...` 未実施または期限切れ | source / target profile で再ログイン。 |
 | `The browser session is not signed in to 'github.com'` | 保存済み target browser session の失効、または profile 間違い | `ghpmv login --profile target` を再実行し、target token と同じユーザーでログイン。 |
@@ -674,6 +678,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] README が改行・emoji を含めて概ね一致。
 - [ ] Text / Number / Date / Single-select / Multi-select / Iteration fields と organization multi-select Issue Field が存在する。
 - [ ] Single-select options の name / color / description が一致。
+- [ ] Text / Number / Single-select defaults が `既定値 🌏` / `-7` / `0` / `Beta` で一致し、Date field に default を期待しない。
 - [ ] Iteration の completed / current / future 相当が再現されている。
 
 ### 8.3 Items / values
@@ -687,6 +692,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Date / Single-select / Multi-select / Iteration values が維持されている。
 - [ ] archived draft が archived state になっている。
 - [ ] assigned draft の assignee が user mapping 後の target user になっている、または mapping 不足 warning が出ている。
+- [ ] import 前から存在する item values は defaults 設定後も変化せず、新しく作成した disposable draft だけに4 defaultsが自動入力される。
 
 ### 8.4 Views
 

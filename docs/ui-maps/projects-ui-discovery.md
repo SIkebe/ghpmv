@@ -39,6 +39,24 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
 
+## Field default UI contract (2026-08-25 live discovery)
+
+GitHub Docs と public schema introspection で Text / Number / Single-select default が browser-only であることを確認し、GitHub.com の一時Project #72で実UIを再確認した。Project `/settings` の`list "Fields"`内にfield nameのlinkがあり、custom fieldは`/settings/fields/{databaseId}`へ遷移する。
+
+- Text: `textbox "Default value"`（placeholder=`Enter default text`）
+- Number: `spinbutton "Default value"`
+- Single-select: 各optionの`button "Open field actions for <option>"` → 同名menu → `menuitem "Set as default"` / default optionでは`menuitem "Unset as default"`
+- Text / Number とSingle-select actionsはいずれもauto-saveで、field pageにSave buttonはない。保存後は`Saved!`が表示される
+- default Single-select optionはoption list上で`<option> Default`と表示される
+
+1. export は item values から推測せず、各 supported field の settings control を直接読む。
+2. `defaultValue: null` は未取得、`defaultValue: {}` は取得済み clear として区別する。
+3. Number は invariant format で読み書きし、`0` と negative を null と区別する。
+4. Single-select はoption action menuの`Unset as default`を全optionで探して読み、targetではoption nameのaction menuから`Set as default`を選ぶ。option node IDは保存しない。
+5. importはtarget defaultsをitem作成前にclearし、source itemの作成・値適用後にsource defaultsをauto-saveする。既存 item valuesは変更せず、新規itemのみGitHubが自動入力する。
+6. auto-save後は2秒待ってsettingsを再度開き、意味的にread-backして不一致をwarningにする。
+7. `setup --fixture-field-default-check` はProject viewの`combobox "Start typing to create an item, or type hashtag to select a repository"`へtitleを入力し、`listbox "Discovery menu"`の`option "Create a draft..."`を選ぶ。GraphQL read-backで4 defaultsを確認してitem ID / titleを返す。`addProjectV2DraftIssue` mutationではGitHubがcustom defaultsを適用しないためfunctional checkに使わない。draftはresource inventoryに追加し、明示的なcleanup同意後に`--fixture-field-default-cleanup-item` / `--fixture-field-default-cleanup-title`で削除する。
+
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
@@ -48,6 +66,7 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
+- Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
 
 ## M7 E2E 実走で確定した追加知見(2026-07-05)

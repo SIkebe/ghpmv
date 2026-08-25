@@ -60,6 +60,9 @@ public sealed class ProjectImporter
     /// <summary>Whether Playwright will apply View settings that the GraphQL API cannot write.</summary>
     public bool BrowserViewEnrichmentPlanned { get; init; }
 
+    /// <summary>Whether Playwright will apply captured field defaults after item import.</summary>
+    public bool BrowserFieldDefaultEnrichmentPlanned { get; init; }
+
     /// <summary>Warnings accumulated by the last import (unresolvable collaborators, unlinkable repositories).</summary>
     public IReadOnlyList<string> Warnings => _warnings;
 
@@ -831,6 +834,12 @@ public sealed class ProjectImporter
         CancellationToken cancellationToken)
     {
         _warnings.Clear();
+        if (!BrowserFieldDefaultEnrichmentPlanned
+            && snapshot.Fields.Any(field => field.DefaultValue is not null))
+        {
+            Warn(
+                "captured field defaults require browser automation and were not applied; existing target defaults are not guaranteed when field options are reconciled");
+        }
         ImportCapabilityPreflight.ValidateProjectCapabilities(
             ImportCapabilityAnalyzer.Analyze(snapshot, BrowserViewEnrichmentPlanned, OwnerType),
             project.Number,
