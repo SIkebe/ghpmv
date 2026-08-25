@@ -117,7 +117,6 @@ public sealed class ViewUiImporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
-        ValidateSharedRoadmapDisplaySettings(snapshot.Views);
 
         if (snapshot.Views.Count == 0)
         {
@@ -160,28 +159,6 @@ public sealed class ViewUiImporter
                 viewNumbers,
                 cancellationToken),
             _warnings).ConfigureAwait(false);
-    }
-
-    internal static void ValidateSharedRoadmapDisplaySettings(IReadOnlyList<ViewSnapshot> views)
-    {
-        ArgumentNullException.ThrowIfNull(views);
-        var roadmaps = views
-            .Where(view => string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
-            .Select(view => view.Ui?.Roadmap)
-            .Where(settings => settings is not null)
-            .ToArray();
-        if (roadmaps.Where(settings => settings!.TruncateTitles is not null)
-                .Select(settings => settings!.TruncateTitles)
-                .Distinct()
-                .Count() > 1
-            || roadmaps.Where(settings => settings!.ShowDateFields is not null)
-                .Select(settings => settings!.ShowDateFields)
-                .Distinct()
-                .Count() > 1)
-        {
-            throw new InvalidOperationException(
-                "Roadmap Truncate titles and Show date fields are project-shared and must have one consistent value across all Roadmap Views.");
-        }
     }
 
     /// <summary>Applies and saves only the complete Field sum selection for one target View.</summary>
@@ -681,25 +658,18 @@ public sealed class ViewUiImporter
 
         if (view.Ui?.Roadmap is { } roadmap)
         {
-            if (roadmap.TruncateTitles is { } truncateTitles)
-            {
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Truncate titles",
-                    truncateTitles,
-                    view.Name,
-                    cancellationToken).ConfigureAwait(false);
-            }
-
-            if (roadmap.ShowDateFields is { } showDateFields)
-            {
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Show date fields",
-                    showDateFields,
-                    view.Name,
-                    cancellationToken).ConfigureAwait(false);
-            }
+            await TrySetMenuCheckboxAsync(
+                page,
+                "Truncate titles",
+                roadmap.TruncateTitles,
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
+            await TrySetMenuCheckboxAsync(
+                page,
+                "Show date fields",
+                roadmap.ShowDateFields,
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
 
             if (roadmap.StartField is not null || roadmap.TargetField is not null)
             {
@@ -865,10 +835,10 @@ public sealed class ViewUiImporter
             var sliceBy = view.Ui is null
                ? null
                : await ReadMenuValueAsync(menu, "Slice by").ConfigureAwait(false);
-            var truncateTitles = view.Ui?.Roadmap?.TruncateTitles is null
+            var truncateTitles = view.Ui?.Roadmap is null
                 ? null
                 : await ReadMenuCheckboxAsync(menu, "Truncate titles").ConfigureAwait(false);
-            var showDateFields = view.Ui?.Roadmap?.ShowDateFields is null
+            var showDateFields = view.Ui?.Roadmap is null
                 ? null
                 : await ReadMenuCheckboxAsync(menu, "Show date fields").ConfigureAwait(false);
 
@@ -1057,18 +1027,16 @@ public sealed class ViewUiImporter
 
         if (expected.Ui?.Roadmap is { } roadmap)
         {
-            if (roadmap.TruncateTitles is { } expectedTruncateTitles
-                && actual.TruncateTitles != expectedTruncateTitles)
+            if (actual.TruncateTitles != roadmap.TruncateTitles)
             {
                 differences.Add(
-                    $"truncate-titles expected '{FormatBoolean(expectedTruncateTitles)}', actual '{FormatBoolean(actual.TruncateTitles)}'");
+                    $"truncate-titles expected '{FormatBoolean(roadmap.TruncateTitles)}', actual '{FormatBoolean(actual.TruncateTitles)}'");
             }
 
-            if (roadmap.ShowDateFields is { } expectedShowDateFields
-                && actual.ShowDateFields != expectedShowDateFields)
+            if (actual.ShowDateFields != roadmap.ShowDateFields)
             {
                 differences.Add(
-                    $"show-date-fields expected '{FormatBoolean(expectedShowDateFields)}', actual '{FormatBoolean(actual.ShowDateFields)}'");
+                    $"show-date-fields expected '{FormatBoolean(roadmap.ShowDateFields)}', actual '{FormatBoolean(actual.ShowDateFields)}'");
             }
         }
 

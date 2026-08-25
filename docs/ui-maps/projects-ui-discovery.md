@@ -38,7 +38,7 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 5. Table / Roadmap とも変更後は `button "Save view"` が表示され、`alertdialog "Save display options for <view>?"` の `button "Save"` で確定する。既存の 2 段階保存フローと同じ
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
-8. `Truncate titles` / `Show date fields` は親 View menu の direct `menuitemcheckbox` で、状態は `aria-checked` に保持される。2026-08-25 の Project #74 live診断ではclickでmenuが即閉じ、`Unsaved changes`/`Save view`は表示されず、menu再openとreload後にも値がpersistした。さらに片方のRoadmapで変更すると未操作のRoadmapにも同じ値が反映され、2 controlはProject内の全Roadmapで共有されることを確認した。menu textにはcurrent valueを表示しないため、ghpmvは各Roadmapから`aria-checked`を読み、全Roadmapへ同じshared stateを適用する
+8. `Truncate titles` / `Show date fields` は親 View menu の direct `menuitemcheckbox` で、状態は `aria-checked` に保持される。ghpmv は子 menu の `Markers` / `Field sum` と分離して読み書きし、Save view → reload 後に各 boolean を再読する
 
 ## Field default UI contract (2026-08-25 live discovery)
 
@@ -61,12 +61,11 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums
   - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
-  - 5=Fixture Roadmap Dates Hidden (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Truncate titles=on, Show date fields=off
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)

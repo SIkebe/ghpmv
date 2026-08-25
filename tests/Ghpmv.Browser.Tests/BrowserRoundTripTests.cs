@@ -250,15 +250,6 @@ public class BrowserRoundTripTests
                     TargetOrg,
                     result.ProjectNumber,
                     cancellationToken);
-                await new FieldSumRenderingObserver(targetSession).ValidateStandardFixtureAsync(
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    snapshot.Views.ToDictionary(
-                        view => view.Name,
-                        view => result.ViewNumbers[view.Number],
-                        StringComparer.Ordinal),
-                    cancellationToken);
 
                 var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
                 await viewImporter.ApplyFieldSumAsync(
@@ -279,7 +270,7 @@ public class BrowserRoundTripTests
                     result.ViewNumbers[sourceRoadmap.Number],
                     sourceRoadmap.Name,
                     truncateTitles: false,
-                    showDateFields: true,
+                    showDateFields: false,
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
@@ -318,19 +309,6 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
-                Assert.Contains(driftReport.Differences, difference =>
-                    difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("Fixture Roadmap Dates Hidden", StringComparison.Ordinal));
-                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
-                    FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(),
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    snapshot.Views.ToDictionary(
-                        view => view.Name,
-                        view => result.ViewNumbers[view.Number],
-                        StringComparer.Ordinal),
-                    cancellationToken);
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -438,10 +416,7 @@ public class BrowserRoundTripTests
         Assert.Equal("Quarter", sourceRoadmap.Ui.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
         Assert.True(sourceRoadmap.Ui.Roadmap?.TruncateTitles);
-        Assert.False(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
-        var sourceDatesHidden = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap Dates Hidden");
-        Assert.True(sourceDatesHidden.Ui!.Roadmap?.TruncateTitles);
-        Assert.False(sourceDatesHidden.Ui.Roadmap?.ShowDateFields);
+        Assert.True(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
 
         var sourceEmptySums = Assert.Single(source.Views, view => view.Name == "Fixture Empty Sums");
         Assert.Equal(["Status"], sourceEmptySums.GroupByFields);

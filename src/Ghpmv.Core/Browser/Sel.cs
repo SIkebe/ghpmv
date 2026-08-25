@@ -79,15 +79,6 @@ internal static class Sel
     public static ILocator GroupHeaderAggregateLabels(IPage page)
         => page.Locator("[class*='aggregate-labels-module__Label']:visible");
 
-    /// <summary>The Roadmap item/card containing an item-title locator.</summary>
-    public static ILocator RoadmapItem(ILocator title)
-        => title.Locator(
-            "xpath=ancestor::*[@role='row' or @role='listitem' or contains(@data-testid,'roadmap-item') or contains(@class,'roadmap-item') or contains(@class,'RoadmapItem')][1]");
-
-    /// <summary>Semantic date/time elements rendered within one Roadmap item.</summary>
-    public static ILocator RoadmapItemDateElements(ILocator item)
-        => item.Locator("time:visible, relative-time:visible");
-
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)
         => page.GetByRole(AriaRole.Dialog, new() { Name = "Select date fields" });

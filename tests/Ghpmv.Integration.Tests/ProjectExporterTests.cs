@@ -225,7 +225,7 @@ public class ProjectExporterTests
     {
         var snapshot = await ExportFixtureAsync();
 
-        var draft1 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 1");
+        var draft1 = Assert.Single(snapshot.Items, i => i.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
         var draft2 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 2");
         var draft3 = Assert.Single(snapshot.Items, i => i.Draft?.Title == "Fixture draft 3");
 

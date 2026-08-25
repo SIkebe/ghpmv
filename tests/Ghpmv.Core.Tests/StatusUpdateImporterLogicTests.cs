@@ -209,6 +209,8 @@ public class StatusUpdateImporterLogicTests
             Assert.Equal(0, result.Resumed);
             Assert.Equal(0, result.AlreadyComplete);
 
+            // An empty list is "captured, but there is nothing to replay" — a different
+            // state from a schema-v1 snapshot, so the summary is still emitted.
             Assert.Equal(
                 ["Status update import finished: 0 created, 0 resumed, 0 already complete."],
                 progress);

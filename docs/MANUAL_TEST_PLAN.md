@@ -126,7 +126,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 
 Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
-Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
+Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
 
 ---
 
@@ -336,18 +336,15 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 `--fixture --fixture-ui` の再実行では、別の操作で作成された同名 Project は Workflows の重複作成を避けるため UI 適用を自動で skip します。この操作が所有する Project は、前回の UI 適用が未完了なら再開し、完了済みなら skip します。既存 Project に fixture を強制的に再適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
 
 > **再実行時の注意:** `setup --fixture-ui` の View import は既存 View を名前で再利用するため、`Fixture Board` / `Fixture Roadmap` は重複しません。Workflows は built-in entries を再設定できますが、複製した Auto-add workflow は重複し得るため、完全にクリーンな検証には新しい fixture Project を使用してください。
->
-> `--fixture-ui --fixture-project` を単独で使う既存 Project は、Roadmap rendering 検証用の長い dated item を含む必要があります。含まれない場合は書き込み前に停止するため、`setup --fixture --fixture-ui` で browser fixture を作成してください。
 
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
   - `Fixture Board`: Board、Column by、Swimlanes、Field sum
-  - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、shared `Truncate titles`=on、`Show date fields`=off。fixture は truncation 確認用の長い draft title を含む
+  - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、`Truncate titles`=on、`Show date fields`=on。fixture は truncation 確認用の長い draft title を含む
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
-  - `Fixture Roadmap Dates Hidden`: grouped Roadmap、`Truncate titles`=on、`Show date fields`=off
-  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden`
+  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums`
 - Workflows
   - item state 系 built-in workflows
   - `Auto-add to project`
@@ -364,7 +361,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 Views:
 
-- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` の順に並べる
+- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` の順に並べる
 - `View 1` (Table)
   - filter=`status:Todo`
   - visible fields を標準 fixture に合わせる
@@ -383,15 +380,10 @@ Views:
   - Zoom=`Quarter`
   - Markers=`Fixture Date`
   - Truncate titles=on
-  - Show date fields=off
+  - Show date fields=on
 - `Fixture Empty Sums` (Table) を作成
   - group by Status
   - Field sum は空（`Count` を含めてすべて解除）
-- `Fixture Roadmap Dates Hidden` (Roadmap)
-  - group by Status
-  - Dates=`Fixture Date` → `Fixture Sprint end`
-  - Truncate titles=on
-  - Show date fields=off
 
 Workflows:
 
@@ -512,18 +504,14 @@ dotnet run --project src/Ghpmv.Cli -- export `
   - `Fixture Board`: `fieldSum=["Fixture Number"]`
   - `Fixture Roadmap`: `fieldSum=["Fixture Number 2"]`
   - `Fixture Empty Sums`: `fieldSum=[]`（submenu を取得できた空選択。control/submenu を取得できない場合は View UI 未取得 warning）
-  - `Fixture Roadmap Dates Hidden`: `fieldSum=["Fixture Number 2"]`, `truncateTitles=true`, `showDateFields=false`
 
 3 件以上の Field sum は GitHub UI で `1 more` と省略されますが、snapshot には実フィールド名が全件必要です。既存の snapshot 確認に次を追加し、別 export は実行しません。
 
 ```powershell
 $snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
 $snapshot.views |
-  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums', 'Fixture Roadmap Dates Hidden') |
-  Select-Object name, groupByFields,
-    @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } },
-    @{ Name = 'truncateTitles'; Expression = { $_.ui.roadmap.truncateTitles } },
-    @{ Name = 'showDateFields'; Expression = { $_.ui.roadmap.showDateFields } }
+  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums') |
+  Select-Object name, groupByFields, @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } }
 ```
 
 ### 7.2 Mapping CSV を補完
@@ -641,7 +629,7 @@ human-readable category table と `verify-report.json` の両方に `StatusUpdat
 Field defaults と Field sum はこの既存 round trip の中で確認し、別の export/import シナリオは実行しません。
 
 1. 初回 browser-assisted verify で `View: Match` を確認します。Group by、Field sum menu の完全な選択集合、空集合は Playwright capture と verifier が機械比較するため、同じ内容を目視しません。
-2. Issue #62/#65 の派生描画 checkpoint は次の command で自動検証します。Playwright が target の `View 1`、`Fixture Roadmap`、`Fixture Roadmap Dates Hidden` を reload し、visible group header、aggregate label、長いtitleのtruncation、date fieldの表示/非表示をDOMで確認します。ユーザーによる reload / 目視確認は不要です。
+2. Issue #62 の派生描画 checkpoint は次の command で自動検証します。Playwright が target の `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で確認します。ユーザーによる reload / 目視確認は不要です。
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `
@@ -651,7 +639,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile target
 ```
 
-`Rendered Field sums verified` が3 Viewに出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=3` と exit code 0 になることを確認します。
+`Rendered Field sums verified` が両 View に出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=2` と exit code 0 になることを確認します。
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-field-default-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` と既存の `--fixture-field-sum-drift` を同じ target に実行します。前者は Text / zero Number / Single-select を変更し、negative Number default を clear します。
 5. browser-assisted verify を `--categories Field,View` で再実行し、4 件の `default value mismatch` と `view 'View 1': field sum mismatch` を確認します。
@@ -714,9 +702,9 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap の長い title と date-field 表示が source/target で一致し、reload 後も維持される。
-- [ ] `setup --fixture-roadmap-display-drift` がProject-shared stateを `(true,false)` から `(false,true)` へ変更し、verify が両Roadmapの両property mismatchを報告して、同じ target への再 import で `View: Match` に戻る。
+- [ ] `setup --fixture-roadmap-display-drift` 後の verify が `truncate titles mismatch` と `show date fields mismatch` を報告し、同じ target への再 import で `View: Match` に戻る。
 - [ ] View 名が一致。
-- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` で一致。
+- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。
 - [ ] import を再実行しても既に正しい tab order は変化しない。
 
@@ -753,6 +741,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] source と target の `project.template` が一致し、Organization の Templates UI と Create project ダイアログに表示される。
 - [ ] Status Updates を含む import では、target が一時的に通常 Project となり、全 writer 完了後に template へ戻る。
 - [ ] snapshot の `project.template` を `false` にして既存 template target へ再 import すると、最終段で通常 Projectへ戻る。
+- [ ] `project.template` 行を削除した schema v1 snapshot では、既存 target の template 状態が変わらない。
 
 ---
 

@@ -7,7 +7,7 @@ namespace Ghpmv.Core.Snapshot;
 public sealed record ProjectSnapshot
 {
     /// <summary>The schema version written by the current tool.</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 1;
 
     public required int SchemaVersion { get; init; }
 
@@ -52,7 +52,8 @@ public sealed record StatusUpdateSnapshot
     public required string Body { get; init; }
 
     /// <summary>
-    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no status.
+    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no
+    /// status or when a schema-v1 snapshot predates this optional property.
     /// </summary>
     public string? Status { get; init; }
 
@@ -275,11 +276,11 @@ public sealed record RoadmapSettingsSnapshot
 
     public IReadOnlyList<string>? Markers { get; init; }
 
-    /// <summary>Whether long item titles are truncated. Null when the UI control could not be read.</summary>
-    public bool? TruncateTitles { get; init; }
+    /// <summary>Whether long item titles are truncated.</summary>
+    public bool TruncateTitles { get; init; }
 
-    /// <summary>Whether item date fields are rendered. Null when the UI control could not be read.</summary>
-    public bool? ShowDateFields { get; init; }
+    /// <summary>Whether item date fields are rendered on the Roadmap.</summary>
+    public bool ShowDateFields { get; init; }
 }
 
 /// <summary>

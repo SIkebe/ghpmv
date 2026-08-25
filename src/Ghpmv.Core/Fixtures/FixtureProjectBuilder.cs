@@ -42,8 +42,6 @@ public sealed class FixtureProjectBuilder
 
     public bool AllowExistingEmptyRepository { get; init; }
 
-    public bool IncludeRoadmapRenderingItem { get; init; }
-
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
 
     public async Task<FixtureProjectSetupResult> CreateAsync(
@@ -226,10 +224,6 @@ public sealed class FixtureProjectBuilder
                 pullRequestNumber,
                 teamSlug,
                 referenceDate);
-            if (IncludeRoadmapRenderingItem)
-            {
-                snapshot = AddRoadmapRenderingItem(snapshot);
-            }
             var importStatusUpdates = true;
             IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
                 new Dictionary<int, string>();
@@ -1471,7 +1465,7 @@ public sealed class FixtureProjectBuilder
             Workflows = [],
             Items =
             [
-                Draft(0, "Fixture draft 1", false, [],
+                Draft(0, RoadmapLongTitle, false, [],
                     Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), ProjectMultiSelect("Backend", "Frontend"), Sprint("Sprint 0"), Status("Todo")),
                 Draft(1, "Fixture draft 2", false, [],
                     Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), ProjectMultiSelect("Operations"), Sprint("Sprint 1"), Status("In Progress")),
@@ -1574,29 +1568,6 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot IssueMultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
-    }
-
-    internal static ProjectSnapshot AddRoadmapRenderingItem(ProjectSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        var source = snapshot.Items.First(item => item.Draft?.Title == "Fixture draft 1");
-        var item = source with
-        {
-            Position = snapshot.Items.Count,
-            Draft = source.Draft! with { Title = RoadmapLongTitle },
-        };
-        return snapshot with { Items = [.. snapshot.Items, item] };
-    }
-
-    public static bool IsRoadmapRenderingItem(ItemSnapshot item)
-    {
-        ArgumentNullException.ThrowIfNull(item);
-        return !item.IsArchived
-            && string.Equals(item.Draft?.Title, RoadmapLongTitle, StringComparison.Ordinal)
-            && item.FieldValues.Any(value =>
-                value.FieldName == "Fixture Date" && value.Date is not null)
-            && item.FieldValues.Any(value =>
-                value.FieldName == "Fixture Sprint" && value.IterationTitle is not null);
     }
 
     private async Task EnsureMultiSelectIssueFieldValueAsync(

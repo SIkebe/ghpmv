@@ -1033,8 +1033,8 @@ public sealed class ProjectVerifier
             && string.Equals(source.TargetField, target.TargetField, StringComparison.Ordinal)
             && string.Equals(source.Zoom, target.Zoom, StringComparison.Ordinal)
             && UiListEquals(source.Markers, target.Markers)
-            && (source.TruncateTitles is null || source.TruncateTitles == target.TruncateTitles)
-            && (source.ShowDateFields is null || source.ShowDateFields == target.ShowDateFields);
+            && source.TruncateTitles == target.TruncateTitles
+            && source.ShowDateFields == target.ShowDateFields;
 
     private static bool MultisetEquals<T>(
         IReadOnlyList<T> source,
@@ -1145,15 +1145,15 @@ public sealed class ProjectVerifier
         List<VerifyDifference> differences,
         string viewName,
         string setting,
-        bool? source,
-        bool? target)
+        bool source,
+        bool target)
     {
-        if (source is not null && source != target)
+        if (source != target)
         {
             AddError(
                 differences,
                 ViewCategory,
-                $"view '{viewName}': {setting} mismatch (source '{source.Value.ToString().ToLowerInvariant()}', target '{target?.ToString().ToLowerInvariant() ?? "not captured"}')");
+                $"view '{viewName}': {setting} mismatch (source '{source.ToString().ToLowerInvariant()}', target '{target.ToString().ToLowerInvariant()}')");
         }
     }
 

@@ -121,8 +121,8 @@ public sealed class ViewUiExporter
         await menu.WaitForAsync().ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
 
-        bool? truncateTitles = null;
-        bool? showDateFields = null;
+        var truncateTitles = false;
+        var showDateFields = false;
         if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
         {
             truncateTitles = await ReadRoadmapDisplayOptionAsync(menu, view.Name, "Truncate titles").ConfigureAwait(false);
@@ -165,27 +165,22 @@ public sealed class ViewUiExporter
         };
     }
 
-    private async Task<bool?> ReadRoadmapDisplayOptionAsync(ILocator menu, string viewName, string label)
+    private static async Task<bool> ReadRoadmapDisplayOptionAsync(ILocator menu, string viewName, string label)
     {
         var option = Sel.ViewOptionCheckbox(menu, label);
         if (await option.CountAsync().ConfigureAwait(false) == 0)
         {
-            _warnings.Add($"view '{viewName}': roadmap display option '{label}' could not be read — control is unavailable");
-            return null;
+            throw new InvalidOperationException(
+                $"view '{viewName}': roadmap display option '{label}' could not be read because the control is unavailable");
         }
 
         return await option.First.GetAttributeAsync("aria-checked").ConfigureAwait(false) switch
         {
             "true" => true,
             "false" => false,
-            _ => WarnUnreadableRoadmapDisplayOption(viewName, label),
+            _ => throw new InvalidOperationException(
+                $"view '{viewName}': roadmap display option '{label}' could not be read because aria-checked is unavailable"),
         };
-    }
-
-    private bool? WarnUnreadableRoadmapDisplayOption(string viewName, string label)
-    {
-        _warnings.Add($"view '{viewName}': roadmap display option '{label}' could not be read — aria-checked is unavailable");
-        return null;
     }
 
     private static async Task<string?> ReadMenuItemTextAsync(ILocator menu, string label)

@@ -290,7 +290,7 @@ public class SnapshotTests
         const string Json =
             """
             {
-              "schemaVersion": 2,
+              "schemaVersion": 1,
               "project": { "title": "T", "public": false, "closed": false },
               "fields": [
                 { "name": "Text", "dataType": "TEXT" },
@@ -310,12 +310,63 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void Deserialize_snapshot_without_collaborators_and_linked_repositories_yields_null()
+    {
+        // Snapshots written before the collaborator/linked-repository fields stay loadable
+        // within schema version 1; the new fields deserialize as null ("not captured").
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [], "views": [], "workflows": [], "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.NotNull(restored);
+        Assert.Null(restored.Collaborators);
+        Assert.Null(restored.LinkedRepositories);
+        Assert.Null(restored.LinkedTeams);
+    }
+
+    [Fact]
+    public void View_without_tab_position_remains_backward_compatible()
+    {
+        const string Json =
+            """
+            {
+              "schemaVersion": 1,
+              "project": { "title": "T", "public": false, "closed": false },
+              "fields": [],
+              "views": [{
+                "number": 7,
+                "name": "Legacy",
+                "layout": "TABLE_LAYOUT",
+                "groupByFields": [],
+                "sortByFields": [],
+                "verticalGroupByFields": [],
+                "visibleFields": []
+              }],
+              "workflows": [],
+              "items": []
+            }
+            """;
+
+        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
+
+        Assert.Null(Assert.Single(restored!.Views).TabPosition);
+        Assert.Equal(1, restored.SchemaVersion);
+    }
+
+    [Fact]
     public void Serialized_json_contains_schema_version()
     {
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -483,20 +534,22 @@ public class SnapshotTests
 
         var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
 
-        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates);
+        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates!);
         Assert.Null(restoredUpdate.Status);
         Assert.Equal("Update without a status.", restoredUpdate.Body);
     }
 
     [Fact]
-    public void Serialized_json_uses_the_current_schema_version()
+    public void Serialized_json_keeps_schema_version_one_when_status_updates_are_present()
     {
-        Assert.Equal(2, ProjectSnapshot.CurrentSchemaVersion);
+        // Status updates are an additive schema-v1 field: capturing them must not bump
+        // the version, otherwise every previously written snapshot becomes unreadable.
+        Assert.Equal(1, ProjectSnapshot.CurrentSchemaVersion);
 
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
         Assert.True(document.RootElement.GetProperty("project").GetProperty("template").GetBoolean());
     }

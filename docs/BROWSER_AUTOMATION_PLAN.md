@@ -26,8 +26,8 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | sort(複数キー+方向) | GraphQL `sortByFields`(`ProjectV2SortByField.direction`) | **UI** | |
 | **Slice by** | ❌ API に無い → **UI で読む** | **UI** | |
 | **Field sum** | ❌ API に無い → **UI で読む** | **UI** | Board と grouped Table / Roadmap。Count、複数 Number field、空集合を complete-set 同期 |
-| **Roadmap 設定(Dates / Zoom / Markers / Truncate titles / Show date fields)** | ❌ API に無い → **UI で読む** | **UI** | 表示optionは全Roadmap Viewで共有されるため、各Viewから同一stateをcapture/replay |
-| タブの並び順 | **UI**(`navigation "Select view"` 内のsaved tab `href`順) | **UI**(タブの drag & drop) | GraphQL `POSITION`は現行UIのsaved-tab順と乖離する場合がある |
+| **Roadmap 設定(Dates / Zoom / Markers / Truncate titles / Show date fields)** | ❌ API に無い → **UI で読む** | **UI** | 2つの表示 option は boolean として独立に同期 |
+| タブの並び順 | **UI**(`navigation "Select view"` 内のsaved tab `href`順) | **UI**(タブの drag & drop) | GraphQL `POSITION`は現行UIのsaved-tab順と乖離する場合がある。`ViewSnapshot.tabPosition`はschema v1のnullable additive field |
 
 ### Workflow のプロパティ別ソースマップ
 
@@ -336,7 +336,6 @@ browser importer 自体は各 view / workflow の適用直後に完全な read-b
   2. "Fixture Board" — Board, Column by, swimlane, Field sum=[Fixture Number]
   3. "Fixture Roadmap" — grouped Roadmap, Field sum=[Fixture Number 2], Dates, Zoom, Markers
   4. "Fixture Empty Sums" — grouped Table, Field sum=[]
-  5. "Fixture Roadmap Dates Hidden" — grouped Roadmap, Truncate titles=on, Show date fields=off
 - Workflows: W-1〜W-8 を非デフォルト Status 値で有効化、W-9 を 2 本(別リポ + 別フィルター)。1 つは disabled のまま設定を持たせる(§4.3 の D0 論点の検証用)
 - Items: issue 10 / PR 3 / draft 3(archived 2 を含む)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`

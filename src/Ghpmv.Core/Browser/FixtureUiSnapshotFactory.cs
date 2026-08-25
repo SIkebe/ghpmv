@@ -49,14 +49,14 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
-    /// <summary>Creates deliberate project-shared Roadmap display drift for every Roadmap View.</summary>
+    /// <summary>Creates deliberate drift for both Roadmap display checkboxes.</summary>
     public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
     {
         var snapshot = Create(repositoryName);
         return snapshot with
         {
             Views = snapshot.Views.Select(view =>
-                string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal)
+                string.Equals(view.Name, "Fixture Roadmap", StringComparison.Ordinal)
                     ? view with
                     {
                         Ui = view.Ui! with
@@ -64,7 +64,7 @@ public static class FixtureUiSnapshotFactory
                             Roadmap = view.Ui.Roadmap! with
                             {
                                 TruncateTitles = false,
-                                ShowDateFields = true,
+                                ShowDateFields = false,
                             },
                         },
                     }
@@ -209,7 +209,7 @@ public static class FixtureUiSnapshotFactory
                     Zoom = "Quarter",
                     Markers = ["Fixture Date"],
                     TruncateTitles = true,
-                    ShowDateFields = false,
+                    ShowDateFields = true,
                 },
             },
         },
@@ -227,31 +227,6 @@ public static class FixtureUiSnapshotFactory
             Ui = new ViewUiSnapshot
             {
                 FieldSum = [],
-            },
-        },
-        new ViewSnapshot
-        {
-            Number = 5,
-            TabPosition = 4,
-            Name = "Fixture Roadmap Dates Hidden",
-            Layout = "ROADMAP_LAYOUT",
-            Filter = null,
-            GroupByFields = ["Status"],
-            SortByFields = [],
-            VerticalGroupByFields = [],
-            VisibleFields = [],
-            Ui = new ViewUiSnapshot
-            {
-                FieldSum = ["Fixture Number 2"],
-                Roadmap = new RoadmapSettingsSnapshot
-                {
-                    StartField = "Fixture Date",
-                    TargetField = "Fixture Sprint end",
-                    Zoom = "Quarter",
-                    Markers = ["Fixture Date"],
-                    TruncateTitles = true,
-                    ShowDateFields = false,
-                },
             },
         },
     ];
