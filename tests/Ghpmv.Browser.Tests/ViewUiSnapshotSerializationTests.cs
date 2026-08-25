@@ -40,6 +40,8 @@ public class ViewUiSnapshotSerializationTests
                             TargetField = "Fixture Sprint end",
                             Zoom = "Month",
                             Markers = ["Fixture Sprint"],
+                            TruncateTitles = true,
+                            ShowDateFields = false,
                         },
                         ScrapedAt = scrapedAt,
                     },
@@ -92,9 +94,66 @@ public class ViewUiSnapshotSerializationTests
             Assert.Equal("Fixture Sprint end", roadmap.Ui.Roadmap.TargetField);
             Assert.Equal("Month", roadmap.Ui.Roadmap.Zoom);
             Assert.Equal(["Fixture Sprint"], roadmap.Ui.Roadmap.Markers);
+            Assert.True(roadmap.Ui.Roadmap.TruncateTitles);
+            Assert.False(roadmap.Ui.Roadmap.ShowDateFields);
 
             Assert.Null(loaded.Views[1].Ui);
             Assert.Empty(loaded.Views[2].Ui!.FieldSum!);
+        }
+
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Roadmap_display_options_round_trip_all_boolean_combinations(
+        bool truncateTitles,
+        bool showDateFields)
+    {
+        var snapshot = new ProjectSnapshot
+        {
+            SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+            Fields = [],
+            Views =
+            [
+                new ViewSnapshot
+                {
+                    Number = 1,
+                    Name = "Roadmap",
+                    Layout = "ROADMAP_LAYOUT",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = [],
+                    VisibleFields = [],
+                    Ui = new ViewUiSnapshot
+                    {
+                        Roadmap = new RoadmapSettingsSnapshot
+                        {
+                            TruncateTitles = truncateTitles,
+                            ShowDateFields = showDateFields,
+                        },
+                    },
+                },
+            ],
+            Workflows = [],
+            Items = [],
+        };
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-browser-tests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
+            var loaded = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
+            var roadmap = Assert.Single(loaded.Views).Ui!.Roadmap!;
+
+            Assert.Equal(truncateTitles, roadmap.TruncateTitles);
+            Assert.Equal(showDateFields, roadmap.ShowDateFields);
         }
         finally
         {

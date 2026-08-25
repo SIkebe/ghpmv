@@ -262,6 +262,18 @@ public class BrowserRoundTripTests
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
+                var sourceRoadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap");
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: false,
+                    showDateFields: false,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+
                 var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
                 await workflowImporter.UpdateExistingFilterAsync(
                     TargetOrg,
@@ -289,6 +301,14 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -395,6 +415,8 @@ public class BrowserRoundTripTests
         Assert.Equal(["Fixture Number 2"], sourceRoadmap.Ui!.FieldSum);
         Assert.Equal("Quarter", sourceRoadmap.Ui.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+        Assert.True(sourceRoadmap.Ui.Roadmap?.TruncateTitles);
+        Assert.True(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
 
         var sourceEmptySums = Assert.Single(source.Views, view => view.Name == "Fixture Empty Sums");
         Assert.Equal(["Status"], sourceEmptySums.GroupByFields);
@@ -496,6 +518,8 @@ public class BrowserRoundTripTests
                 Assert.Equal(roadmap.TargetField, actual.Ui.Roadmap.TargetField);
                 Assert.Equal(roadmap.Zoom, actual.Ui.Roadmap.Zoom);
                 Assert.Equal(roadmap.Markers ?? [], actual.Ui.Roadmap.Markers ?? []);
+                Assert.Equal(roadmap.TruncateTitles, actual.Ui.Roadmap.TruncateTitles);
+                Assert.Equal(roadmap.ShowDateFields, actual.Ui.Roadmap.ShowDateFields);
             }
         }
     }

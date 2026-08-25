@@ -454,7 +454,7 @@ public class FixtureProjectBuilderTests
         Assert.Equal(
             ["2026-07-27", "2026-08-21", "2026-09-12"],
             snapshot.Items
-                .Where(item => item.Draft?.Title is "Fixture draft 1" or "Fixture draft 2" or "Fixture draft 3")
+                .Where(item => item.Draft?.Title is FixtureProjectBuilder.RoadmapLongTitle or "Fixture draft 2" or "Fixture draft 3")
                 .Select(item => Assert.Single(item.FieldValues, value => value.FieldName == "Fixture Date").Date));
     }
 
@@ -569,7 +569,7 @@ public class FixtureProjectBuilderTests
         Assert.Null(field.IssueField);
         Assert.Equal(["Backend", "Frontend", "Operations"], field.Options!.Select(option => option.Name));
 
-        var draft = Assert.Single(snapshot.Items, item => item.Draft?.Title == "Fixture draft 1");
+        var draft = Assert.Single(snapshot.Items, item => item.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
         var value = Assert.Single(draft.FieldValues, value => value.FieldName == field.Name);
         Assert.Equal(false, value.IsIssueField);
         Assert.Equal(["Backend", "Frontend"], value.MultiSelectOptionNames);
