@@ -46,6 +46,7 @@ public sealed class FieldDefaultFixtureObserver
         var projectId = await ResolveProjectIdAsync(organization, projectNumber, cancellationToken)
             .ConfigureAwait(false);
         string? itemId = null;
+        IReadOnlyList<string>? reconciledIds = null;
         try
         {
             try
@@ -58,7 +59,7 @@ public sealed class FieldDefaultFixtureObserver
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
-                var reconciledIds = await FindMatchingDraftItemIdsAsync(
+                reconciledIds = await WaitForMatchingDraftItemIdsAsync(
                     projectId,
                     title,
                     CancellationToken.None).ConfigureAwait(false);
@@ -72,31 +73,23 @@ public sealed class FieldDefaultFixtureObserver
                     exception);
             }
 
-            var idDeadline = DateTimeOffset.UtcNow.AddSeconds(30);
-            while (itemId is null)
+            reconciledIds = await WaitForMatchingDraftItemIdsAsync(
+                projectId,
+                title,
+                cancellationToken).ConfigureAwait(false);
+            if (reconciledIds.Count == 1)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var matches = await FindMatchingDraftItemIdsAsync(
-                    projectId,
-                    title,
-                    cancellationToken).ConfigureAwait(false);
-                if (matches.Count == 1)
-                {
-                    itemId = matches[0];
-                    break;
-                }
-                if (matches.Count > 1)
-                {
-                    throw new InvalidOperationException(
-                        $"Field-default check draft '{title}' matched multiple target items.");
-                }
-                if (DateTimeOffset.UtcNow >= idDeadline)
-                {
-                    throw new TimeoutException(
-                        $"The field-default check draft '{title}' was not visible through GraphQL within 30 seconds.");
-                }
-
-                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+                itemId = reconciledIds[0];
+            }
+            else if (reconciledIds.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Field-default check draft '{title}' matched multiple target items.");
+            }
+            else
+            {
+                throw new TimeoutException(
+                    $"The field-default check draft '{title}' was not visible through GraphQL within 30 seconds.");
             }
 
             OnProgress?.Invoke($"Field-default check draft created: id={itemId} title='{title}'");
@@ -152,8 +145,10 @@ public sealed class FieldDefaultFixtureObserver
             {
                 var cleanupIds = itemId is not null
                     ? [itemId]
-                    : await FindMatchingDraftItemIdsAsync(projectId, title, CancellationToken.None)
-                        .ConfigureAwait(false);
+                    : reconciledIds ?? await WaitForMatchingDraftItemIdsAsync(
+                        projectId,
+                        title,
+                        CancellationToken.None).ConfigureAwait(false);
                 foreach (var cleanupId in cleanupIds)
                 {
                     await DeleteAndConfirmDraftAsync(projectId, cleanupId, title).ConfigureAwait(false);
@@ -321,6 +316,37 @@ public sealed class FieldDefaultFixtureObserver
         }
 
         return ids;
+    }
+
+    private Task<IReadOnlyList<string>> WaitForMatchingDraftItemIdsAsync(
+        string projectId,
+        string title,
+        CancellationToken cancellationToken)
+        => PollForMatchesAsync(
+            token => FindMatchingDraftItemIdsAsync(projectId, title, token),
+            TimeSpan.FromSeconds(30),
+            TimeSpan.FromMilliseconds(500),
+            cancellationToken);
+
+    internal static async Task<IReadOnlyList<string>> PollForMatchesAsync(
+        Func<CancellationToken, Task<IReadOnlyList<string>>> queryAsync,
+        TimeSpan timeout,
+        TimeSpan pollInterval,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(queryAsync);
+        var deadline = DateTimeOffset.UtcNow.Add(timeout);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var matches = await queryAsync(cancellationToken).ConfigureAwait(false);
+            if (matches.Count > 0 || DateTimeOffset.UtcNow >= deadline)
+            {
+                return matches;
+            }
+
+            await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task DeleteAndConfirmDraftAsync(

@@ -102,7 +102,6 @@ internal static class Sel
     public static ILocator FieldSettingsEntry(IPage page, string fieldName)
         => page.GetByRole(AriaRole.Link, new() { Name = fieldName, Exact = true })
             .Or(page.GetByRole(AriaRole.Button, new() { Name = fieldName, Exact = true }))
-            .Or(page.GetByText(fieldName, new() { Exact = true }))
             .First;
 
     /// <summary>Heading of one custom field's settings page.</summary>

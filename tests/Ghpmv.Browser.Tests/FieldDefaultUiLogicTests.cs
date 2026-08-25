@@ -231,5 +231,21 @@ public class FieldDefaultUiLogicTests
         Assert.Contains("Fixture Text", exception.Message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task PollForMatchesAsync_retries_until_an_ambiguous_draft_is_visible()
+    {
+        var attempts = 0;
+
+        var matches = await FieldDefaultFixtureObserver.PollForMatchesAsync(
+            _ => Task.FromResult<IReadOnlyList<string>>(
+                ++attempts < 3 ? [] : ["PVTI_test"]),
+            TimeSpan.FromSeconds(1),
+            TimeSpan.Zero,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, attempts);
+        Assert.Equal(["PVTI_test"], matches);
+    }
+
     private sealed record SequenceItemResult(int Skipped);
 }
