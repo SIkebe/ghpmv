@@ -110,31 +110,6 @@ public class CliImportTests
     }
 
     [Fact]
-    public async Task Verify_explicit_status_update_category_fails_for_legacy_snapshot()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-verify-legacy-status-" + Guid.NewGuid().ToString("N"));
-        await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
-
-        using var server = new GraphQlStubServer(
-            VerifyProjectResponse,
-            VerifyStatusUpdatesResponse);
-        try
-        {
-            var result = await RunVerifyCliAsync(directory, server, "--categories", "StatusUpdate");
-
-            Assert.Equal(1, result.ExitCode);
-            Assert.Equal(2, server.RequestBodies.Count);
-            Assert.Contains("StatusUpdate: NotVerified", result.Output, StringComparison.Ordinal);
-            Assert.Contains("1 not verified", result.Output, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
     public async Task Conflict_skip_with_browser_automation_does_not_run_downstream_importers()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -250,7 +225,8 @@ public class CliImportTests
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
             UpdateProjectResponse,
-            EmptyFieldsResponse);
+            EmptyFieldsResponse,
+            NonTemplateProjectResponse);
         try
         {
             var result = await RunCliAsync(directory, server, "--on-conflict", "update");
@@ -266,7 +242,7 @@ public class CliImportTests
                 result.Output,
                 StringComparison.Ordinal);
             Assert.Contains("views: imported=0 warnings=0", result.Output, StringComparison.Ordinal);
-            Assert.Equal(3, server.RequestBodies.Count);
+            Assert.Equal(4, server.RequestBodies.Count);
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("mutation", StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(server.RequestBodies, request =>
@@ -314,7 +290,8 @@ public class CliImportTests
                        OwnerResponse,
                        CreateProjectResponse,
                        UpdateCreatedProjectResponse,
-                       EmptyFieldsResponse))
+                       EmptyFieldsResponse,
+                       NonTemplateProjectResponse))
             {
                 var created = await RunCliAsync(directory, createServer);
 
@@ -438,7 +415,8 @@ public class CliImportTests
             ExistingProjectResponse,
             UpdateProjectResponse,
             EmptyFieldsResponse,
-            PositionResponse);
+            PositionResponse,
+            NonTemplateProjectResponse);
         try
         {
             var result = await RunCliAsync(directory, server);
@@ -548,14 +526,19 @@ public class CliImportTests
         var withoutDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-none-" + Guid.NewGuid().ToString("N"));
         var withDirectory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-some-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(MinimalSnapshot() with { StatusUpdates = [] }, withoutDirectory, cancellationToken);
-        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), withDirectory, cancellationToken);
+        var templateSnapshot = SnapshotWithStatusUpdates();
+        await SnapshotFile.SaveAsync(
+            templateSnapshot with { Project = templateSnapshot.Project with { Template = true } },
+            withDirectory,
+            cancellationToken);
 
         try
         {
             using (var withoutServer = new GraphQlStubServer(
                 ExistingProjectResponse,
                 UpdateProjectResponse,
-                EmptyFieldsResponse))
+                EmptyFieldsResponse,
+                NonTemplateProjectResponse))
             {
                 var withoutResult = await RunCliAsync(withoutDirectory, withoutServer, "--on-conflict", "update");
 
@@ -565,8 +548,7 @@ public class CliImportTests
                     withoutResult.Output,
                     StringComparison.Ordinal);
 
-                // An empty status-update list must not even probe the template state.
-                Assert.Equal(3, withoutServer.RequestBodies.Count);
+                Assert.Equal(4, withoutServer.RequestBodies.Count);
                 Assert.DoesNotContain(withoutServer.RequestBodies, request =>
                     request.Contains("ProjectV2AsTemplate", StringComparison.Ordinal));
                 Assert.DoesNotContain(withoutServer.RequestBodies, request =>
@@ -602,11 +584,15 @@ public class CliImportTests
     }
 
     [Fact]
-    public async Task Import_restores_the_template_after_downstream_importers()
+    public async Task Import_applies_the_requested_template_state_after_downstream_importers()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-order-" + Guid.NewGuid().ToString("N"));
-        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+        var snapshot = SnapshotWithStatusUpdates();
+        await SnapshotFile.SaveAsync(
+            snapshot with { Project = snapshot.Project with { Template = true } },
+            directory,
+            cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
@@ -634,14 +620,14 @@ public class CliImportTests
             Assert.True(unmarkIndex >= 0 && unmarkIndex < createIndex);
             Assert.True(createIndex < markIndex);
 
-            // Restoration is the final orchestration stage: nothing is sent afterwards.
+            // The requested final template state is the last orchestration stage.
             Assert.Equal(server.RequestBodies.Count - 1, markIndex);
             Assert.Contains(
                 "Temporarily unmarking the target project as a template before status update writes...",
                 result.Error,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "Restoring the target project's template state as the final import stage...",
+                "Marking the target project as a template as the final import stage...",
                 result.Error,
                 StringComparison.Ordinal);
             Assert.Contains(
@@ -738,7 +724,11 @@ public class CliImportTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-template-restore-fail-" + Guid.NewGuid().ToString("N"));
-        await SnapshotFile.SaveAsync(SnapshotWithStatusUpdates(), directory, cancellationToken);
+        var snapshot = SnapshotWithStatusUpdates();
+        await SnapshotFile.SaveAsync(
+            snapshot with { Project = snapshot.Project with { Template = true } },
+            directory,
+            cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,

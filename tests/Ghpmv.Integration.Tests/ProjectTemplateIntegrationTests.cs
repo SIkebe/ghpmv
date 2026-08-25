@@ -110,68 +110,6 @@ public class ProjectTemplateIntegrationTests
         }
     }
 
-    [Fact]
-    public async Task Existing_template_can_be_unmarked_and_legacy_null_preserves_state()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        using var client = IntegrationTestSettings.CreateClient(Token);
-        var initialDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        var ordinaryDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        var legacyDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
-        ImportResult? target = null;
-
-        try
-        {
-            var initial = Snapshot(NewTitle("existing"), template: true, includeStatusUpdate: false);
-            target = await ImportCompleteSnapshotAsync(
-                client,
-                TargetOrg,
-                initial,
-                initialDirectory,
-                addStatusAttribution: true,
-                registerProject: result => target = result,
-                cancellationToken);
-
-            var ordinary = initial with { Project = initial.Project with { Template = false } };
-            await new ProjectImporter(client)
-            {
-                OnConflict = ConflictAction.Update,
-                OperationLogDirectory = ordinaryDirectory,
-            }.ImportIntoAsync(ordinary, TargetOrg, target.ProjectNumber, cancellationToken);
-            await ProjectTemplateWriteSession.SetFinalStateAsync(
-                client,
-                target.ProjectId,
-                desiredTemplate: false,
-                cancellationToken: cancellationToken);
-            Assert.False((await ExportAsync(client, target.ProjectNumber, cancellationToken)).Project.Template);
-
-            await ProjectTemplateWriteSession.SetFinalStateAsync(
-                client,
-                target.ProjectId,
-                desiredTemplate: true,
-                cancellationToken: cancellationToken);
-            var legacy = ordinary with { Project = ordinary.Project with { Template = null } };
-            await new ProjectImporter(client)
-            {
-                OnConflict = ConflictAction.Update,
-                OperationLogDirectory = legacyDirectory,
-            }.ImportIntoAsync(legacy, TargetOrg, target.ProjectNumber, cancellationToken);
-
-            Assert.True((await ExportAsync(client, target.ProjectNumber, cancellationToken)).Project.Template);
-        }
-        finally
-        {
-            if (target is not null)
-            {
-                await DeleteProjectAsync(client, target.ProjectId);
-            }
-
-            TryDeleteDirectory(initialDirectory);
-            TryDeleteDirectory(ordinaryDirectory);
-            TryDeleteDirectory(legacyDirectory);
-        }
-    }
-
     private static async Task<ImportResult> ImportCompleteSnapshotAsync(
         GitHubGraphQLClient client,
         string organization,
@@ -224,7 +162,7 @@ public class ProjectTemplateIntegrationTests
             await ProjectTemplateWriteSession.SetFinalStateAsync(
                 client,
                 result.ProjectId,
-                snapshot.Project.Template!.Value,
+                snapshot.Project.Template,
                 cancellationToken: cancellationToken);
         }
 

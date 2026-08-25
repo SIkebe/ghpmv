@@ -375,39 +375,6 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
-    public async Task Legacy_item_log_project_id_is_persisted_for_completion()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-project-id-").FullName;
-        try
-        {
-            var projectLog = new ProjectImportLog { ImportCompleted = false };
-            await projectLog.SaveAsync(directory, TestContext.Current.CancellationToken);
-            var itemLog = new ImportLog
-            {
-                ProjectId = "PVT_legacy",
-                SourceSnapshotFingerprint = "fingerprint",
-            };
-
-            var changed = await FixtureProjectBuilder.PersistLegacyProjectIdAsync(
-                projectLog,
-                itemLog,
-                directory,
-                TestContext.Current.CancellationToken);
-
-            Assert.True(changed);
-            Assert.Equal(
-                "PVT_legacy",
-                (await ProjectImportLog.LoadAsync(
-                    directory,
-                    TestContext.Current.CancellationToken)).CreatedProjectId);
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
     public void Demo_fixture_exercises_every_snapshot_field_pattern()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(
@@ -467,13 +434,11 @@ public class FixtureProjectBuilderTests
             var first = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
                 operationDirectory,
                 useCurrentWeek: true,
-                hasPriorOperationState: false,
                 currentDate: new DateOnly(2026, 8, 20),
                 TestContext.Current.CancellationToken);
             var retry = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
                 operationDirectory,
                 useCurrentWeek: true,
-                hasPriorOperationState: true,
                 currentDate: new DateOnly(2026, 9, 7),
                 TestContext.Current.CancellationToken);
 
@@ -484,27 +449,6 @@ public class FixtureProjectBuilderTests
                 await File.ReadAllTextAsync(
                     Path.Combine(operationDirectory, "fixture-reference-date"),
                     TestContext.Current.CancellationToken));
-        }
-        finally
-        {
-            Directory.Delete(operationDirectory, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Existing_fixture_operation_without_reference_date_keeps_legacy_dates()
-    {
-        var operationDirectory = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-reference-date-").FullName;
-        try
-        {
-            var referenceDate = await FixtureProjectBuilder.ResolveFixtureReferenceDateAsync(
-                operationDirectory,
-                useCurrentWeek: true,
-                hasPriorOperationState: true,
-                currentDate: new DateOnly(2026, 8, 17),
-                TestContext.Current.CancellationToken);
-
-            Assert.Equal(new DateOnly(2026, 1, 1), referenceDate);
         }
         finally
         {
@@ -622,63 +566,6 @@ public class FixtureProjectBuilderTests
             projectAlreadyExists: true,
             hasItemWork: FixtureProjectBuilder.HasItemWork(log),
             projectImportWasPending: false));
-    }
-
-    [Fact]
-    public void Legacy_fixture_log_rebinds_to_the_status_update_snapshot_without_losing_item_state()
-    {
-        var snapshot = FixtureProjectBuilder.CreateSnapshot(
-            "Fixture",
-            "example/fixture",
-            "octocat",
-            pullRequestNumber: 2);
-        var legacySnapshot = snapshot with { StatusUpdates = null };
-        var legacyLog = new ImportLog
-        {
-            ProjectId = "PVT_fixture",
-            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(legacySnapshot),
-        };
-        legacyLog.Items["0"] = "PVTI_existing";
-        legacyLog.ItemStates["draft:0"] = new ImportItemState
-        {
-            TargetItemId = "PVTI_existing",
-            TargetContentIdentity = "draft",
-        };
-
-        var upgraded = FixtureProjectBuilder.UpgradeLegacyFixtureLog(legacyLog, snapshot);
-
-        Assert.NotNull(upgraded);
-        Assert.Equal(ImportLog.ComputeSnapshotFingerprint(snapshot), upgraded.SourceSnapshotFingerprint);
-        Assert.Equal("PVTI_existing", upgraded.Items["0"]);
-        Assert.Equal("PVTI_existing", upgraded.ItemStates["draft:0"].TargetItemId);
-        Assert.Empty(upgraded.StatusUpdates);
-        Assert.Empty(upgraded.PendingStatusUpdates);
-    }
-
-    [Fact]
-    public void Legacy_fixture_log_rebinds_to_the_template_snapshot_with_completed_status_updates()
-    {
-        var snapshot = FixtureProjectBuilder.CreateSnapshot(
-            "Fixture",
-            "example/fixture",
-            "octocat",
-            pullRequestNumber: 2);
-        var legacySnapshot = snapshot with
-        {
-            Project = snapshot.Project with { Template = null },
-        };
-        var legacyLog = new ImportLog
-        {
-            ProjectId = "PVT_fixture",
-            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(legacySnapshot),
-        };
-        legacyLog.StatusUpdates["0"] = "PVTSU_existing";
-
-        var upgraded = FixtureProjectBuilder.UpgradeLegacyFixtureLog(legacyLog, snapshot);
-
-        Assert.NotNull(upgraded);
-        Assert.Equal(ImportLog.ComputeSnapshotFingerprint(snapshot), upgraded.SourceSnapshotFingerprint);
-        Assert.Equal("PVTSU_existing", upgraded.StatusUpdates["0"]);
     }
 
     [Fact]
@@ -1034,39 +921,6 @@ public class FixtureProjectBuilderTests
         try
         {
             var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
-            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
-                .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
-            using var graphQlHandler = new RecordingHandler(
-                JsonResponse(
-                    """
-                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_1","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
-                    """),
-                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
-            using var restHandler = new RecordingHandler(JsonResponse("""{"id":1,"name":"fixture"}"""));
-            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
-            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
-            var builder = CreateRequireNewBuilder(graphQl, rest, operationLogDirectory: logRoot);
-
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                builder.CreateAsync("example", "Fixture", "fixture", TestContext.Current.CancellationToken));
-
-            Assert.Equal("Fixture repository 'example/fixture' already exists.", exception.Message);
-            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
-            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
-        }
-        finally
-        {
-            Directory.Delete(logRoot, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task Require_new_resources_resumes_project_from_legacy_operation_key()
-    {
-        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-legacy-project-resume-").FullName;
-        try
-        {
-            var operationDirectory = GetLegacyOperationDirectory(logRoot, "example", "Fixture", "fixture");
             await new ProjectImportLog { CreatedProjectId = "PVT_1" }
                 .SaveAsync(operationDirectory, TestContext.Current.CancellationToken);
             using var graphQlHandler = new RecordingHandler(
@@ -1955,19 +1809,6 @@ public class FixtureProjectBuilderTests
         var operationKey = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(
                 $"{apiHost.ToLowerInvariant()}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}")))[..16]
-            .ToLowerInvariant();
-        return Path.Combine(logRoot, operationKey);
-    }
-
-    private static string GetLegacyOperationDirectory(
-        string logRoot,
-        string organization,
-        string title,
-        string repositoryName)
-    {
-        var operationKey = Convert.ToHexString(
-            SHA256.HashData(Encoding.UTF8.GetBytes(
-                $"{organization}\n{title}\n{repositoryName}")))[..16]
             .ToLowerInvariant();
         return Path.Combine(logRoot, operationKey);
     }

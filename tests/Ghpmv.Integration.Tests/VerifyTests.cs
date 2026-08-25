@@ -112,7 +112,7 @@ public class VerifyTests
             Assert.Equal(source.StatusUpdates.Count, importLog.StatusUpdates.Count);
             var verificationSnapshot = snapshot with
             {
-                LinkedRepositories = snapshot.LinkedRepositories?.Select(repository =>
+                LinkedRepositories = snapshot.LinkedRepositories.Select(repository =>
                     string.Equals(repository, FixtureRepo, StringComparison.OrdinalIgnoreCase)
                         ? targetFixtureRepo
                         : repository).ToList(),
@@ -126,7 +126,7 @@ public class VerifyTests
             await ProjectTemplateWriteSession.SetFinalStateAsync(
                 client,
                 result.ProjectId,
-                snapshot.Project.Template!.Value,
+                snapshot.Project.Template,
                 cancellationToken: cancellationToken);
 
             var postExportCalled = false;

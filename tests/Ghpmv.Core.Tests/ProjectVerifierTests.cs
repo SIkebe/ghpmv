@@ -463,19 +463,6 @@ public class ProjectVerifierTests
             } && difference.Message.Contains("template state mismatch", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void Legacy_null_template_state_is_not_compared()
-    {
-        var source = BuildSnapshot();
-        var target = source with { Project = source.Project with { Template = true } };
-
-        var report = ProjectVerifier.Compare(source, target);
-
-        Assert.DoesNotContain(report.Differences, difference =>
-            difference.Category == "Project"
-            && difference.Message.Contains("template", StringComparison.Ordinal));
-    }
-
     // ----- fields -----
 
     [Fact]
@@ -1501,17 +1488,6 @@ public class ProjectVerifierTests
     }
 
     [Fact]
-    public void Team_links_are_not_verified_for_legacy_null_capture()
-    {
-        var report = ProjectVerifier.Compare(
-            BuildSnapshot() with { LinkedTeams = null },
-            BuildSnapshot());
-
-        Assert.Contains(report.Categories, category =>
-            category.Category == "TeamLink" && category.Status == VerifyStatus.NotVerified);
-    }
-
-    [Fact]
     public void Repository_mapping_normalizes_items_linked_repositories_and_workflow_ui_repositories()
     {
         var workflowUi = new WorkflowUiSnapshot { Repository = "repo", Filter = "is:open" };
@@ -1592,35 +1568,6 @@ public class ProjectVerifierTests
 
         Assert.Empty(report.Differences);
         Assert.True(report.IsMatch);
-    }
-
-    [Fact]
-    public void Linked_repositories_are_not_verified_when_the_source_predates_capture()
-    {
-        var target = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
-
-        var source = BuildSnapshot() with { LinkedRepositories = null };
-        var report = ProjectVerifier.Compare(source, target);
-
-        Assert.Equal(VerifyStatus.NotVerified, report.Status);
-        Assert.Contains(report.Categories, category =>
-            category.Category == "LinkedRepository" && category.Status == VerifyStatus.NotVerified);
-    }
-
-    [Fact]
-    public void Linked_repositories_are_not_verified_when_target_capture_is_missing()
-    {
-        var source = BuildSnapshot() with { LinkedRepositories = ["org/repo-a"] };
-        var target = BuildSnapshot() with { LinkedRepositories = null };
-
-        var report = ProjectVerifier.Compare(source, target);
-
-        Assert.Equal(VerifyStatus.NotVerified, report.Status);
-        Assert.DoesNotContain(report.Differences, difference => difference.Severity == VerifySeverity.Error);
-        Assert.Contains(report.Differences, difference =>
-            difference.Severity == VerifySeverity.Warning
-            && difference.Category == "LinkedRepository"
-            && difference.Message.Contains("could not be read", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1714,46 +1661,6 @@ public class ProjectVerifierTests
     /// <summary>Builds the target sequence exactly as <c>StatusUpdateImporter</c> writes it.</summary>
     private static IReadOnlyList<StatusUpdateSnapshot> ImportedStatusUpdates(IReadOnlyList<StatusUpdateSnapshot> source)
         => [.. source.Select(update => update with { Body = StatusUpdateImporter.BuildImportedBody(update) })];
-
-    [Fact]
-    public void Status_updates_are_not_compared_when_the_source_predates_capture()
-    {
-        // BuildSnapshot() predates status update capture (StatusUpdates is null), so the
-        // category is omitted entirely rather than reported as NotVerified.
-        var source = BuildSnapshot();
-        Assert.Null(source.StatusUpdates);
-        var target = BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() };
-
-        var report = ProjectVerifier.Compare(source, target);
-
-        Assert.DoesNotContain(report.Categories, category => category.Category == "StatusUpdate");
-        Assert.DoesNotContain(report.Differences, difference => difference.Category == "StatusUpdate");
-        Assert.Equal(0, report.NotVerifiedCount);
-        Assert.True(report.IsMatch);
-
-        var baseline = ProjectVerifier.Compare(BuildSnapshot(), BuildSnapshot());
-        Assert.Equal(
-            baseline.Categories.Select(category => category.Category),
-            report.Categories.Select(category => category.Category));
-    }
-
-    [Fact]
-    public void Explicit_status_update_scope_marks_legacy_snapshot_not_verified()
-    {
-        var source = BuildSnapshot();
-        Assert.Null(source.StatusUpdates);
-
-        var report = ProjectVerifier.Compare(
-            source,
-            BuildSnapshot() with { StatusUpdates = SourceStatusUpdates() },
-            new HashSet<string>(StringComparer.Ordinal) { VerifyCategories.StatusUpdate });
-
-        var category = Assert.Single(report.Categories);
-        Assert.Equal(VerifyCategories.StatusUpdate, category.Category);
-        Assert.Equal(VerifyStatus.NotVerified, category.Status);
-        Assert.Equal(VerifyStatus.NotVerified, report.Status);
-        Assert.True(report.ShouldFail(failOnWarning: false));
-    }
 
     [Fact]
     public void Status_update_category_is_present_and_matches_when_sequences_align()
@@ -1924,26 +1831,6 @@ public class ProjectVerifierTests
             VerifyStatus.Match,
             Assert.Single(report.Categories, category => category.Category == "StatusUpdate").Status);
         Assert.True(report.IsMatch);
-    }
-
-    [Fact]
-    public void Status_updates_with_null_target_collection_are_treated_as_empty()
-    {
-        var source = BuildSnapshot() with { StatusUpdates = [.. SourceStatusUpdates().Take(2)] };
-        var target = BuildSnapshot() with { StatusUpdates = null };
-
-        var report = ProjectVerifier.Compare(source, target);
-
-        var difference = Assert.Single(
-            report.Differences,
-            difference => difference.Category == "StatusUpdate");
-        Assert.Equal(VerifySeverity.Error, difference.Severity);
-        Assert.Equal("status update count mismatch (source 2, target 0)", difference.Message);
-
-        // A null target is an empty history, not an unverifiable one.
-        var category = Assert.Single(report.Categories, category => category.Category == "StatusUpdate");
-        Assert.Equal(VerifyStatus.Mismatch, category.Status);
-        Assert.NotEqual(VerifyStatus.NotVerified, category.Status);
     }
 
     [Fact]

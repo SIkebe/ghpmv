@@ -484,28 +484,6 @@ public class SnapshotTests
     }
 
     [Fact]
-    public void Deserialize_snapshot_without_status_updates_yields_null()
-    {
-        // Snapshots written before status update support stay loadable within schema
-        // version 1; the new collection deserializes as null ("not captured").
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [], "views": [], "workflows": [], "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.NotNull(restored);
-        Assert.Null(restored.Project.Template);
-        Assert.Null(restored.StatusUpdates);
-        Assert.Empty(restored.Items);
-    }
-
-    [Fact]
     public void Serialized_json_keeps_schema_version_one_when_status_updates_are_present()
     {
         // Status updates are an additive schema-v1 field: capturing them must not bump

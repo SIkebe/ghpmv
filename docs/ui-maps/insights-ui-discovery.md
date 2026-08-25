@@ -460,8 +460,8 @@ test flow:
 
 Discovery blockers を解消後、次の順で分ける。
 
-1. **Contract / pure logic**: nullable custom chart collection (`CurrentSchemaVersion` は上げない)、
-   normalization、field identity、comparison、backward compatibility。historical points は model に入れない。
+1. **Contract / pure logic**: custom chart collection、normalization、field identity、comparison。
+   historical points は model に入れない。
 2. **Selectors + read-only exporter**: `Sel.cs`、custom list/order、filter/config reader、default exclusion。
 3. **Importer lifecycle**: mandatory host/login preflight → pending create + baseline persist → create/reconcile →
    target chart ID persist → rename → configure → filter → read-back。

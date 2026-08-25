@@ -733,12 +733,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
         }
-        else if (snapshot.Project.Template is { } desiredTemplate)
+        else
         {
             await ProjectTemplateWriteSession.SetFinalStateAsync(
                 client,
                 result.ProjectId,
-                desiredTemplate,
+                snapshot.Project.Template,
                 Console.Error.WriteLine,
                 cancellationToken);
         }
@@ -1225,7 +1225,6 @@ setupCommand.Options.Add(fixtureRequireNewOption);
 setupCommand.Options.Add(fixtureAllowExistingEmptyRepoOption);
 setupCommand.Options.Add(fixtureTeamOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
-setupCommand.Options.Add(baseUrlOption);
 setupCommand.Options.Add(browserBaseUrlOption);
 setupCommand.Options.Add(tokenOption);
 setupCommand.Options.Add(setupApiBaseUrlOption);
@@ -1288,12 +1287,6 @@ setupCommand.Validators.Add(result =>
         != (result.GetValue(fixtureFieldDefaultCleanupTitleOption) is null))
     {
         result.AddError("--fixture-field-default-cleanup-item and --fixture-field-default-cleanup-title must be provided together.");
-    }
-
-    if (result.GetResult(baseUrlOption) is { Implicit: false }
-        && result.GetResult(browserBaseUrlOption) is { Implicit: false })
-    {
-        result.AddError("Browser fixture operations accept either --browser-base-url or the legacy --base-url, not both.");
     }
 
     if (string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
@@ -1396,14 +1389,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1491,14 +1481,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1543,14 +1530,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1604,14 +1588,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1698,14 +1679,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1816,14 +1794,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 ct);
             if (parseResult.GetValue(fixtureUiOption) && authenticatedFixtureUiSession is null)
             {
-                var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                    ? parseResult.GetValue(baseUrlOption)
-                    : null;
                 var browserSession = new BrowserSession(new BrowserSessionOptions
                 {
                     BaseUrl = BrowserBaseUrl.Resolve(
                         graphQlBaseUri,
-                        parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                        parseResult.GetValue(browserBaseUrlOption)),
                     Profile = parseResult.GetValue(setupBrowserProfileOption),
                 });
                 try
@@ -1945,16 +1920,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             return 1;
         }
 
-        var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-            ? parseResult.GetValue(baseUrlOption)
-            : null;
         var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
         var fixtureUiSession = authenticatedFixtureUiSession
             ?? new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
         await using var fixtureUiSessionScope = fixtureUiSession;
