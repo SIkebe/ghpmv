@@ -69,7 +69,7 @@ public sealed class FieldDefaultFixtureObserver
                 OnProgress?.Invoke(
                     $"Field-default check draft creation was ambiguous: ids={ids} title='{title}' cleanup=pending");
                 throw new InvalidOperationException(
-                    $"Field-default check draft UI creation was ambiguous; inventory title '{title}' and matching item IDs [{ids}] before cleanup.",
+                    $"Field-default check draft UI creation was ambiguous; {FormatDraftInventory(title, reconciledIds)}.",
                     exception);
             }
 
@@ -84,7 +84,7 @@ public sealed class FieldDefaultFixtureObserver
             else if (reconciledIds.Count > 1)
             {
                 throw new InvalidOperationException(
-                    $"Field-default check draft '{title}' matched multiple target items.");
+                    $"Field-default check draft '{title}' matched multiple target items; {FormatDraftInventory(title, reconciledIds)}.");
             }
             else
             {
@@ -340,6 +340,18 @@ public sealed class FieldDefaultFixtureObserver
 
             await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    internal static string FormatDraftInventory(
+        string title,
+        IReadOnlyList<string> matchingIds)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentNullException.ThrowIfNull(matchingIds);
+        var ids = matchingIds.Count == 0
+            ? "(none found)"
+            : string.Join(",", matchingIds);
+        return $"inventory title '{title}' and matching item IDs [{ids}] before cleanup";
     }
 
     private async Task DeleteAndConfirmDraftAsync(

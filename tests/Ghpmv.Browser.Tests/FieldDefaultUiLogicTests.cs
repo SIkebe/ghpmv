@@ -261,5 +261,13 @@ public class FieldDefaultUiLogicTests
         Assert.Equal(["PVTI_test"], matches);
     }
 
+    [Fact]
+    public void FormatDraftInventory_includes_every_duplicate_item_id()
+        => Assert.Equal(
+            "inventory title 'duplicate' and matching item IDs [PVTI_first,PVTI_second] before cleanup",
+            FieldDefaultFixtureObserver.FormatDraftInventory(
+                "duplicate",
+                ["PVTI_first", "PVTI_second"]));
+
     private sealed record SequenceItemResult(int Skipped);
 }
