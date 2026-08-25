@@ -395,6 +395,34 @@ public class SnapshotTests
     }
 
     [Fact]
+    public async Task SnapshotFile_rejects_schema_two_without_template_state()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-template-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                """
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false },
+                  "fields": [], "views": [], "workflows": [], "items": []
+                }
+                """,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains("missing required property 'project.template'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Roundtrip_preserves_status_updates()
     {
         var original = CreateFullSnapshot();

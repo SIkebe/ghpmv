@@ -34,18 +34,24 @@ public static class SnapshotFile
         var stream = File.OpenRead(path);
         await using (stream.ConfigureAwait(false))
         {
-            var snapshot = await JsonSerializer.DeserializeAsync(
-                stream,
-                SnapshotJsonContext.Default.ProjectSnapshot,
-                cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidDataException($"'{path}' contained a null snapshot.");
-            if (snapshot.SchemaVersion != ProjectSnapshot.CurrentSchemaVersion)
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+            var schemaVersion = root.TryGetProperty("schemaVersion", out var schemaVersionElement)
+                ? schemaVersionElement.GetInt32()
+                : 0;
+            if (schemaVersion != ProjectSnapshot.CurrentSchemaVersion)
             {
                 throw new InvalidDataException(
-                    $"'{path}' uses unsupported schema version {snapshot.SchemaVersion}; expected {ProjectSnapshot.CurrentSchemaVersion}.");
+                    $"'{path}' uses unsupported schema version {schemaVersion}; expected {ProjectSnapshot.CurrentSchemaVersion}.");
             }
 
-            return snapshot;
+            if (!root.GetProperty("project").TryGetProperty("template", out _))
+            {
+                throw new InvalidDataException($"'{path}' is missing required property 'project.template'.");
+            }
+
+            return root.Deserialize(SnapshotJsonContext.Default.ProjectSnapshot)
+                ?? throw new InvalidDataException($"'{path}' contained a null snapshot.");
         }
     }
 }
