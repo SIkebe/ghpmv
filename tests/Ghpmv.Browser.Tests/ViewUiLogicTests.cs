@@ -402,6 +402,32 @@ public class ViewUiLogicTests
         Assert.Equal(2, differences.Count);
     }
 
+    [Fact]
+    public void Persistence_check_skips_only_uncaptured_roadmap_display_options()
+    {
+        var view = View("Roadmap", "ROADMAP_LAYOUT") with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    TruncateTitles = null,
+                    ShowDateFields = null,
+                },
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: null,
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: false,
+            FieldSum: [],
+            TruncateTitles: false,
+            ShowDateFields: true);
+
+        Assert.Empty(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+    }
+
     [Theory]
     [InlineData(true, false, true, true)]
     [InlineData(false, true, true, true)]
@@ -780,6 +806,30 @@ public class ViewUiLogicTests
             difference => difference.Category == "View");
 
         Assert.Contains(expectedMessage, difference.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Verifier_skips_only_uncaptured_roadmap_display_options()
+    {
+        var source = View("Roadmap", "ROADMAP_LAYOUT") with
+        {
+            Ui = new ViewUiSnapshot { Roadmap = new RoadmapSettingsSnapshot() },
+        };
+        var target = source with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    TruncateTitles = true,
+                    ShowDateFields = false,
+                },
+            },
+        };
+
+        var report = ProjectVerifier.Compare(Snapshot([], source), Snapshot([], target));
+
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
     }
 
     [Fact]

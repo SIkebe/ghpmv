@@ -42,6 +42,8 @@ public sealed class FixtureProjectBuilder
 
     public bool AllowExistingEmptyRepository { get; init; }
 
+    public bool IncludeRoadmapRenderingItem { get; init; }
+
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
 
     public async Task<FixtureProjectSetupResult> CreateAsync(
@@ -224,7 +226,7 @@ public sealed class FixtureProjectBuilder
                 pullRequestNumber,
                 teamSlug,
                 referenceDate);
-            if (RequireNewResources)
+            if (IncludeRoadmapRenderingItem)
             {
                 snapshot = AddRoadmapRenderingItem(snapshot);
             }
@@ -1584,6 +1586,17 @@ public sealed class FixtureProjectBuilder
             Draft = source.Draft! with { Title = RoadmapLongTitle },
         };
         return snapshot with { Items = [.. snapshot.Items, item] };
+    }
+
+    public static bool IsRoadmapRenderingItem(ItemSnapshot item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return !item.IsArchived
+            && string.Equals(item.Draft?.Title, RoadmapLongTitle, StringComparison.Ordinal)
+            && item.FieldValues.Any(value =>
+                value.FieldName == "Fixture Date" && value.Date is not null)
+            && item.FieldValues.Any(value =>
+                value.FieldName == "Fixture Sprint" && value.IterationTitle is not null);
     }
 
     private async Task EnsureMultiSelectIssueFieldValueAsync(

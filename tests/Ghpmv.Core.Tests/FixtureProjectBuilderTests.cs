@@ -477,6 +477,12 @@ public class FixtureProjectBuilderTests
             candidate => candidate.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
         Assert.Contains(item.FieldValues, value => value.FieldName == "Fixture Date" && value.Date is not null);
         Assert.Contains(item.FieldValues, value => value.FieldName == "Fixture Sprint" && value.IterationTitle is not null);
+        Assert.True(FixtureProjectBuilder.IsRoadmapRenderingItem(item));
+        Assert.False(FixtureProjectBuilder.IsRoadmapRenderingItem(item with { IsArchived = true }));
+        Assert.False(FixtureProjectBuilder.IsRoadmapRenderingItem(item with
+        {
+            FieldValues = item.FieldValues.Where(value => value.FieldName != "Fixture Date").ToList(),
+        }));
     }
 
     [Fact]

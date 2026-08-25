@@ -658,18 +658,25 @@ public sealed class ViewUiImporter
 
         if (view.Ui?.Roadmap is { } roadmap)
         {
-            await TrySetMenuCheckboxAsync(
-                page,
-                "Truncate titles",
-                roadmap.TruncateTitles,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
-            await TrySetMenuCheckboxAsync(
-                page,
-                "Show date fields",
-                roadmap.ShowDateFields,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
+            if (roadmap.TruncateTitles is { } truncateTitles)
+            {
+                await TrySetMenuCheckboxAsync(
+                    page,
+                    "Truncate titles",
+                    truncateTitles,
+                    view.Name,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            if (roadmap.ShowDateFields is { } showDateFields)
+            {
+                await TrySetMenuCheckboxAsync(
+                    page,
+                    "Show date fields",
+                    showDateFields,
+                    view.Name,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             if (roadmap.StartField is not null || roadmap.TargetField is not null)
             {
@@ -835,10 +842,10 @@ public sealed class ViewUiImporter
             var sliceBy = view.Ui is null
                ? null
                : await ReadMenuValueAsync(menu, "Slice by").ConfigureAwait(false);
-            var truncateTitles = view.Ui?.Roadmap is null
+            var truncateTitles = view.Ui?.Roadmap?.TruncateTitles is null
                 ? null
                 : await ReadMenuCheckboxAsync(menu, "Truncate titles").ConfigureAwait(false);
-            var showDateFields = view.Ui?.Roadmap is null
+            var showDateFields = view.Ui?.Roadmap?.ShowDateFields is null
                 ? null
                 : await ReadMenuCheckboxAsync(menu, "Show date fields").ConfigureAwait(false);
 
@@ -1027,16 +1034,18 @@ public sealed class ViewUiImporter
 
         if (expected.Ui?.Roadmap is { } roadmap)
         {
-            if (actual.TruncateTitles != roadmap.TruncateTitles)
+            if (roadmap.TruncateTitles is { } expectedTruncateTitles
+                && actual.TruncateTitles != expectedTruncateTitles)
             {
                 differences.Add(
-                    $"truncate-titles expected '{FormatBoolean(roadmap.TruncateTitles)}', actual '{FormatBoolean(actual.TruncateTitles)}'");
+                    $"truncate-titles expected '{FormatBoolean(expectedTruncateTitles)}', actual '{FormatBoolean(actual.TruncateTitles)}'");
             }
 
-            if (actual.ShowDateFields != roadmap.ShowDateFields)
+            if (roadmap.ShowDateFields is { } expectedShowDateFields
+                && actual.ShowDateFields != expectedShowDateFields)
             {
                 differences.Add(
-                    $"show-date-fields expected '{FormatBoolean(roadmap.ShowDateFields)}', actual '{FormatBoolean(actual.ShowDateFields)}'");
+                    $"show-date-fields expected '{FormatBoolean(expectedShowDateFields)}', actual '{FormatBoolean(actual.ShowDateFields)}'");
             }
         }
 

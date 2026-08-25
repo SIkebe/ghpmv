@@ -336,6 +336,8 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 `--fixture --fixture-ui` の再実行では、別の操作で作成された同名 Project は Workflows の重複作成を避けるため UI 適用を自動で skip します。この操作が所有する Project は、前回の UI 適用が未完了なら再開し、完了済みなら skip します。既存 Project に fixture を強制的に再適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
 
 > **再実行時の注意:** `setup --fixture-ui` の View import は既存 View を名前で再利用するため、`Fixture Board` / `Fixture Roadmap` は重複しません。Workflows は built-in entries を再設定できますが、複製した Auto-add workflow は重複し得るため、完全にクリーンな検証には新しい fixture Project を使用してください。
+>
+> `--fixture-ui --fixture-project` を単独で使う既存 Project は、Roadmap rendering 検証用の長い dated item を含む必要があります。含まれない場合は書き込み前に停止するため、`setup --fixture --fixture-ui` で browser fixture を作成してください。
 
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 

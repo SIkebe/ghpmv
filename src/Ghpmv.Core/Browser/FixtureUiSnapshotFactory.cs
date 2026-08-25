@@ -49,7 +49,7 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
-    /// <summary>Creates deliberate drift for both Roadmap display checkboxes.</summary>
+    /// <summary>Creates deliberate title-truncation drift while preserving Roadmap date display.</summary>
     public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
     {
         var snapshot = Create(repositoryName);

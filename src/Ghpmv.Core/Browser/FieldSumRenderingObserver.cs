@@ -110,12 +110,12 @@ public sealed partial class FieldSumRenderingObserver
     {
         var roadmap = view.Ui?.Roadmap
             ?? throw new InvalidOperationException($"view '{view.Name}': expected Roadmap display state is unavailable");
-        if (roadmap.TruncateTitles && !titleTruncated)
+        if (roadmap.TruncateTitles is true && !titleTruncated)
         {
             throw new InvalidOperationException($"view '{view.Name}': long item title was not visibly truncated");
         }
 
-        if (roadmap.ShowDateFields && !datesRendered)
+        if (roadmap.ShowDateFields is true && !datesRendered)
         {
             throw new InvalidOperationException($"view '{view.Name}': item date fields were not visibly rendered");
         }

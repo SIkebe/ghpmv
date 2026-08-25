@@ -1733,8 +1733,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 projectNumber,
                 targetViews[0].GetProperty("number").GetInt32(),
                 view.Name,
-                roadmap.TruncateTitles,
-                roadmap.ShowDateFields,
+                roadmap.TruncateTitles!.Value,
+                roadmap.ShowDateFields!.Value,
                 cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
@@ -1827,6 +1827,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
+            IncludeRoadmapRenderingItem = parseResult.GetValue(fixtureUiOption),
             BeforeWriteAsync = ValidateFixtureBeforeWriteAsync,
         };
         try
@@ -1936,6 +1937,20 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
             await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
+        if (!parseResult.GetValue(fixtureOption))
+        {
+            var existingFixture = await new ProjectExporter(fixtureUiClient)
+            {
+                Sections = ProjectExportSections.Items,
+            }.ExportAsync(org, projectNumber.Value, cancellationToken);
+            if (!existingFixture.Items.Any(FixtureProjectBuilder.IsRoadmapRenderingItem))
+            {
+                throw new InvalidOperationException(
+                    $"Project #{projectNumber.Value} does not contain the unarchived, dated Roadmap rendering item. "
+                    + "Create the browser fixture with setup --fixture --fixture-ui.");
+            }
         }
 
         File.Delete(uiCompletionPath);
