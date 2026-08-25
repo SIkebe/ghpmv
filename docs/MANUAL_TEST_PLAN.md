@@ -638,7 +638,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 ```
 
 `Rendered Field sums verified` が両 View に出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=2` と exit code 0 になることを確認します。
-3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number>` を実行し、disposable draft に Text / negative Number / zero / Single-select defaults が自動入力されることを確認します。出力された draft item ID / title を resource inventory に追加し、cleanup同意前には削除しません。
+3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-field-default-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` と既存の `--fixture-field-sum-drift` を同じ target に実行します。前者は Text / zero Number / Single-select を変更し、negative Number default を clear します。
 5. browser-assisted verify を `--categories Field,View` で再実行し、4 件の `default value mismatch` と `view 'View 1': field sum mismatch` を確認します。
 6. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence、field defaults、Field sum の復元を同時に確認します。

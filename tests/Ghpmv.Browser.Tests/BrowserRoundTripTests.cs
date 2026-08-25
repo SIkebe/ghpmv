@@ -246,7 +246,7 @@ public class BrowserRoundTripTests
                 AssertRoundTrippedViews(snapshot, target);
                 AssertRoundTrippedWorkflows(snapshot, target);
                 AssertRoundTrippedFieldDefaults(snapshot, target);
-                await new FieldDefaultFixtureObserver(targetClient).ValidateStandardFixtureAsync(
+                await new FieldDefaultFixtureObserver(targetClient, targetSession).ValidateStandardFixtureAsync(
                     TargetOrg,
                     result.ProjectNumber,
                     cancellationToken);
@@ -355,7 +355,7 @@ public class BrowserRoundTripTests
                 Assert.All(
                     repairReport.Categories,
                     category => Assert.Equal(VerifyStatus.Match, category.Status));
-                await new FieldDefaultFixtureObserver(targetClient).ValidateStandardFixtureAsync(
+                await new FieldDefaultFixtureObserver(targetClient, targetSession).ValidateStandardFixtureAsync(
                     TargetOrg,
                     result.ProjectNumber,
                     cancellationToken);

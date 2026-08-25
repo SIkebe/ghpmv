@@ -1488,9 +1488,21 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
+                ? parseResult.GetValue(baseUrlOption)
+                : null;
+            await using var browserSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
             client.OnRetry = Console.Error.WriteLine;
-            var observer = new FieldDefaultFixtureObserver(client)
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+            var observer = new FieldDefaultFixtureObserver(client, browserSession)
             {
                 OnProgress = Console.Error.WriteLine,
             };
@@ -1503,7 +1515,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 $"Fixture field defaults functionally verified: project=#{projectNumber} fields=4 draft={result.ItemId} title='{result.Title}' cleanup=pending");
             return 0;
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
         {
             Console.Error.WriteLine($"error: {exception.Message}");
             return 1;

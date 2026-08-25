@@ -1492,7 +1492,8 @@ try {
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
       --fixture-field-default-check `
       --fixture-org <target-org> `
-      --fixture-project <target-project-number>
+      --fixture-project <target-project-number> `
+      --browser-profile target
 }
 finally {
     if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
@@ -1500,7 +1501,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、draftをinventoryへ追加した場合だけ field-default status=`new-draft-observed` とする。初回 verify の `Item: Match` と合わせ、import 済み既存 item values が変化せず、新規 draftだけに defaults が入ったことを合格条件とする。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、draftをinventoryへ追加した場合だけ field-default status=`new-draft-observed` とする。初回 verify の `Item: Match` と合わせ、import 済み既存 item values が変化せず、新規 draftだけに defaults が入ったことを合格条件とする。
 
 ### Browser field-sum machine check
 
@@ -1760,7 +1761,8 @@ try {
     dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
       --fixture-field-default-check `
       --fixture-org <target-org> `
-      --fixture-project <target-project-number>
+      --fixture-project <target-project-number> `
+      --browser-profile target
 }
 finally {
     if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
@@ -1768,7 +1770,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、`GHPMV_ITEM_VALUES_REPAIR_MATCH`が既知のinventory draft以外にItem差分がないことを証明した場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、`GHPMV_ITEM_VALUES_REPAIR_MATCH`が既知のinventory draft以外にItem差分がないことを証明した場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
 
 `browser-e2e` は field-defaultの`new-draft-observed` / `repair-match` と field-sumの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 

@@ -55,7 +55,7 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 4. Single-select はoption action menuの`Unset as default`を全optionで探して読み、targetではoption nameのaction menuから`Set as default`を選ぶ。option node IDは保存しない。
 5. importはtarget defaultsをitem作成前にclearし、source itemの作成・値適用後にsource defaultsをauto-saveする。既存 item valuesは変更せず、新規itemのみGitHubが自動入力する。
 6. auto-save後は2秒待ってsettingsを再度開き、意味的にread-backして不一致をwarningにする。
-7. `setup --fixture-field-default-check` は disposable draft を API で作成し、GraphQL read-back で4 defaultsを確認して item ID / title を返す。draft は resource inventory に追加し、明示的なcleanup同意後に `--fixture-field-default-cleanup-item` / `--fixture-field-default-cleanup-title` で削除する。
+7. `setup --fixture-field-default-check` はProject viewの`combobox "Start typing to create an item, or type hashtag to select a repository"`へtitleを入力し、`listbox "Discovery menu"`の`option "Create a draft..."`を選ぶ。GraphQL read-backで4 defaultsを確認してitem ID / titleを返す。`addProjectV2DraftIssue` mutationではGitHubがcustom defaultsを適用しないためfunctional checkに使わない。draftはresource inventoryに追加し、明示的なcleanup同意後に`--fixture-field-default-cleanup-item` / `--fixture-field-default-cleanup-title`で削除する。
 
 ## フィクスチャー最終状態(gpm-source/projects/3)
 

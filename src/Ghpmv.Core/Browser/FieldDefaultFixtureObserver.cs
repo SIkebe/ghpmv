@@ -2,6 +2,7 @@ using System.Globalization;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
+using Microsoft.Playwright;
 
 namespace Ghpmv.Core.Browser;
 
@@ -9,11 +10,15 @@ namespace Ghpmv.Core.Browser;
 public sealed class FieldDefaultFixtureObserver
 {
     private readonly GitHubGraphQLClient _client;
+    private readonly BrowserSession? _session;
 
-    public FieldDefaultFixtureObserver(GitHubGraphQLClient client)
+    public FieldDefaultFixtureObserver(
+        GitHubGraphQLClient client,
+        BrowserSession? session = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         _client = client;
+        _session = session;
     }
 
     public Action<string>? OnProgress { get; set; }
@@ -43,29 +48,15 @@ public sealed class FieldDefaultFixtureObserver
         string? itemId = null;
         try
         {
-            System.Text.Json.JsonElement data;
             try
             {
-                data = await _client.MutationAsync(
-                    "addProjectV2DraftIssue",
-                    """
-                    mutation($projectId: ID!, $title: String!, $clientMutationId: String!) {
-                      addProjectV2DraftIssue(input: {
-                        projectId: $projectId,
-                        title: $title,
-                        clientMutationId: $clientMutationId
-                      }) {
-                        projectItem { id }
-                      }
-                    }
-                    """,
-                    new { projectId, title },
-                    MutationRetryPolicy.Create,
-                    target: projectId,
-                    requiredResultPath: "projectItem.id",
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                await CreateDraftThroughUiAsync(
+                    organization,
+                    projectNumber,
+                    title,
+                    cancellationToken).ConfigureAwait(false);
             }
-            catch (AmbiguousMutationResultException exception)
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
                 var reconciledIds = await FindMatchingDraftItemIdsAsync(
                     projectId,
@@ -77,16 +68,37 @@ public sealed class FieldDefaultFixtureObserver
                 OnProgress?.Invoke(
                     $"Field-default check draft creation was ambiguous: ids={ids} title='{title}' cleanup=pending");
                 throw new InvalidOperationException(
-                    $"Field-default check draft creation was ambiguous; inventory title '{title}' and matching item IDs [{ids}] before cleanup.",
+                    $"Field-default check draft UI creation was ambiguous; inventory title '{title}' and matching item IDs [{ids}] before cleanup.",
                     exception);
             }
 
-            itemId = data
-                .GetProperty("addProjectV2DraftIssue")
-                .GetProperty("projectItem")
-                .GetProperty("id")
-                .GetString()
-                ?? throw new GitHubGraphQLException("The field-default check draft returned no item id.");
+            var idDeadline = DateTimeOffset.UtcNow.AddSeconds(30);
+            while (itemId is null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var matches = await FindMatchingDraftItemIdsAsync(
+                    projectId,
+                    title,
+                    cancellationToken).ConfigureAwait(false);
+                if (matches.Count == 1)
+                {
+                    itemId = matches[0];
+                    break;
+                }
+                if (matches.Count > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"Field-default check draft '{title}' matched multiple target items.");
+                }
+                if (DateTimeOffset.UtcNow >= idDeadline)
+                {
+                    throw new TimeoutException(
+                        $"The field-default check draft '{title}' was not visible through GraphQL within 30 seconds.");
+                }
+
+                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            }
+
             OnProgress?.Invoke($"Field-default check draft created: id={itemId} title='{title}'");
 
             var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
@@ -238,6 +250,37 @@ public sealed class FieldDefaultFixtureObserver
         return data.GetProperty("organization").GetProperty("projectV2").GetProperty("id").GetString()
             ?? throw new GitHubGraphQLException(
                 $"Fixture Project '{organization}/projects/{projectNumber}' returned no id.");
+    }
+
+    private async Task CreateDraftThroughUiAsync(
+        string organization,
+        int projectNumber,
+        string title,
+        CancellationToken cancellationToken)
+    {
+        if (_session is null)
+        {
+            throw new InvalidOperationException(
+                "A browser session is required for the field-default functional check.");
+        }
+
+        var url = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{_session.BaseUrl.TrimEnd('/')}/orgs/{organization}/projects/{projectNumber}");
+        var page = await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+        var input = page.GetByRole(AriaRole.Combobox, new()
+        {
+            Name = "Start typing to create an item, or type hashtag to select a repository",
+            Exact = true,
+        }).First;
+        await input.WaitForAsync().ConfigureAwait(false);
+        await input.FillAsync(title).ConfigureAwait(false);
+        var createDraft = page.GetByRole(AriaRole.Option, new()
+        {
+            NameRegex = new System.Text.RegularExpressions.Regex("^Create a draft"),
+        });
+        await createDraft.WaitForAsync().ConfigureAwait(false);
+        await createDraft.ClickAsync().ConfigureAwait(false);
     }
 
     private async Task<IReadOnlyList<string>> FindMatchingDraftItemIdsAsync(
