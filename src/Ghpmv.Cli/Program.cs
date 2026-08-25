@@ -1142,7 +1142,7 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
-    Description = "Disable Fixture Roadmap title truncation while preserving date display to exercise independent drift detection.",
+    Description = "Switch the project-shared Roadmap display state to full titles with visible dates.",
 };
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {

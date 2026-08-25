@@ -314,12 +314,23 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
-                Assert.DoesNotContain(driftReport.Differences, difference =>
-                    difference.Category == VerifyCategories.View
+                Assert.Contains(driftReport.Differences, difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
-                Assert.DoesNotContain(driftReport.Differences, difference =>
+                Assert.Contains(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
                     && difference.Message.Contains("Fixture Roadmap Dates Hidden", StringComparison.Ordinal));
+                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
+                    FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -427,7 +438,7 @@ public class BrowserRoundTripTests
         Assert.Equal("Quarter", sourceRoadmap.Ui.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
         Assert.True(sourceRoadmap.Ui.Roadmap?.TruncateTitles);
-        Assert.True(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
+        Assert.False(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
         var sourceDatesHidden = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap Dates Hidden");
         Assert.True(sourceDatesHidden.Ui!.Roadmap?.TruncateTitles);
         Assert.False(sourceDatesHidden.Ui.Roadmap?.ShowDateFields);

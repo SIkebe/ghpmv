@@ -26,11 +26,27 @@ public sealed partial class FieldSumRenderingObserver
         int projectNumber,
         IReadOnlyDictionary<string, int> viewNumbers,
         CancellationToken cancellationToken = default)
+        => await ValidateFixtureAsync(
+            FixtureUiSnapshotFactory.Create(),
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            viewNumbers,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task ValidateFixtureAsync(
+        ProjectSnapshot expected,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        IReadOnlyDictionary<string, int> viewNumbers,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
 
-        var expectedViews = FixtureUiSnapshotFactory.Create().Views
+        var expectedViews = expected.Views
             .Where(view => view.Name is "View 1" or "Fixture Roadmap" or "Fixture Roadmap Dates Hidden")
             .ToArray();
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
@@ -113,6 +129,11 @@ public sealed partial class FieldSumRenderingObserver
         if (roadmap.TruncateTitles is true && !titleTruncated)
         {
             throw new InvalidOperationException($"view '{view.Name}': long item title was not visibly truncated");
+        }
+
+        if (roadmap.TruncateTitles is false && titleTruncated)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': long item title was truncated despite being disabled");
         }
 
         if (roadmap.ShowDateFields is true && !datesRendered)

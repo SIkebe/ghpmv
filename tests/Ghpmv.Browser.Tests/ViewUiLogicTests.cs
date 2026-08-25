@@ -286,16 +286,17 @@ public class ViewUiLogicTests
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void Rendered_roadmap_observation_requires_truncation_and_dates(
+    [InlineData(true, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    public void Rendered_roadmap_observation_requires_configured_truncation_and_date_visibility(
         bool titleTruncated,
-        bool datesRendered)
+        bool datesRendered,
+        bool expected)
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "Fixture Roadmap");
 
-        if (titleTruncated && datesRendered)
+        if (expected)
         {
             FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
             return;
@@ -473,7 +474,7 @@ public class ViewUiLogicTests
             snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
         var roadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
         Assert.True(roadmap.TruncateTitles);
-        Assert.True(roadmap.ShowDateFields);
+        Assert.False(roadmap.ShowDateFields);
         var datesHidden = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap Dates Hidden").Ui!.Roadmap!;
         Assert.True(datesHidden.TruncateTitles);
         Assert.False(datesHidden.ShowDateFields);
@@ -495,7 +496,7 @@ public class ViewUiLogicTests
     }
 
     [Fact]
-    public void FixtureUiSnapshotFactory_creates_independent_roadmap_display_drift()
+    public void FixtureUiSnapshotFactory_creates_project_shared_roadmap_display_drift()
     {
         var standard = Assert.Single(
             FixtureUiSnapshotFactory.Create().Views,
@@ -505,9 +506,29 @@ public class ViewUiLogicTests
             view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
 
         Assert.True(standard.TruncateTitles);
-        Assert.True(standard.ShowDateFields);
+        Assert.False(standard.ShowDateFields);
         Assert.False(drift.TruncateTitles);
         Assert.True(drift.ShowDateFields);
+    }
+
+    [Fact]
+    public void Shared_roadmap_display_settings_reject_conflicting_view_values()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create();
+        ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
+        var conflicting = snapshot.Views.Select(view =>
+            view.Name == "Fixture Roadmap Dates Hidden"
+                ? view with
+                {
+                    Ui = view.Ui! with
+                    {
+                        Roadmap = view.Ui.Roadmap! with { ShowDateFields = true },
+                    },
+                }
+                : view).ToList();
+
+        Assert.Throws<InvalidOperationException>(
+            () => ViewUiImporter.ValidateSharedRoadmapDisplaySettings(conflicting));
     }
 
     [Fact]

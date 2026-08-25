@@ -117,6 +117,7 @@ public sealed class ViewUiImporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
+        ValidateSharedRoadmapDisplaySettings(snapshot.Views);
 
         if (snapshot.Views.Count == 0)
         {
@@ -159,6 +160,28 @@ public sealed class ViewUiImporter
                 viewNumbers,
                 cancellationToken),
             _warnings).ConfigureAwait(false);
+    }
+
+    internal static void ValidateSharedRoadmapDisplaySettings(IReadOnlyList<ViewSnapshot> views)
+    {
+        ArgumentNullException.ThrowIfNull(views);
+        var roadmaps = views
+            .Where(view => string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
+            .Select(view => view.Ui?.Roadmap)
+            .Where(settings => settings is not null)
+            .ToArray();
+        if (roadmaps.Where(settings => settings!.TruncateTitles is not null)
+                .Select(settings => settings!.TruncateTitles)
+                .Distinct()
+                .Count() > 1
+            || roadmaps.Where(settings => settings!.ShowDateFields is not null)
+                .Select(settings => settings!.ShowDateFields)
+                .Distinct()
+                .Count() > 1)
+        {
+            throw new InvalidOperationException(
+                "Roadmap Truncate titles and Show date fields are project-shared and must have one consistent value across all Roadmap Views.");
+        }
     }
 
     /// <summary>Applies and saves only the complete Field sum selection for one target View.</summary>

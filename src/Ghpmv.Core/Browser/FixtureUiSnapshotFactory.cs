@@ -49,14 +49,14 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
-    /// <summary>Creates deliberate title-truncation drift while preserving Roadmap date display.</summary>
+    /// <summary>Creates deliberate project-shared Roadmap display drift for every Roadmap View.</summary>
     public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
     {
         var snapshot = Create(repositoryName);
         return snapshot with
         {
             Views = snapshot.Views.Select(view =>
-                string.Equals(view.Name, "Fixture Roadmap", StringComparison.Ordinal)
+                string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal)
                     ? view with
                     {
                         Ui = view.Ui! with
@@ -209,7 +209,7 @@ public static class FixtureUiSnapshotFactory
                     Zoom = "Quarter",
                     Markers = ["Fixture Date"],
                     TruncateTitles = true,
-                    ShowDateFields = true,
+                    ShowDateFields = false,
                 },
             },
         },
