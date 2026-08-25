@@ -8,7 +8,7 @@ namespace Ghpmv.Core.Browser;
 /// <summary>
 /// UI export of view settings that GraphQL does not expose (B2). For each view the
 /// "View" configuration menu is opened and the current values of Markers / Dates /
-/// Zoom level / Slice by / Field sum / Roadmap display options are read. Results are stored in <see cref="ViewSnapshot.Ui"/>;
+/// Zoom level / Slice by / Field sum are read. Results are stored in <see cref="ViewSnapshot.Ui"/>;
 /// views whose UI settings cannot be read keep <c>Ui = null</c> and add a warning.
 /// </summary>
 public sealed class ViewUiExporter
@@ -121,14 +121,6 @@ public sealed class ViewUiExporter
         await menu.WaitForAsync().ConfigureAwait(false);
         await Task.Delay(300, cancellationToken).ConfigureAwait(false);
 
-        var truncateTitles = false;
-        var showDateFields = false;
-        if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
-        {
-            truncateTitles = await ReadRoadmapDisplayOptionAsync(menu, view.Name, "Truncate titles").ConfigureAwait(false);
-            showDateFields = await ReadRoadmapDisplayOptionAsync(menu, view.Name, "Show date fields").ConfigureAwait(false);
-        }
-
         var sliceBy = ParseMenuValue(await ReadMenuItemTextAsync(menu, "Slice by").ConfigureAwait(false));
         var fieldSum = await ReadCheckedMenuValuesAsync(
             page,
@@ -149,8 +141,6 @@ public sealed class ViewUiExporter
                 TargetField = targetField,
                 Zoom = zoom,
                 Markers = markers,
-                TruncateTitles = truncateTitles,
-                ShowDateFields = showDateFields,
             };
         }
 
@@ -162,24 +152,6 @@ public sealed class ViewUiExporter
             FieldSum = fieldSum,
             Roadmap = roadmap,
             ScrapedAt = DateTimeOffset.UtcNow,
-        };
-    }
-
-    private static async Task<bool> ReadRoadmapDisplayOptionAsync(ILocator menu, string viewName, string label)
-    {
-        var option = Sel.ViewOptionCheckbox(menu, label);
-        if (await option.CountAsync().ConfigureAwait(false) == 0)
-        {
-            throw new InvalidOperationException(
-                $"view '{viewName}': roadmap display option '{label}' could not be read because the control is unavailable");
-        }
-
-        return await option.First.GetAttributeAsync("aria-checked").ConfigureAwait(false) switch
-        {
-            "true" => true,
-            "false" => false,
-            _ => throw new InvalidOperationException(
-                $"view '{viewName}': roadmap display option '{label}' could not be read because aria-checked is unavailable"),
         };
     }
 

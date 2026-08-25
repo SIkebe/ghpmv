@@ -12,8 +12,6 @@ namespace Ghpmv.Core.Fixtures;
 /// <summary>Creates the standard API-backed integration-test fixture without PowerShell or gh CLI.</summary>
 public sealed class FixtureProjectBuilder
 {
-    public const string RoadmapLongTitle = "Fixture roadmap item with a deliberately long title for truncation rendering verification";
-
     private const string RepositoryClaimFileName = "fixture-repository.txt";
     private const string ReferenceDateFileName = "fixture-reference-date";
     private const string PendingRepositoryStatus = "pending";
@@ -1465,7 +1463,7 @@ public sealed class FixtureProjectBuilder
             Workflows = [],
             Items =
             [
-                Draft(0, RoadmapLongTitle, false, [],
+                Draft(0, "Fixture draft 1", false, [],
                     Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), ProjectMultiSelect("Backend", "Frontend"), Sprint("Sprint 0"), Status("Todo")),
                 Draft(1, "Fixture draft 2", false, [],
                     Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), ProjectMultiSelect("Operations"), Sprint("Sprint 1"), Status("In Progress")),

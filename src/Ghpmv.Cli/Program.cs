@@ -1140,10 +1140,6 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 {
     Description = "Apply the standard View 1 field-sum drift to an existing fixture Project using browser automation.",
 };
-var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
-{
-    Description = "Disable both standard Fixture Roadmap display options to exercise browser-assisted drift detection.",
-};
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {
     Description = "Verify visible grouped-header Field sum rendering on an existing standard fixture Project.",
@@ -1211,7 +1207,6 @@ setupApiBaseUrlOption.Validators.Add(ValidateBaseUrl);
 setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
 setupCommand.Options.Add(fixtureFieldSumDriftOption);
-setupCommand.Options.Add(fixtureRoadmapDisplayDriftOption);
 setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultDriftOption);
@@ -1248,7 +1243,6 @@ setupCommand.Validators.Add(result =>
 
     if (!result.GetValue(fixtureUiOption)
         && !result.GetValue(fixtureFieldSumDriftOption)
-        && !result.GetValue(fixtureRoadmapDisplayDriftOption)
         && !result.GetValue(fixtureFieldSumRenderCheckOption)
         && !result.GetValue(fixtureFieldDefaultCheckOption)
         && !result.GetValue(fixtureFieldDefaultDriftOption)
@@ -1259,7 +1253,6 @@ setupCommand.Validators.Add(result =>
     }
 
     if ((result.GetValue(fixtureFieldSumDriftOption)
-            || result.GetValue(fixtureRoadmapDisplayDriftOption)
             || result.GetValue(fixtureFieldSumRenderCheckOption)
             || result.GetValue(fixtureFieldDefaultCheckOption)
             || result.GetValue(fixtureFieldDefaultDriftOption)
@@ -1272,7 +1265,6 @@ setupCommand.Validators.Add(result =>
     var fixtureBrowserOperationCount = new[]
     {
         result.GetValue(fixtureFieldSumDriftOption),
-        result.GetValue(fixtureRoadmapDisplayDriftOption),
         result.GetValue(fixtureFieldSumRenderCheckOption),
         result.GetValue(fixtureFieldDefaultCheckOption),
         result.GetValue(fixtureFieldDefaultDriftOption),
@@ -1306,7 +1298,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureOption)
         && !parseResult.GetValue(fixtureUiOption)
         && !parseResult.GetValue(fixtureFieldSumDriftOption)
-        && !parseResult.GetValue(fixtureRoadmapDisplayDriftOption)
         && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultDriftOption)
@@ -1652,98 +1643,6 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             Console.Error.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"Fixture field-sum drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
-            return viewImporter.Warnings.Count == 0 ? 0 : 1;
-        }
-        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
-        {
-            Console.Error.WriteLine($"error: {exception.Message}");
-            return 1;
-        }
-    }
-
-    if (parseResult.GetValue(fixtureRoadmapDisplayDriftOption))
-    {
-        try
-        {
-            var org = parseResult.GetValue(fixtureOrgOption)!;
-            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
-            var token = parseResult.GetValue(tokenOption)
-                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
-                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
-                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
-            if (string.IsNullOrWhiteSpace(token))
-            {
-                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
-                return 1;
-            }
-
-            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
-            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            await using var browserSession = new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(
-                    graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption)),
-                Profile = parseResult.GetValue(setupBrowserProfileOption),
-            });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
-            client.OnRetry = Console.Error.WriteLine;
-            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
-            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
-
-            var snapshot = FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(
-                parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
-            var view = snapshot.Views.Single(candidate =>
-                string.Equals(candidate.Name, "Fixture Roadmap", StringComparison.Ordinal));
-            var projectData = await client.QueryAsync(
-                """
-                query($login: String!, $number: Int!) {
-                  organization(login: $login) {
-                    projectV2(number: $number) {
-                      views(first: 100) { nodes { number name } }
-                    }
-                  }
-                }
-                """,
-                new { login = org, number = projectNumber },
-                cancellationToken);
-            var targetViews = projectData
-                .GetProperty("organization")
-                .GetProperty("projectV2")
-                .GetProperty("views")
-                .GetProperty("nodes")
-                .EnumerateArray()
-                .Where(node => string.Equals(
-                    node.GetProperty("name").GetString(),
-                    view.Name,
-                    StringComparison.Ordinal))
-                .ToArray();
-            if (targetViews.Length != 1)
-            {
-                Console.Error.WriteLine(
-                    $"error: expected exactly one target View named '{view.Name}', found {targetViews.Length}.");
-                return 1;
-            }
-
-            var roadmap = view.Ui!.Roadmap!;
-            var viewImporter = new ViewUiImporter(browserSession) { OnProgress = Console.Error.WriteLine };
-            await viewImporter.ApplyRoadmapDisplayOptionsAsync(
-                org,
-                ProjectOwnerType.Organization,
-                projectNumber,
-                targetViews[0].GetProperty("number").GetInt32(),
-                view.Name,
-                roadmap.TruncateTitles,
-                roadmap.ShowDateFields,
-                cancellationToken);
-            foreach (var warning in viewImporter.Warnings)
-            {
-                Console.Error.WriteLine($"warning: {warning}");
-            }
-
-            Console.Error.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"Fixture Roadmap display drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
             return viewImporter.Warnings.Count == 0 ? 0 : 1;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)

@@ -198,86 +198,6 @@ public sealed class ViewUiImporter
         }
     }
 
-    /// <summary>Applies and verifies both persisted Roadmap display checkboxes for one target View.</summary>
-    public async Task ApplyRoadmapDisplayOptionsAsync(
-        string ownerLogin,
-        ProjectOwnerType ownerType,
-        int projectNumber,
-        int viewNumber,
-        string viewName,
-        bool truncateTitles,
-        bool showDateFields,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
-        ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
-
-        OnProgress?.Invoke($"Applying Roadmap display-option drift for view '{viewName}'...");
-        try
-        {
-            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-            var url = BrowserProjectUrl.Build(
-                _session.BaseUrl,
-                ownerLogin,
-                ownerType,
-                projectNumber,
-                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
-            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-
-            (bool? TruncateTitles, bool? ShowDateFields) persisted = default;
-            for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
-            {
-                var warningStart = _warnings.Count;
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Truncate titles",
-                    truncateTitles,
-                    viewName,
-                    cancellationToken).ConfigureAwait(false);
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Show date fields",
-                    showDateFields,
-                    viewName,
-                    cancellationToken).ConfigureAwait(false);
-                await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
-                persisted = await ReadPersistedRoadmapDisplayOptionsAsync(page, cancellationToken).ConfigureAwait(false);
-                if (persisted.TruncateTitles == truncateTitles
-                    && persisted.ShowDateFields == showDateFields)
-                {
-                    return;
-                }
-
-                if (attempt < ViewPersistenceAttempts)
-                {
-                    _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
-                    OnProgress?.Invoke(
-                        $"View '{viewName}' did not persist the Roadmap display options; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
-                    await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
-                    await PauseAsync(cancellationToken).ConfigureAwait(false);
-                }
-            }
-
-            if (persisted.TruncateTitles != truncateTitles)
-            {
-                _warnings.Add(
-                    $"view '{viewName}': Truncate titles expected '{FormatBoolean(truncateTitles)}', "
-                    + $"actual '{FormatBoolean(persisted.TruncateTitles)}' did not persist after {ViewPersistenceAttempts} attempts");
-            }
-
-            if (persisted.ShowDateFields != showDateFields)
-            {
-                _warnings.Add(
-                    $"view '{viewName}': Show date fields expected '{FormatBoolean(showDateFields)}', "
-                    + $"actual '{FormatBoolean(persisted.ShowDateFields)}' did not persist after {ViewPersistenceAttempts} attempts");
-            }
-        }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
-        {
-            _warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
-        }
-    }
-
     internal static async Task ApplyTabOrderRecoverablyAsync(
         Func<Task> reorderAsync,
         List<string> warnings)
@@ -658,19 +578,6 @@ public sealed class ViewUiImporter
 
         if (view.Ui?.Roadmap is { } roadmap)
         {
-            await TrySetMenuCheckboxAsync(
-                page,
-                "Truncate titles",
-                roadmap.TruncateTitles,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
-            await TrySetMenuCheckboxAsync(
-                page,
-                "Show date fields",
-                roadmap.ShowDateFields,
-                view.Name,
-                cancellationToken).ConfigureAwait(false);
-
             if (roadmap.StartField is not null || roadmap.TargetField is not null)
             {
                 await TrySetDateFieldsAsync(page, roadmap, view.Name, cancellationToken).ConfigureAwait(false);
@@ -835,41 +742,27 @@ public sealed class ViewUiImporter
             var sliceBy = view.Ui is null
                ? null
                : await ReadMenuValueAsync(menu, "Slice by").ConfigureAwait(false);
-            var truncateTitles = view.Ui?.Roadmap is null
-                ? null
-                : await ReadMenuCheckboxAsync(menu, "Truncate titles").ConfigureAwait(false);
-            var showDateFields = view.Ui?.Roadmap is null
-                ? null
-                : await ReadMenuCheckboxAsync(menu, "Show date fields").ConfigureAwait(false);
 
             var expectedFieldSum = FieldSumValuesToApply(view);
-            IReadOnlyList<string> fieldSum = [];
-            var fieldSumAvailable = false;
-            if (expectedFieldSum is not null)
+            if (expectedFieldSum is null)
             {
-                var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
-                if (await fieldSumItem.CountAsync().ConfigureAwait(false) > 0)
-                {
-                    await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
-                    await PauseAsync(cancellationToken).ConfigureAwait(false);
-                    var overlay = Sel.OpenMenu(page);
-                    await overlay.WaitForAsync().ConfigureAwait(false);
-                    if (await ReadCheckedValuesAsync(overlay).ConfigureAwait(false) is { } checkedValues)
-                    {
-                        fieldSum = checkedValues;
-                        fieldSumAvailable = true;
-                    }
-                }
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
             }
 
-            return new PersistedViewSettings(
-                groupBy,
-                columnBy,
-                sliceBy,
-                fieldSumAvailable,
-                fieldSum,
-                truncateTitles,
-                showDateFields);
+            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
+            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            {
+               return new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, []);
+            }
+
+            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+            var checkedValues = await ReadCheckedValuesAsync(overlay).ConfigureAwait(false);
+            return checkedValues is null
+                ? new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: false, [])
+                : new PersistedViewSettings(groupBy, columnBy, sliceBy, FieldSumAvailable: true, checkedValues);
         }
         finally
         {
@@ -908,45 +801,12 @@ public sealed class ViewUiImporter
         }
     }
 
-    private static async Task<(bool? TruncateTitles, bool? ShowDateFields)> ReadPersistedRoadmapDisplayOptionsAsync(
-        IPage page,
-        CancellationToken cancellationToken)
-    {
-        var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return (
-                await ReadMenuCheckboxAsync(menu, "Truncate titles").ConfigureAwait(false),
-                await ReadMenuCheckboxAsync(menu, "Show date fields").ConfigureAwait(false));
-        }
-        finally
-        {
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
     private static async Task<string?> ReadMenuValueAsync(ILocator menu, string label)
     {
         var item = Sel.ConfigurationMenuItem(menu, label);
         return await item.CountAsync().ConfigureAwait(false) == 0
             ? null
             : ViewUiExporter.ParseMenuValue(await item.First.InnerTextAsync().ConfigureAwait(false));
-    }
-
-    private static async Task<bool?> ReadMenuCheckboxAsync(ILocator menu, string label)
-    {
-        var option = Sel.ViewOptionCheckbox(menu, label);
-        if (await option.CountAsync().ConfigureAwait(false) == 0)
-        {
-            return null;
-        }
-
-        return await option.First.GetAttributeAsync("aria-checked").ConfigureAwait(false) switch
-        {
-            "true" => true,
-            "false" => false,
-            _ => null,
-        };
     }
 
     private static async Task<IReadOnlyList<string>?> ReadCheckedValuesAsync(ILocator overlay)
@@ -1025,21 +885,6 @@ public sealed class ViewUiImporter
             }
         }
 
-        if (expected.Ui?.Roadmap is { } roadmap)
-        {
-            if (actual.TruncateTitles != roadmap.TruncateTitles)
-            {
-                differences.Add(
-                    $"truncate-titles expected '{FormatBoolean(roadmap.TruncateTitles)}', actual '{FormatBoolean(actual.TruncateTitles)}'");
-            }
-
-            if (actual.ShowDateFields != roadmap.ShowDateFields)
-            {
-                differences.Add(
-                    $"show-date-fields expected '{FormatBoolean(roadmap.ShowDateFields)}', actual '{FormatBoolean(actual.ShowDateFields)}'");
-            }
-        }
-
         return differences;
     }
 
@@ -1059,62 +904,12 @@ public sealed class ViewUiImporter
 
     private static string FormatValue(string? value) => value ?? "none";
 
-    private static string FormatBoolean(bool? value) => value?.ToString().ToLowerInvariant() ?? "unavailable";
-
     internal sealed record PersistedViewSettings(
         string? GroupBy,
         string? ColumnBy,
         string? SliceBy,
         bool FieldSumAvailable,
-        IReadOnlyList<string> FieldSum,
-        bool? TruncateTitles = null,
-        bool? ShowDateFields = null);
-
-    private async Task TrySetMenuCheckboxAsync(
-        IPage page,
-        string label,
-        bool desired,
-        string viewName,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
-            var option = Sel.ViewOptionCheckbox(menu, label);
-            if (await option.CountAsync().ConfigureAwait(false) == 0)
-            {
-                _warnings.Add($"view '{viewName}': roadmap display option '{label}' is not available on the target");
-                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-                return;
-            }
-
-            var current = await ReadMenuCheckboxAsync(menu, label).ConfigureAwait(false);
-            var disabled = string.Equals(
-                await option.First.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
-                "true",
-                StringComparison.Ordinal);
-            if (current is null)
-            {
-                _warnings.Add($"view '{viewName}': roadmap display option '{label}' state could not be read on the target");
-            }
-            else if (current != desired && disabled)
-            {
-                _warnings.Add($"view '{viewName}': roadmap display option '{label}' is disabled and could not be set to {FormatBoolean(desired)}");
-            }
-            else if (current != desired)
-            {
-                await option.First.ClickAsync().ConfigureAwait(false);
-                await PauseAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-        {
-            _warnings.Add($"view '{viewName}': roadmap display option '{label}' could not be applied — {exception.Message}");
-            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        }
-    }
+        IReadOnlyList<string> FieldSum);
 
     private async Task<bool> TrySetSingleAsync(IPage page, string label, string value, string viewName, CancellationToken cancellationToken)
         => await TrySetSingleAsync(page, label, [value], value, viewName, cancellationToken).ConfigureAwait(false);

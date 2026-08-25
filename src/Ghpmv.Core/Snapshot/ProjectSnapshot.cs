@@ -208,7 +208,7 @@ public sealed record IterationSnapshot
 
 /// <summary>
 /// A project view. GraphQL-readable settings are captured here;
-/// UI-only settings (Slice by, Field sum, Roadmap dates/zoom/markers/display options) are
+/// UI-only settings (Slice by, Field sum, Roadmap dates/zoom/markers) are
 /// reserved in <see cref="Ui"/> and populated by the browser module (M6).
 /// </summary>
 public sealed record ViewSnapshot
@@ -275,12 +275,6 @@ public sealed record RoadmapSettingsSnapshot
     public string? Zoom { get; init; }
 
     public IReadOnlyList<string>? Markers { get; init; }
-
-    /// <summary>Whether long item titles are truncated.</summary>
-    public bool TruncateTitles { get; init; }
-
-    /// <summary>Whether item date fields are rendered on the Roadmap.</summary>
-    public bool ShowDateFields { get; init; }
 }
 
 /// <summary>

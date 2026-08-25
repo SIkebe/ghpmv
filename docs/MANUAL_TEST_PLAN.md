@@ -342,7 +342,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
   - `Fixture Board`: Board、Column by、Swimlanes、Field sum
-  - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、`Truncate titles`=on、`Show date fields`=on。fixture は truncation 確認用の長い draft title を含む
+  - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
   - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums`
 - Workflows
@@ -379,8 +379,6 @@ Views:
   - Dates=`Fixture Date` → `Fixture Sprint end`
   - Zoom=`Quarter`
   - Markers=`Fixture Date`
-  - Truncate titles=on
-  - Show date fields=on
 - `Fixture Empty Sums` (Table) を作成
   - group by Status
   - Field sum は空（`Count` を含めてすべて解除）
@@ -700,9 +698,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 - [ ] Table view の filter / visible fields / sort / group by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
-- [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
-- [ ] Roadmap の長い title と date-field 表示が source/target で一致し、reload 後も維持される。
-- [ ] `setup --fixture-roadmap-display-drift` 後の verify が `truncate titles mismatch` と `show date fields mismatch` を報告し、同じ target への再 import で `View: Match` に戻る。
+- [ ] Roadmap view の group by / field sum / date fields / zoom / markers は browser-assisted `verify` で `View: Match`。
 - [ ] View 名が一致。
 - [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。

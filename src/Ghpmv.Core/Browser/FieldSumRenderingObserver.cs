@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Ghpmv.Core.GitHub;
-using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -59,10 +58,6 @@ public sealed partial class FieldSumRenderingObserver
             var headerTexts = await ReadNormalizedTextsAsync(headers).ConfigureAwait(false);
             var labelTexts = await ReadNormalizedTextsAsync(Sel.GroupHeaderAggregateLabels(page)).ConfigureAwait(false);
             ValidateObservation(view, headerTexts, labelTexts);
-            if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
-            {
-                await ValidateRoadmapDisplayAsync(page, view).ConfigureAwait(false);
-            }
             OnProgress?.Invoke(
                 $"Rendered Field sums verified for view '{view.Name}': headers=[{string.Join(" | ", headerTexts)}]");
         }
@@ -101,60 +96,6 @@ public sealed partial class FieldSumRenderingObserver
                     $"view '{view.Name}': visible aggregate for '{field}' was not rendered with a numeric value");
             }
         }
-    }
-
-    internal static void ValidateRoadmapDisplayObservation(
-        ViewSnapshot view,
-        bool titleTruncated,
-        bool datesRendered)
-    {
-        var roadmap = view.Ui?.Roadmap
-            ?? throw new InvalidOperationException($"view '{view.Name}': expected Roadmap display state is unavailable");
-        if (roadmap.TruncateTitles && !titleTruncated)
-        {
-            throw new InvalidOperationException($"view '{view.Name}': long item title was not visibly truncated");
-        }
-
-        if (roadmap.ShowDateFields && !datesRendered)
-        {
-            throw new InvalidOperationException($"view '{view.Name}': item date fields were not visibly rendered");
-        }
-    }
-
-    private static async Task ValidateRoadmapDisplayAsync(IPage page, ViewSnapshot view)
-    {
-        var title = page.GetByText(FixtureProjectBuilder.RoadmapLongTitle, new() { Exact = true }).First;
-        await title.WaitForAsync(new()
-        {
-            State = WaitForSelectorState.Visible,
-            Timeout = 15_000,
-        }).ConfigureAwait(false);
-        var titleTruncated = await title.EvaluateAsync<bool>(
-            """
-            element => {
-              for (let node = element; node && node instanceof HTMLElement; node = node.parentElement) {
-                const style = getComputedStyle(node);
-                if (node.scrollWidth > node.clientWidth &&
-                    (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden')) {
-                  return true;
-                }
-              }
-              return false;
-            }
-            """).ConfigureAwait(false);
-        var datesRendered = await title.EvaluateAsync<bool>(
-            """
-            element => {
-              const datePattern = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[\/-]\d{1,2}|\d{1,2}月/;
-              for (let node = element.parentElement; node && node instanceof HTMLElement; node = node.parentElement) {
-                if (node.querySelector('time, relative-time') || datePattern.test(node.innerText.replace(element.innerText, ''))) {
-                  return true;
-                }
-              }
-              return false;
-            }
-            """).ConfigureAwait(false);
-        ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
     }
 
     private static async Task<IReadOnlyList<string>> ReadNormalizedTextsAsync(ILocator locator)

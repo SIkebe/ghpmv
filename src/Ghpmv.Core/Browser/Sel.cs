@@ -39,10 +39,6 @@ internal static class Sel
     public static ILocator CheckboxOptions(ILocator menu)
         => menu.GetByRole(AriaRole.Menuitemcheckbox).Or(menu.GetByRole(AriaRole.Option));
 
-    /// <summary>A direct checkbox in the parent View configuration menu.</summary>
-    public static ILocator ViewOptionCheckbox(ILocator menu, string name)
-        => menu.GetByRole(AriaRole.Menuitemcheckbox, new() { Name = name, Exact = true });
-
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });

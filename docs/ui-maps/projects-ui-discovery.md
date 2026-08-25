@@ -38,7 +38,6 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 5. Table / Roadmap とも変更後は `button "Save view"` が表示され、`alertdialog "Save display options for <view>?"` の `button "Save"` で確定する。既存の 2 段階保存フローと同じ
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
-8. `Truncate titles` / `Show date fields` は親 View menu の direct `menuitemcheckbox` で、状態は `aria-checked` に保持される。ghpmv は子 menu の `Markers` / `Field sum` と分離して読み書きし、Save view → reload 後に各 boolean を再読する
 
 ## Field default UI contract (2026-08-25 live discovery)
 
