@@ -251,6 +251,16 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Checkbox_selection_match_supports_roadmap_markers()
+    {
+        Assert.True(ViewUiImporter.CheckboxSelectionMatches(
+            ["Fixture Date", "Fixture Sprint"],
+            ["Fixture Sprint", "Fixture Date"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(["Fixture Date"], []));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches([], null));
+    }
+
+    [Fact]
     public void Rendered_field_sum_observation_accepts_count_and_numeric_labels()
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "View 1");

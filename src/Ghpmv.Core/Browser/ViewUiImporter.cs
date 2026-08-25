@@ -587,10 +587,7 @@ public sealed class ViewUiImporter
             {
                 await TrySetSingleAsync(page, "Zoom level", zoom, view.Name, cancellationToken).ConfigureAwait(false);
             }
-
-            await TrySetCheckboxesAsync(page, "Markers", roadmap.Markers ?? [], view.Name, cancellationToken).ConfigureAwait(false);
         }
-
     }
 
     internal static IReadOnlyList<string>? FieldSumValuesToApply(ViewSnapshot view)
@@ -628,6 +625,16 @@ public sealed class ViewUiImporter
             differences = CollectPersistenceDifferences(view, persisted);
             if (differences.Count == 0)
             {
+               if (view.Ui?.Roadmap is { } roadmap)
+               {
+                   await ApplyAndVerifyCheckboxesAsync(
+                       page,
+                       view.Name,
+                       "Markers",
+                       roadmap.Markers ?? [],
+                       cancellationToken).ConfigureAwait(false);
+               }
+
                return;
             }
 
@@ -682,6 +689,41 @@ public sealed class ViewUiImporter
             + $"did not persist after {ViewPersistenceAttempts} attempts");
     }
 
+    private async Task ApplyAndVerifyCheckboxesAsync(
+        IPage page,
+        string viewName,
+        string label,
+        IReadOnlyList<string> expected,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? persisted = null;
+        for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+        {
+            var warningStart = _warnings.Count;
+            await TrySetCheckboxesAsync(page, label, expected, viewName, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            persisted = await ReadPersistedCheckboxesAsync(page, label, cancellationToken).ConfigureAwait(false);
+            if (CheckboxSelectionMatches(expected, persisted))
+            {
+                return;
+            }
+
+            if (attempt < ViewPersistenceAttempts)
+            {
+                _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+                OnProgress?.Invoke(
+                    $"View '{viewName}' did not persist the {label} selection; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+                await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _warnings.Add(
+            $"view '{viewName}': {label} expected [{string.Join(", ", expected)}], "
+            + $"actual [{(persisted is null ? "unavailable" : string.Join(", ", persisted))}] "
+            + $"did not persist after {ViewPersistenceAttempts} attempts");
+    }
+
     private static async Task<PersistedViewSettings> ReadPersistedSettingsAsync(
         IPage page,
         ViewSnapshot view,
@@ -731,17 +773,23 @@ public sealed class ViewUiImporter
     private static async Task<IReadOnlyList<string>?> ReadPersistedFieldSumAsync(
         IPage page,
         CancellationToken cancellationToken)
+        => await ReadPersistedCheckboxesAsync(page, "Field sum", cancellationToken).ConfigureAwait(false);
+
+    private static async Task<IReadOnlyList<string>?> ReadPersistedCheckboxesAsync(
+        IPage page,
+        string label,
+        CancellationToken cancellationToken)
     {
         var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
         try
         {
-            var fieldSumItem = Sel.ConfigurationMenuItem(menu, "Field sum");
-            if (await fieldSumItem.CountAsync().ConfigureAwait(false) == 0)
+            var item = Sel.ConfigurationMenuItem(menu, label);
+            if (await item.CountAsync().ConfigureAwait(false) == 0)
             {
                 return null;
             }
 
-            await fieldSumItem.First.ClickAsync().ConfigureAwait(false);
+            await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             var overlay = Sel.OpenMenu(page);
             await overlay.WaitForAsync().ConfigureAwait(false);
@@ -845,6 +893,11 @@ public sealed class ViewUiImporter
             && expected.ToHashSet(StringComparer.Ordinal).SetEquals(actual);
 
     internal static bool FieldSumMatches(
+        IReadOnlyList<string> expected,
+        IReadOnlyList<string>? actual)
+        => CheckboxSelectionMatches(expected, actual);
+
+    internal static bool CheckboxSelectionMatches(
         IReadOnlyList<string> expected,
         IReadOnlyList<string>? actual)
         => actual is not null && SetEquals(expected, actual);
