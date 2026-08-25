@@ -7,7 +7,7 @@ namespace Ghpmv.Core.Snapshot;
 public sealed record ProjectSnapshot
 {
     /// <summary>The schema version written by the current tool.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public required int SchemaVersion { get; init; }
 
@@ -52,8 +52,7 @@ public sealed record StatusUpdateSnapshot
     public required string Body { get; init; }
 
     /// <summary>
-    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no
-    /// status or when a schema-v1 snapshot predates this optional property.
+    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no status.
     /// </summary>
     public string? Status { get; init; }
 

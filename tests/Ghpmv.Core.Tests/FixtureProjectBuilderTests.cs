@@ -421,7 +421,7 @@ public class FixtureProjectBuilderTests
         Assert.Equal(
             ["2026-07-27", "2026-08-21", "2026-09-12"],
             snapshot.Items
-                .Where(item => item.Draft?.Title is FixtureProjectBuilder.RoadmapLongTitle or "Fixture draft 2" or "Fixture draft 3")
+                .Where(item => item.Draft?.Title is "Fixture draft 1" or "Fixture draft 2" or "Fixture draft 3")
                 .Select(item => Assert.Single(item.FieldValues, value => value.FieldName == "Fixture Date").Date));
     }
 
@@ -454,6 +454,29 @@ public class FixtureProjectBuilderTests
         {
             Directory.Delete(operationDirectory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void New_e2e_fixture_adds_a_long_dated_roadmap_item_without_changing_the_shared_fixture()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2,
+            referenceDate: new DateOnly(2026, 8, 17));
+
+        var extended = FixtureProjectBuilder.AddRoadmapRenderingItem(snapshot);
+        var item = Assert.Single(
+            extended.Items,
+            candidate => candidate.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
+
+        Assert.Equal(snapshot.Items.Count + 1, extended.Items.Count);
+        Assert.DoesNotContain(
+            snapshot.Items,
+            candidate => candidate.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
+        Assert.Contains(item.FieldValues, value => value.FieldName == "Fixture Date" && value.Date is not null);
+        Assert.Contains(item.FieldValues, value => value.FieldName == "Fixture Sprint" && value.IterationTitle is not null);
     }
 
     [Fact]
@@ -513,7 +536,7 @@ public class FixtureProjectBuilderTests
         Assert.Null(field.IssueField);
         Assert.Equal(["Backend", "Frontend", "Operations"], field.Options!.Select(option => option.Name));
 
-        var draft = Assert.Single(snapshot.Items, item => item.Draft?.Title == FixtureProjectBuilder.RoadmapLongTitle);
+        var draft = Assert.Single(snapshot.Items, item => item.Draft?.Title == "Fixture draft 1");
         var value = Assert.Single(draft.FieldValues, value => value.FieldName == field.Name);
         Assert.Equal(false, value.IsIssueField);
         Assert.Equal(["Backend", "Frontend"], value.MultiSelectOptionNames);

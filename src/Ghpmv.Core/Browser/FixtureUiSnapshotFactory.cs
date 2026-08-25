@@ -64,7 +64,7 @@ public static class FixtureUiSnapshotFactory
                             Roadmap = view.Ui.Roadmap! with
                             {
                                 TruncateTitles = false,
-                                ShowDateFields = false,
+                                ShowDateFields = true,
                             },
                         },
                     }

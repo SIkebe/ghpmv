@@ -80,7 +80,7 @@ internal static class IntegrationFixtureSnapshot
         var repository = IntegrationTestSettings.FixtureRepositoryFullName;
         ItemSnapshot[] items =
         [
-            Draft(snapshot, FixtureProjectBuilder.RoadmapLongTitle),
+            Draft(snapshot, "Fixture draft 1"),
             Draft(snapshot, "Fixture draft 2"),
             Draft(snapshot, "Fixture draft 3"),
             snapshot.Items.Single(item =>

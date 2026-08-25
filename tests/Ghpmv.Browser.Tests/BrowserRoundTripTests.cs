@@ -270,7 +270,7 @@ public class BrowserRoundTripTests
                     result.ViewNumbers[sourceRoadmap.Number],
                     sourceRoadmap.Name,
                     truncateTitles: false,
-                    showDateFields: false,
+                    showDateFields: true,
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
@@ -305,10 +305,6 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
-                Assert.Contains(driftReport.Differences, difference =>
-                    difference.Severity == VerifySeverity.Error
-                    && difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow

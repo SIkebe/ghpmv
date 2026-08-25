@@ -461,7 +461,7 @@ public class ViewUiLogicTests
         Assert.True(standard.TruncateTitles);
         Assert.True(standard.ShowDateFields);
         Assert.False(drift.TruncateTitles);
-        Assert.False(drift.ShowDateFields);
+        Assert.True(drift.ShowDateFields);
     }
 
     [Fact]

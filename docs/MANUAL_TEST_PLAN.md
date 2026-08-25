@@ -702,7 +702,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap の長い title と date-field 表示が source/target で一致し、reload 後も維持される。
-- [ ] `setup --fixture-roadmap-display-drift` 後の verify が `truncate titles mismatch` と `show date fields mismatch` を報告し、同じ target への再 import で `View: Match` に戻る。
+- [ ] `setup --fixture-roadmap-display-drift` が `Show date fields` を維持したまま `Truncate titles` だけを変更し、verify が `truncate titles mismatch` だけを報告して、同じ target への再 import で `View: Match` に戻る。
 - [ ] View 名が一致。
 - [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。
@@ -741,7 +741,6 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] source と target の `project.template` が一致し、Organization の Templates UI と Create project ダイアログに表示される。
 - [ ] Status Updates を含む import では、target が一時的に通常 Project となり、全 writer 完了後に template へ戻る。
 - [ ] snapshot の `project.template` を `false` にして既存 template target へ再 import すると、最終段で通常 Projectへ戻る。
-- [ ] `project.template` 行を削除した schema v1 snapshot では、既存 target の template 状態が変わらない。
 
 ---
 

@@ -34,8 +34,18 @@ public static class SnapshotFile
         var stream = File.OpenRead(path);
         await using (stream.ConfigureAwait(false))
         {
-            return await JsonSerializer.DeserializeAsync(stream, SnapshotJsonContext.Default.ProjectSnapshot, cancellationToken).ConfigureAwait(false)
+            var snapshot = await JsonSerializer.DeserializeAsync(
+                stream,
+                SnapshotJsonContext.Default.ProjectSnapshot,
+                cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException($"'{path}' contained a null snapshot.");
+            if (snapshot.SchemaVersion != ProjectSnapshot.CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"'{path}' uses unsupported schema version {snapshot.SchemaVersion}; expected {ProjectSnapshot.CurrentSchemaVersion}.");
+            }
+
+            return snapshot;
         }
     }
 }

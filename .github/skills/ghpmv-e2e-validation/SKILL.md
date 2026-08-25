@@ -207,7 +207,7 @@ required Number fields は `Fixture Number` と `Fixture Number 2`。source / ta
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
-同じ `Fixture Roadmap` で `truncateTitles=true` と `showDateFields=true` も常に検証する。Step 6 は両 property が boolean として capture されたことを確認し、初回 browser-assisted verify は `View: Match` を要求する。negative-test phase では `setup --fixture-roadmap-display-drift` を既存 target に実行し、両 property の mismatch を確認してから、Field default / Field sum と同じ一回の repair import で戻す。別 scenario や別 target は作らない。
+同じ `Fixture Roadmap` で `truncateTitles=true` と `showDateFields=true` も常に検証する。Step 6 は両 property が boolean として capture されたことを確認し、初回 browser-assisted verify は `View: Match` を要求する。negative-test phase では `setup --fixture-roadmap-display-drift` が `Show date fields=true` を維持したまま `Truncate titles=false` だけを設定し、property の独立性を確認してから、Field default / Field sum と同じ一回の repair import で戻す。別 scenario や別 target は作らない。
 
 ## Feature checkpoint の実行時間最小化
 
@@ -1609,7 +1609,7 @@ finally {
 }
 ```
 
-target が data residency の場合は同じ endpoint option を追加する。`Fixture Roadmap display drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、field sum と Roadmap の2 property mismatch が存在する場合だけ semantic success とする。
+target が data residency の場合は同じ endpoint option を追加する。`Fixture Roadmap display drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、field sum と `truncate titles` mismatch が存在し、`show date fields` mismatch が存在しない場合だけ semantic success とする。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1649,9 +1649,11 @@ $driftFieldCategories = @($driftReport.categories | Where-Object category -eq 'F
 $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
 $fieldDefaultDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'Field' -and $_.message -match 'default value mismatch' })
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
-$roadmapDisplayDifferences = @($driftReport.differences | Where-Object {
-    $_.category -eq 'View' -and
-    $_.message -match "view 'Fixture Roadmap': (truncate titles|show date fields) mismatch"
+$roadmapTitleDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap': truncate titles mismatch"
+})
+$roadmapDateDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap': show date fields mismatch"
 })
 $nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
 $unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
@@ -1663,15 +1665,16 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
-    $roadmapDisplayDifferences.Count -ne 2 -or
-    $nonInfoDifferences.Count -ne 7 -or
+    $roadmapTitleDifferences.Count -ne 1 -or
+    $roadmapDateDifferences.Count -ne 0 -or
+    $nonInfoDifferences.Count -ne 6 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both Fixture Roadmap display-option mismatches.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and only the Fixture Roadmap title-truncation mismatch.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
-Write-Output $roadmapDisplayDifferences.message
+Write-Output $roadmapTitleDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
 Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'

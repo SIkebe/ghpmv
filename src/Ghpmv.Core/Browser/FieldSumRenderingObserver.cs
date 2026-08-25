@@ -129,6 +129,13 @@ public sealed partial class FieldSumRenderingObserver
             State = WaitForSelectorState.Visible,
             Timeout = 15_000,
         }).ConfigureAwait(false);
+        var item = Sel.RoadmapItem(title);
+        if (await item.CountAsync().ConfigureAwait(false) == 0)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
+        }
+
         var titleTruncated = await title.EvaluateAsync<bool>(
             """
             element => {
@@ -138,20 +145,18 @@ public sealed partial class FieldSumRenderingObserver
                     (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden')) {
                   return true;
                 }
+                if (node.matches("[role='row'], [role='listitem'], [data-testid*='roadmap-item'], [class*='roadmap-item'], [class*='RoadmapItem']")) {
+                  return false;
+                }
               }
               return false;
             }
             """).ConfigureAwait(false);
-        var datesRendered = await title.EvaluateAsync<bool>(
+        var datesRendered = await item.EvaluateAsync<bool>(
             """
-            element => {
+            item => {
               const datePattern = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[\/-]\d{1,2}|\d{1,2}月/;
-              for (let node = element.parentElement; node && node instanceof HTMLElement; node = node.parentElement) {
-                if (node.querySelector('time, relative-time') || datePattern.test(node.innerText.replace(element.innerText, ''))) {
-                  return true;
-                }
-              }
-              return false;
+              return item.querySelector('time, relative-time') !== null || datePattern.test(item.innerText);
             }
             """).ConfigureAwait(false);
         ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);

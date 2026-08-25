@@ -1142,7 +1142,7 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
-    Description = "Disable both standard Fixture Roadmap display options to exercise browser-assisted drift detection.",
+    Description = "Disable Fixture Roadmap title truncation while preserving date display to exercise independent drift detection.",
 };
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {
