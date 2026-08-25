@@ -45,13 +45,38 @@ public static class SnapshotFile
                     $"'{path}' uses unsupported schema version {schemaVersion}; expected {ProjectSnapshot.CurrentSchemaVersion}.");
             }
 
-            if (!root.GetProperty("project").TryGetProperty("template", out _))
+            if (!root.TryGetProperty("project", out var project)
+                || project.ValueKind != JsonValueKind.Object)
             {
-                throw new InvalidDataException($"'{path}' is missing required property 'project.template'.");
+                throw new InvalidDataException($"'{path}' is missing required object 'project'.");
             }
+
+            if (!project.TryGetProperty("template", out var template)
+                || template.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new InvalidDataException($"'{path}' is missing required boolean 'project.template'.");
+            }
+
+            RequireArray(root, "fields", path);
+            RequireArray(root, "views", path);
+            RequireArray(root, "workflows", path);
+            RequireArray(root, "items", path);
+            RequireArray(root, "statusUpdates", path);
+            RequireArray(root, "linkedRepositories", path);
+            RequireArray(root, "linkedTeams", path);
 
             return root.Deserialize(SnapshotJsonContext.Default.ProjectSnapshot)
                 ?? throw new InvalidDataException($"'{path}' contained a null snapshot.");
+        }
+    }
+
+    private static void RequireArray(JsonElement root, string propertyName, string path)
+    {
+        if (!root.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException(
+                $"'{path}' is missing required array '{propertyName}'.");
         }
     }
 }

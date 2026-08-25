@@ -310,28 +310,6 @@ public class SnapshotTests
     }
 
     [Fact]
-    public void Deserialize_snapshot_without_collaborators_and_linked_repositories_yields_null()
-    {
-        // Snapshots written before the collaborator/linked-repository fields stay loadable
-        // within schema version 1; the new fields deserialize as null ("not captured").
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [], "views": [], "workflows": [], "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.NotNull(restored);
-        Assert.Null(restored.Collaborators);
-        Assert.Null(restored.LinkedRepositories);
-        Assert.Null(restored.LinkedTeams);
-    }
-
-    [Fact]
     public void View_without_tab_position_remains_backward_compatible()
     {
         const string Json =
@@ -465,7 +443,74 @@ public class SnapshotTests
             var exception = await Assert.ThrowsAsync<InvalidDataException>(
                 () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
 
-            Assert.Contains("missing required property 'project.template'", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("missing required boolean 'project.template'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("statusUpdates", "null")]
+    [InlineData("linkedRepositories", "{}")]
+    [InlineData("linkedTeams", "null")]
+    public async Task SnapshotFile_rejects_missing_or_non_array_current_collections(
+        string propertyName,
+        string invalidValue)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-collection-").FullName;
+        try
+        {
+            var json = $$"""
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false, "template": false },
+                  "fields": [], "views": [], "workflows": [], "items": [],
+                  "statusUpdates": [],
+                  "linkedRepositories": [],
+                  "linkedTeams": [],
+                  "{{propertyName}}": {{invalidValue}}
+                }
+                """;
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                json,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains($"missing required array '{propertyName}'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SnapshotFile_rejects_an_omitted_current_collection()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-omitted-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                """
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false, "template": false },
+                  "fields": [], "views": [], "workflows": [], "items": [],
+                  "linkedRepositories": [], "linkedTeams": []
+                }
+                """,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains("missing required array 'statusUpdates'", exception.Message, StringComparison.Ordinal);
         }
         finally
         {
