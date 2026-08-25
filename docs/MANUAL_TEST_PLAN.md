@@ -520,7 +520,10 @@ dotnet run --project src/Ghpmv.Cli -- export `
 $snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
 $snapshot.views |
   Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums', 'Fixture Roadmap Dates Hidden') |
-  Select-Object name, groupByFields, @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } }
+  Select-Object name, groupByFields,
+    @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } },
+    @{ Name = 'truncateTitles'; Expression = { $_.ui.roadmap.truncateTitles } },
+    @{ Name = 'showDateFields'; Expression = { $_.ui.roadmap.showDateFields } }
 ```
 
 ### 7.2 Mapping CSV を補完

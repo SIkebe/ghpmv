@@ -141,29 +141,25 @@ public sealed partial class FieldSumRenderingObserver
                 $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
         }
 
-        var titleTruncated = await title.EvaluateAsync<bool>(
+        var titleTruncated = await item.EvaluateAsync<bool>(
             """
-            element => {
-              for (let node = element; node && node instanceof HTMLElement; node = node.parentElement) {
+            (item, titleText) => {
+              const element = Array.from(item.querySelectorAll('*'))
+                .find(node => node.children.length === 0 && node.textContent?.trim() === titleText);
+              for (let node = element; node && node instanceof HTMLElement && item.contains(node); node = node.parentElement) {
                 const style = getComputedStyle(node);
                 if (node.scrollWidth > node.clientWidth &&
                     (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden')) {
                   return true;
                 }
-                if (node.matches("[role='row'], [role='listitem'], [data-testid*='roadmap-item'], [class*='roadmap-item'], [class*='RoadmapItem']")) {
-                  return false;
-                }
               }
               return false;
             }
-            """).ConfigureAwait(false);
-        var datesRendered = await item.EvaluateAsync<bool>(
-            """
-            item => {
-              const datePattern = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[\/-]\d{1,2}|\d{1,2}月/;
-              return item.querySelector('time, relative-time') !== null || datePattern.test(item.innerText);
-            }
-            """).ConfigureAwait(false);
+            """,
+            FixtureProjectBuilder.RoadmapLongTitle).ConfigureAwait(false);
+        var itemText = await item.InnerTextAsync().ConfigureAwait(false);
+        var datesRendered = await Sel.RoadmapItemDateElements(item).CountAsync().ConfigureAwait(false) > 0
+            || RenderedDate().IsMatch(itemText);
         ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
     }
 
@@ -187,4 +183,7 @@ public sealed partial class FieldSumRenderingObserver
 
     [GeneratedRegex(@"^\s*[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)\b", RegexOptions.CultureInvariant)]
     private static partial Regex NumericRendering();
+
+    [GeneratedRegex(@"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[/-]\d{1,2}|\d{1,2}月", RegexOptions.CultureInvariant)]
+    private static partial Regex RenderedDate();
 }

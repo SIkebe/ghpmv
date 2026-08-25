@@ -84,6 +84,10 @@ internal static class Sel
         => title.Locator(
             "xpath=ancestor::*[@role='row' or @role='listitem' or contains(@data-testid,'roadmap-item') or contains(@class,'roadmap-item') or contains(@class,'RoadmapItem')][1]");
 
+    /// <summary>Semantic date/time elements rendered within one Roadmap item.</summary>
+    public static ILocator RoadmapItemDateElements(ILocator item)
+        => item.Locator("time, relative-time");
+
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)
         => page.GetByRole(AriaRole.Dialog, new() { Name = "Select date fields" });
