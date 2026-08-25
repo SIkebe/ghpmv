@@ -39,6 +39,16 @@ GitHub.com の一時 user-owned Project で Table / Board / Roadmap を作り、
 6. existing Project の再 import では GraphQL の View update が grouping / UI-only state を一旦 clear する。save 後の reload は未保存でも dirty 表示を消すため、`Save view` が消えたことだけでは永続化を証明できない。grouping、Slice by、Field sum を reload 後に意味的に再読し、不一致なら bounded retry する
 7. grouped Table / Roadmap の visible header content は `[class*='group-header-module__groupHeaderContent']`、Number sum label は `[class*='aggregate-labels-module__Label']`。標準 fixture の Table では `Todo 2 (2) Fixture Number: 3.14 Fixture Number 2: 0` のように描画される。`setup --fixture-field-sum-render-check` は reload 後にこの DOM を読み、Count の `N (N)` と各 `Field: numeric-value` を機械検証する
 
+## Roadmap title/date display discovery (2026-08-25)
+
+GitHub.com の一時 organization-owned Project #74 で `Truncate titles` / `Show date fields` を診断した。
+
+1. 両 control は親 View menu の direct `menuitemcheckbox` で、state は `aria-checked`、disabled=false。menu text に current value は表示されない
+2. click 直後に menu は閉じ、`Unsaved changes` / `Save view` は表示されない。menu 再openと同じ BrowserSession 内の reload では変更値を読める
+3. 片方の Roadmap で変更すると未操作の Roadmap にも同じ値が反映され、View単位のstateではない
+4. BrowserSession を破棄して fresh browser exportすると両値は `false` に戻った。同一session内のreloadはdurabilityを証明せず、snapshot/import/verifyで移行できる永続stateではない
+5. このため両 control は現行GitHub UIでは **unsupported**。snapshot schemaへ追加せず、import/verify/E2E contractにも含めない
+
 ## Field default UI contract (2026-08-25 live discovery)
 
 GitHub Docs と public schema introspection で Text / Number / Single-select default が browser-only であることを確認し、GitHub.com の一時Project #72で実UIを再確認した。Project `/settings` の`list "Fields"`内にfield nameのlinkがあり、custom fieldは`/settings/fields/{databaseId}`へ遷移する。

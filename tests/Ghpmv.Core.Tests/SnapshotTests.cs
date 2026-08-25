@@ -366,7 +366,7 @@ public class SnapshotTests
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -540,16 +540,14 @@ public class SnapshotTests
     }
 
     [Fact]
-    public void Serialized_json_keeps_schema_version_one_when_status_updates_are_present()
+    public void Serialized_json_uses_current_schema_when_status_updates_are_present()
     {
-        // Status updates are an additive schema-v1 field: capturing them must not bump
-        // the version, otherwise every previously written snapshot becomes unreadable.
-        Assert.Equal(1, ProjectSnapshot.CurrentSchemaVersion);
+        Assert.Equal(2, ProjectSnapshot.CurrentSchemaVersion);
 
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
         Assert.True(document.RootElement.GetProperty("project").GetProperty("template").GetBoolean());
     }
