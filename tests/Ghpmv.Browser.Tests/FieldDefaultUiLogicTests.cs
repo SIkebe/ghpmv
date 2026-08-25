@@ -143,7 +143,11 @@ public class FieldDefaultUiLogicTests
                         desiredSnapshot.Fields.Where(field => field.DefaultValue is not null),
                         field => Assert.Equal(new FieldDefaultValueSnapshot(), field.DefaultValue));
                 }
-                return Task.CompletedTask;
+                return Task.FromResult(new FieldDefaultUiImporter.FieldDefaultImportStepResult
+                {
+                    AppliedCount = 0,
+                    Warnings = [],
+                });
             },
             _ =>
             {
@@ -158,7 +162,11 @@ public class FieldDefaultUiLogicTests
             (phase, _, _) =>
             {
                 events.Add(phase.ToString());
-                return Task.CompletedTask;
+                return Task.FromResult(new FieldDefaultUiImporter.FieldDefaultImportStepResult
+                {
+                    AppliedCount = phase == FieldDefaultUiImporter.FieldDefaultImportPhase.ApplyAfterItems ? 4 : 0,
+                    Warnings = [],
+                });
             },
             _ =>
             {
@@ -170,6 +178,12 @@ public class FieldDefaultUiLogicTests
 
         Assert.True(skipped.DefaultsDeferred);
         Assert.False(resumed.DefaultsDeferred);
+        Assert.Equal("field-defaults: imported=0 warnings=1", skipped.Summary);
+        Assert.Equal(
+            "field defaults were deferred because 1 source item(s) were skipped; fix mappings and rerun import before defaults are applied",
+            Assert.Single(skipped.Warnings));
+        Assert.Equal("field-defaults: imported=4 warnings=0", resumed.Summary);
+        Assert.Empty(resumed.Warnings);
         Assert.Equal(
             [
                 "NeutralizeBeforeItems",

@@ -263,17 +263,10 @@ public sealed class FieldDefaultFixtureObserver
             CultureInfo.InvariantCulture,
             $"{_session.BaseUrl.TrimEnd('/')}/orgs/{organization}/projects/{projectNumber}");
         var page = await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-        var input = page.GetByRole(AriaRole.Combobox, new()
-        {
-            Name = "Start typing to create an item, or type hashtag to select a repository",
-            Exact = true,
-        }).First;
+        var input = Sel.ProjectItemEntry(page);
         await input.WaitForAsync().ConfigureAwait(false);
         await input.FillAsync(title).ConfigureAwait(false);
-        var createDraft = page.GetByRole(AriaRole.Option, new()
-        {
-            NameRegex = new System.Text.RegularExpressions.Regex("^Create a draft"),
-        });
+        var createDraft = Sel.CreateDraftOption(page);
         await createDraft.WaitForAsync().ConfigureAwait(false);
         await createDraft.ClickAsync().ConfigureAwait(false);
     }

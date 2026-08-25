@@ -32,7 +32,7 @@ public sealed class FieldDefaultUiImporter
 
     public static async Task<FieldDefaultImportSequenceResult<T>> RunImportSequenceAsync<T>(
         ProjectSnapshot snapshot,
-        Func<FieldDefaultImportPhase, ProjectSnapshot, CancellationToken, Task> applyDefaultsAsync,
+        Func<FieldDefaultImportPhase, ProjectSnapshot, CancellationToken, Task<FieldDefaultImportStepResult>> applyDefaultsAsync,
         Func<CancellationToken, Task<T>> importItemsAsync,
         Func<T, int> getSkippedItemCount,
         CancellationToken cancellationToken = default)
@@ -45,26 +45,46 @@ public sealed class FieldDefaultUiImporter
         var hasCapturedDefaults = snapshot.Fields.Any(field => field.DefaultValue is not null);
         if (hasCapturedDefaults)
         {
-            await applyDefaultsAsync(
+            var neutralized = await applyDefaultsAsync(
                 FieldDefaultImportPhase.NeutralizeBeforeItems,
                 CreateClearedDefaultsSnapshot(snapshot),
                 cancellationToken).ConfigureAwait(false);
+            if (neutralized.Warnings.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "Target field defaults could not be cleared before item import: "
+                    + string.Join("; ", neutralized.Warnings));
+            }
         }
 
         var itemResult = await importItemsAsync(cancellationToken).ConfigureAwait(false);
-        var deferred = ShouldDefer(snapshot, getSkippedItemCount(itemResult));
+        var skippedItemCount = getSkippedItemCount(itemResult);
+        var deferred = ShouldDefer(snapshot, skippedItemCount);
+        var appliedCount = 0;
+        IReadOnlyList<string> warnings = [];
         if (hasCapturedDefaults && !deferred)
         {
-            await applyDefaultsAsync(
+            var applied = await applyDefaultsAsync(
                 FieldDefaultImportPhase.ApplyAfterItems,
                 snapshot,
                 cancellationToken).ConfigureAwait(false);
+            appliedCount = applied.AppliedCount;
+            warnings = applied.Warnings;
+        }
+        else if (deferred)
+        {
+            warnings =
+            [
+                $"field defaults were deferred because {skippedItemCount} source item(s) were skipped; fix mappings and rerun import before defaults are applied",
+            ];
         }
 
         return new FieldDefaultImportSequenceResult<T>
         {
             ItemResult = itemResult,
             DefaultsDeferred = deferred,
+            AppliedCount = appliedCount,
+            Warnings = warnings,
         };
     }
 
@@ -95,6 +115,19 @@ public sealed class FieldDefaultUiImporter
         public required T ItemResult { get; init; }
 
         public required bool DefaultsDeferred { get; init; }
+
+        public required int AppliedCount { get; init; }
+
+        public required IReadOnlyList<string> Warnings { get; init; }
+
+        public string Summary => FormatSummary(AppliedCount, Warnings.Count);
+    }
+
+    public sealed record FieldDefaultImportStepResult
+    {
+        public required int AppliedCount { get; init; }
+
+        public required IReadOnlyList<string> Warnings { get; init; }
     }
 
     public async Task ImportAsync(

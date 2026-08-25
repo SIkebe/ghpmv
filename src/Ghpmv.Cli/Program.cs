@@ -575,7 +575,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         }
 
         var fieldDefaultWarnings = 0;
-        var fieldDefaultsImported = 0;
+        string? fieldDefaultSummary = null;
         var itemImporter = new ItemImporter(client)
         {
             RepositoryMapping = repoMapping,
@@ -601,33 +601,29 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                         ownerType,
                         result.ProjectNumber,
                         ct);
-                    if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.NeutralizeBeforeItems
-                        && defaultImporter.Warnings.Count > 0)
-                    {
-                        throw new InvalidOperationException(
-                            "Target field defaults could not be cleared before item import: "
-                            + string.Join("; ", defaultImporter.Warnings));
-                    }
                     if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.ApplyAfterItems)
                     {
                         foreach (var warning in defaultImporter.Warnings)
                         {
                             Console.Error.WriteLine($"warning: {warning}");
                         }
-
-                        fieldDefaultWarnings = defaultImporter.Warnings.Count;
-                        fieldDefaultsImported = defaultImporter.AppliedCount;
                     }
+
+                    return new FieldDefaultUiImporter.FieldDefaultImportStepResult
+                    {
+                        AppliedCount = defaultImporter.AppliedCount,
+                        Warnings = defaultImporter.Warnings,
+                    };
                 },
                 ct => itemImporter.ImportAsync(snapshot, result, inDirectory, ct),
                 candidate => candidate.Skipped,
                 cancellationToken);
             itemResult = sequence.ItemResult;
+            fieldDefaultWarnings = sequence.Warnings.Count;
+            fieldDefaultSummary = sequence.Summary;
             if (sequence.DefaultsDeferred)
             {
-                fieldDefaultWarnings = 1;
-                Console.Error.WriteLine(
-                    $"warning: field defaults were deferred because {itemResult.Skipped} source item(s) were skipped; fix mappings and rerun import before defaults are applied");
+                Console.Error.WriteLine($"warning: {sequence.Warnings[0]}");
             }
         }
         else
@@ -772,9 +768,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
         if (enableBrowserAutomation)
         {
-            Console.WriteLine(FieldDefaultUiImporter.FormatSummary(
-                fieldDefaultsImported,
-                fieldDefaultWarnings));
+            Console.WriteLine(fieldDefaultSummary);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
         }
