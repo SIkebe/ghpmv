@@ -1120,6 +1120,33 @@ if ($roadmapDatesHidden.Count -ne 1 -or
     Stop-FieldSumSnapshotCheck 'Fixture Roadmap Dates Hidden must capture truncateTitles=true and showDateFields=false.'
     return
 }
+$roadmapLongTitle = 'Fixture roadmap item with a deliberately long title for truncation rendering verification'
+$roadmapItems = @($snapshot.items | Where-Object {
+    $_.type -eq 'DRAFT_ISSUE' -and $_.draft.title -eq $roadmapLongTitle
+})
+if ($roadmapItems.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Expected exactly one Roadmap rendering draft '$roadmapLongTitle', found $($roadmapItems.Count)."
+    return
+}
+$roadmapItem = $roadmapItems[0]
+if ($roadmapItem.isArchived -ne $false) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must be unarchived."
+    return
+}
+$roadmapDates = @($roadmapItem.fieldValues | Where-Object {
+    $_.fieldName -eq 'Fixture Date' -and -not [string]::IsNullOrWhiteSpace($_.date)
+})
+if ($roadmapDates.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must have exactly one non-empty Fixture Date value."
+    return
+}
+$roadmapIterations = @($roadmapItem.fieldValues | Where-Object {
+    $_.fieldName -eq 'Fixture Sprint' -and -not [string]::IsNullOrWhiteSpace($_.iterationTitle)
+})
+if ($roadmapIterations.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must have exactly one non-empty Fixture Sprint value."
+    return
+}
 Write-Output 'GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_SNAPSHOT_MATCH'
 Write-Output 'GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH'
