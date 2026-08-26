@@ -308,7 +308,7 @@ Source project number: <source-project-number>
 
 ### 5.2 View / Workflow fixture を GraphQL API + C# / Playwright で作成する
 
-`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。`--fixture-require-new` を指定した新規 E2E fixture では、Project の Date / Iteration 値を実行週の月曜日を基準に配置し、Roadmap の初期表示範囲内で確認できるようにします。基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap、非自明な tab order、Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。
+`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。`--fixture-require-new` を指定した新規 E2E fixture では、Project の Date / Iteration 値を実行週の月曜日を基準に配置し、Roadmap の初期表示範囲内で確認できるようにします。基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap、非自明な tab order、Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。Roadmap の shared display option などbrowser storageに保持される設定は、書き込み後に同じbrowser profileへ保存され、後続のfresh contextでも再利用されます。
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `

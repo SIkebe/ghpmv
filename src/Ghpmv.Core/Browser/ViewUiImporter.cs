@@ -160,6 +160,8 @@ public sealed class ViewUiImporter
                 viewNumbers,
                 cancellationToken),
             _warnings).ConfigureAwait(false);
+        // GitHub keeps some View preferences in browser storage rather than the Project API.
+        await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
     }
 
     internal static void ValidateSharedRoadmapDisplaySettings(IReadOnlyList<ViewSnapshot> views)
@@ -214,6 +216,7 @@ public sealed class ViewUiImporter
                 viewName,
                 fieldSum,
                 cancellationToken).ConfigureAwait(false);
+            await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
@@ -268,6 +271,7 @@ public sealed class ViewUiImporter
                 if (persisted.TruncateTitles == truncateTitles
                     && persisted.ShowDateFields == showDateFields)
                 {
+                    await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
                     return;
                 }
 

@@ -187,6 +187,29 @@ public class BrowserRoundTripTests
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
+                await using (var persistedTargetSession = CreateSession(
+                    targetStatePath!,
+                    E2eTestEnvironment.Current.Target))
+                {
+                    var targetLogin = await targetClient.GetViewerLoginAsync(cancellationToken);
+                    await persistedTargetSession.ValidateAuthenticationAsync(targetLogin, cancellationToken);
+                    var persistedViewExporter = new ViewUiExporter(persistedTargetSession);
+                    var targetViewSnapshot = snapshot with
+                    {
+                        Views = snapshot.Views.Select(view => view with
+                        {
+                            Number = result.ViewNumbers[view.Number],
+                        }).ToList(),
+                    };
+                    var persistedTarget = await persistedViewExporter.EnrichAsync(
+                        targetViewSnapshot,
+                        TargetOrg,
+                        result.ProjectNumber,
+                        cancellationToken);
+                    Assert.Empty(persistedViewExporter.Warnings);
+                    AssertRoundTrippedViews(snapshot, persistedTarget);
+                }
+
                 var workflowImporter = new WorkflowUiImporter(targetSession)
                 {
                     OrganizationMapping = OrganizationMapping,
