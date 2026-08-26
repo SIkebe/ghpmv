@@ -1773,7 +1773,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、Field default / Field sumだけのdrift verifyを送る。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、保持中のRoadmap date-display driftを含め、Field default / Field sum / Roadmap date-displayの3 driftを同時検証するverifyを送る。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
