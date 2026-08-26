@@ -5,6 +5,7 @@ using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
 using Ghpmv.TestSupport;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
 namespace Ghpmv.Browser.Tests;
@@ -136,6 +137,13 @@ public class BrowserRoundTripTests
             };
 
             var operationLogDirectory = CreateOperationLogDirectory();
+            var expectedRoadmapDisplay = Assert.Single(
+                snapshot.Views
+                    .Where(view => view.Layout == "ROADMAP_LAYOUT")
+                    .Select(view => (
+                        view.Ui!.Roadmap!.TruncateTitles,
+                        view.Ui.Roadmap.ShowDateFields))
+                    .Distinct());
             var importer = new ProjectImporter(targetClient)
             {
                 OperationLogDirectory = operationLogDirectory,
@@ -147,6 +155,8 @@ public class BrowserRoundTripTests
                 UserMapping = userMapping,
             };
             var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
+            Exception? testFailure = null;
+            Exception? cleanupFailure = null;
             try
             {
                 var initialItemResult = await new ItemImporter(targetClient)
@@ -177,13 +187,6 @@ public class BrowserRoundTripTests
 
                 var targetPage = await targetSession.GetPageAsync(cancellationToken);
                 await targetPage.SetViewportSizeAsync(480, 1000);
-                var expectedRoadmapDisplay = Assert.Single(
-                    snapshot.Views
-                        .Where(view => view.Layout == "ROADMAP_LAYOUT")
-                        .Select(view => (
-                            view.Ui!.Roadmap!.TruncateTitles,
-                            view.Ui.Roadmap.ShowDateFields))
-                        .Distinct());
                 await targetPage.EvaluateAsync(
                     """
                     values => {
@@ -480,9 +483,61 @@ public class BrowserRoundTripTests
 
                 Assert.Equal(5, browserVerificationCount);
             }
+            catch (Exception exception)
+            {
+                testFailure = exception;
+            }
             finally
             {
-                await DeleteProjectAsync(targetClient, result.ProjectId);
+                try
+                {
+                    var targetPage = await targetSession.GetPageAsync(CancellationToken.None);
+                    await targetPage.EvaluateAsync(
+                        """
+                        values => {
+                          localStorage.setItem("projects.roadmapTruncateTitles", values.truncateTitles);
+                          localStorage.setItem("projects.roadmapShowDateFields", values.showDateFields);
+                        }
+                        """,
+                        new
+                        {
+                            truncateTitles = expectedRoadmapDisplay.TruncateTitles!.Value.ToString().ToLowerInvariant(),
+                            showDateFields = expectedRoadmapDisplay.ShowDateFields!.Value.ToString().ToLowerInvariant(),
+                        });
+                    await targetSession.SaveStateAsync(CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailure = exception;
+                }
+                finally
+                {
+                    try
+                    {
+                        await DeleteProjectAsync(targetClient, result.ProjectId);
+                    }
+                    catch (Exception exception)
+                    {
+                        cleanupFailure = cleanupFailure is null
+                            ? exception
+                            : new AggregateException(cleanupFailure, exception);
+                    }
+                }
+            }
+
+            if (testFailure is not null)
+            {
+                if (cleanupFailure is not null)
+                {
+                    testFailure.Data["BrowserRoundTrip cleanup failure"] = cleanupFailure.ToString();
+                }
+
+                ExceptionDispatchInfo.Capture(testFailure).Throw();
+            }
+
+            if (cleanupFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
             }
         }
         finally
