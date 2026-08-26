@@ -239,78 +239,104 @@ public sealed class ViewUiImporter
         ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
 
         OnProgress?.Invoke($"Applying Roadmap display-option drift for view '{viewName}'...");
-        var sessionStarted = false;
+        IPage page;
         try
         {
-            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
-            sessionStarted = true;
-            var url = BrowserProjectUrl.Build(
-                _session.BaseUrl,
-                ownerLogin,
-                ownerType,
-                projectNumber,
-                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
-            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-
-            (bool? TruncateTitles, bool? ShowDateFields) persisted = default;
-            for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
-            {
-                var warningStart = _warnings.Count;
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Truncate titles",
-                    truncateTitles,
-                    viewName,
-                    cancellationToken).ConfigureAwait(false);
-                await TrySetMenuCheckboxAsync(
-                    page,
-                    "Show date fields",
-                    showDateFields,
-                    viewName,
-                    cancellationToken).ConfigureAwait(false);
-                await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
-                persisted = await ReadPersistedRoadmapDisplayOptionsAsync(page, cancellationToken).ConfigureAwait(false);
-                if (persisted.TruncateTitles == truncateTitles
-                    && persisted.ShowDateFields == showDateFields)
-                {
-                    return;
-                }
-
-                if (attempt < ViewPersistenceAttempts)
-                {
-                    _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
-                    OnProgress?.Invoke(
-                        $"View '{viewName}' did not persist the Roadmap display options; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
-                    await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
-                    await PauseAsync(cancellationToken).ConfigureAwait(false);
-                }
-            }
-
-            if (persisted.TruncateTitles != truncateTitles)
-            {
-                _warnings.Add(
-                    $"view '{viewName}': Truncate titles expected '{FormatBoolean(truncateTitles)}', "
-                    + $"actual '{FormatBoolean(persisted.TruncateTitles)}' did not persist after {ViewPersistenceAttempts} attempts");
-            }
-
-            if (persisted.ShowDateFields != showDateFields)
-            {
-                _warnings.Add(
-                    $"view '{viewName}': Show date fields expected '{FormatBoolean(showDateFields)}', "
-                    + $"actual '{FormatBoolean(persisted.ShowDateFields)}' did not persist after {ViewPersistenceAttempts} attempts");
-            }
+            page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
+            return;
+        }
+
+        await ApplyRoadmapDisplayWriteRecoverablyAsync(
+            async () =>
+            {
+                var url = BrowserProjectUrl.Build(
+                    _session.BaseUrl,
+                    ownerLogin,
+                    ownerType,
+                    projectNumber,
+                    string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
+                await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+
+                (bool? TruncateTitles, bool? ShowDateFields) persisted = default;
+                for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
+                {
+                    var warningStart = _warnings.Count;
+                    await TrySetMenuCheckboxAsync(
+                        page,
+                        "Truncate titles",
+                        truncateTitles,
+                        viewName,
+                        cancellationToken).ConfigureAwait(false);
+                    await TrySetMenuCheckboxAsync(
+                        page,
+                        "Show date fields",
+                        showDateFields,
+                        viewName,
+                        cancellationToken).ConfigureAwait(false);
+                    await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+                    persisted = await ReadPersistedRoadmapDisplayOptionsAsync(page, cancellationToken).ConfigureAwait(false);
+                    if (persisted.TruncateTitles == truncateTitles
+                        && persisted.ShowDateFields == showDateFields)
+                    {
+                        return;
+                    }
+
+                    if (attempt < ViewPersistenceAttempts)
+                    {
+                        _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
+                        OnProgress?.Invoke(
+                            $"View '{viewName}' did not persist the Roadmap display options; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
+                        await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+                        await PauseAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                if (persisted.TruncateTitles != truncateTitles)
+                {
+                    _warnings.Add(
+                        $"view '{viewName}': Truncate titles expected '{FormatBoolean(truncateTitles)}', "
+                        + $"actual '{FormatBoolean(persisted.TruncateTitles)}' did not persist after {ViewPersistenceAttempts} attempts");
+                }
+
+                if (persisted.ShowDateFields != showDateFields)
+                {
+                    _warnings.Add(
+                        $"view '{viewName}': Show date fields expected '{FormatBoolean(showDateFields)}', "
+                        + $"actual '{FormatBoolean(persisted.ShowDateFields)}' did not persist after {ViewPersistenceAttempts} attempts");
+                }
+            },
+            () => _session.SaveStateAsync(CancellationToken.None),
+            _warnings,
+            viewName).ConfigureAwait(false);
+    }
+
+    internal static async Task ApplyRoadmapDisplayWriteRecoverablyAsync(
+        Func<Task> writeAsync,
+        Func<Task> saveStateAsync,
+        List<string> warnings,
+        string viewName)
+    {
+        ArgumentNullException.ThrowIfNull(writeAsync);
+        ArgumentNullException.ThrowIfNull(saveStateAsync);
+        ArgumentNullException.ThrowIfNull(warnings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
+
+        try
+        {
+            await writeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
         }
         finally
         {
-            if (sessionStarted)
-            {
-                // Preserve partial browser-storage writes even when read-back reports a recoverable mismatch.
-                await _session.SaveStateAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            // Preserve partial browser-storage writes even when read-back reports a recoverable mismatch.
+            await saveStateAsync().ConfigureAwait(false);
         }
     }
 

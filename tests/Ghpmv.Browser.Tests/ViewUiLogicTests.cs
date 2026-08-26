@@ -699,6 +699,33 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public async Task Roadmap_recoverable_failure_saves_partial_browser_storage_state()
+    {
+        var warnings = new List<string>();
+        var partialWriteApplied = false;
+        var savedPartialWrite = false;
+
+        await ViewUiImporter.ApplyRoadmapDisplayWriteRecoverablyAsync(
+            () =>
+            {
+                partialWriteApplied = true;
+                throw new InvalidOperationException("forced read-back failure");
+            },
+            () =>
+            {
+                savedPartialWrite = partialWriteApplied;
+                return Task.CompletedTask;
+            },
+            warnings,
+            "Fixture Roadmap");
+
+        Assert.True(savedPartialWrite);
+        var warning = Assert.Single(warnings);
+        Assert.Contains("Fixture Roadmap", warning, StringComparison.Ordinal);
+        Assert.Contains("forced read-back failure", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Tab_order_poll_retries_an_incomplete_connection_until_all_mapped_views_are_visible()
     {
         var reads = new Queue<IReadOnlyList<int>>(
