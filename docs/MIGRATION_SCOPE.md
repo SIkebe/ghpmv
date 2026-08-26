@@ -63,9 +63,9 @@ View names, layouts, filters, and ordered visible fields are imported through th
 |---|---:|---|
 | Table views | ✅ / best effort | Name, layout, filter, and visible-field order use GraphQL. Group by, the first sort key, Slice by, and grouped-view Field sum use browser enrichment. Field sums preserve Count, multiple Number fields, and an empty selection. Additional sort keys are exported but only the first is applied. |
 | Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
-| Roadmap views | ✅ | Date fields, zoom level, markers, and grouped-view Field sum are tested. Field sums preserve Count, multiple Number fields, and an empty selection. |
+| Roadmap views | ✅ | Date fields, zoom level, markers, title truncation, date-field display, and grouped-view Field sum are tested. |
 | View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
-| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
+| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. Roadmap checkbox failures identify the property and View. |
 | View tab order | ✅ with browser automation | The public GraphQL `POSITION` order can differ from the saved-tab order shown by GitHub. Browser-assisted export/verify read tab `href` values in DOM order, and browser-assisted import applies the minimum drag-and-drop moves after all View settings. API-only export leaves tab order uncaptured, API-only import warns when a snapshot contains it, and API-only verify marks it not verified. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 

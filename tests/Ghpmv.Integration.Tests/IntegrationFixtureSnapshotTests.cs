@@ -20,7 +20,7 @@ public class IntegrationFixtureSnapshotTests
             Workflows = [],
             Items =
             [
-                Draft("Fixture draft 1", 0),
+                Draft(FixtureProjectBuilder.RoadmapLongTitle, 0),
                 Draft("Fixture draft 2", 1),
                 Draft("Fixture draft 3", 2),
                 Content("ISSUE", 1, 3),

@@ -53,6 +53,29 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
+    /// <summary>Creates deliberate drift for both Roadmap display checkboxes.</summary>
+    public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
+    {
+        var snapshot = Create(repositoryName);
+        return snapshot with
+        {
+            Views = snapshot.Views.Select(view =>
+                string.Equals(view.Name, "Fixture Roadmap", StringComparison.Ordinal)
+                    ? view with
+                    {
+                        Ui = view.Ui! with
+                        {
+                            Roadmap = view.Ui.Roadmap! with
+                            {
+                                TruncateTitles = false,
+                                ShowDateFields = false,
+                            },
+                        },
+                    }
+                    : view).ToList(),
+        };
+    }
+
     /// <summary>
     /// Creates deliberate target drift for every supported field-default type. The negative
     /// Number default is cleared so the same operation also exercises explicit removal.
@@ -189,6 +212,8 @@ public static class FixtureUiSnapshotFactory
                     TargetField = "Fixture Sprint end",
                     Zoom = "Quarter",
                     Markers = ["Fixture Date"],
+                    TruncateTitles = true,
+                    ShowDateFields = true,
                 },
             },
         },

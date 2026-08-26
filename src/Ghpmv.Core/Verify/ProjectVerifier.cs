@@ -1032,7 +1032,9 @@ public sealed class ProjectVerifier
             && string.Equals(source.StartField, target.StartField, StringComparison.Ordinal)
             && string.Equals(source.TargetField, target.TargetField, StringComparison.Ordinal)
             && string.Equals(source.Zoom, target.Zoom, StringComparison.Ordinal)
-            && UiListEquals(source.Markers, target.Markers);
+            && UiListEquals(source.Markers, target.Markers)
+            && source.TruncateTitles == target.TruncateTitles
+            && source.ShowDateFields == target.ShowDateFields;
 
     private static bool MultisetEquals<T>(
         IReadOnlyList<T> source,
@@ -1123,6 +1125,35 @@ public sealed class ProjectVerifier
                 AddError(differences, ViewCategory,
                     $"view '{name}': markers mismatch (source [{JoinUi(sourceRoadmap.Markers)}], target [{JoinUi(targetRoadmap.Markers)}])");
             }
+
+            CompareUiBoolean(
+                differences,
+                name,
+                "truncate titles",
+                sourceRoadmap.TruncateTitles,
+                targetRoadmap.TruncateTitles);
+            CompareUiBoolean(
+                differences,
+                name,
+                "show date fields",
+                sourceRoadmap.ShowDateFields,
+                targetRoadmap.ShowDateFields);
+        }
+    }
+
+    private static void CompareUiBoolean(
+        List<VerifyDifference> differences,
+        string viewName,
+        string setting,
+        bool source,
+        bool target)
+    {
+        if (source != target)
+        {
+            AddError(
+                differences,
+                ViewCategory,
+                $"view '{viewName}': {setting} mismatch (source '{source.ToString().ToLowerInvariant()}', target '{target.ToString().ToLowerInvariant()}')");
         }
     }
 

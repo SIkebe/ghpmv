@@ -26,7 +26,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | sort(複数キー+方向) | GraphQL `sortByFields`(`ProjectV2SortByField.direction`) | **UI** | |
 | **Slice by** | ❌ API に無い → **UI で読む** | **UI** | |
 | **Field sum** | ❌ API に無い → **UI で読む** | **UI** | Board と grouped Table / Roadmap。Count、複数 Number field、空集合を complete-set 同期 |
-| **Roadmap 設定(Dates / Zoom / Markers)** | ❌ API に無い → **UI で読む** | **UI** | |
+| **Roadmap 設定(Dates / Zoom / Markers / Truncate titles / Show date fields)** | ❌ API に無い → **UI で読む** | **UI** | 2つの表示 option は boolean として独立に同期 |
 | タブの並び順 | **UI**(`navigation "Select view"` 内のsaved tab `href`順) | **UI**(タブの drag & drop) | GraphQL `POSITION`は現行UIのsaved-tab順と乖離する場合がある。`ViewSnapshot.tabPosition`はschema v1のnullable additive field |
 
 ### Workflow のプロパティ別ソースマップ
