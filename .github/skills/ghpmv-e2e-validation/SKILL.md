@@ -208,7 +208,7 @@ required Number fields は `Fixture Number` と `Fixture Number 2`。source / ta
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
-同じ round-trip でProject-shared Roadmap state `(truncateTitles=true, showDateFields=false)` を両Roadmapからcaptureし、DOM checkpointでtitle truncationとdate非表示を検証する。negative-test phaseは片方のcontrolからshared stateを`(false,true)`へ変更し、両Roadmapに両property mismatchが出ることと、DOMでtitle非truncation/date表示を確認してから同じrepair importで戻す。
+同じ round-trip でProject-shared Roadmap state `(truncateTitles=true, showDateFields=false)` を両Roadmapからcaptureし、DOM checkpointでtitle truncationとdate非表示を検証する。negative-test phaseはtitle-only `(false,false)` とdate-only `(true,true)` をそれぞれ別checkpointで適用し、exact mismatch、DOM rendering、baseline repairを各段階で確認する。
 
 ## Feature checkpoint の実行時間最小化
 
@@ -1558,7 +1558,307 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 
 ### Deliberate drift と repair
 
-初回の機械的な `Field: Match` / `View: Match` と new-draft functional check 後、同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
+初回の機械的な `Field: Match` / `View: Match` と new-draft functional check 後、まずtitle-only Roadmap driftを同じtargetへ適用する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-display-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+同じterminalでbrowser-assisted verifyを実行する。
+
+```powershell
+$titleDriftReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-title-drift-report.json'
+Remove-Item -LiteralPath $titleDriftReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $titleDriftReport
+    $titleDriftExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+if ($titleDriftExitCode -eq 0) { throw 'Title-only Roadmap drift was not detected.' }
+$titleReport = Get-Content -LiteralPath $titleDriftReport -Raw | ConvertFrom-Json
+$titleViewCategory = @($titleReport.categories | Where-Object category -eq 'View')
+$titleDifferences = @($titleReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'truncate titles mismatch' })
+$dateDifferences = @($titleReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'show date fields mismatch' })
+$titleNonInfoDifferences = @($titleReport.differences | Where-Object severity -ne 'Info')
+$expectedTitleViews = @("view 'Fixture Roadmap': truncate titles mismatch", "view 'Fixture Roadmap Dates Hidden': truncate titles mismatch")
+if ($titleViewCategory.Count -ne 1 -or
+    $titleViewCategory[0].status -ne 'Mismatch' -or
+    $titleDifferences.Count -ne 2 -or
+    $dateDifferences.Count -ne 0 -or
+    $titleNonInfoDifferences.Count -ne 2 -or
+    @($expectedTitleViews | Where-Object { $expected = $_; -not ($titleDifferences.message | Where-Object { $_ -like "$expected*" }) }).Count -ne 0) {
+    throw 'Title-only Roadmap drift did not produce exactly the two expected title mismatches.'
+}
+Write-Output 'GHPMV_ROADMAP_TITLE_ONLY_DRIFT_DETECTED'
+$global:LASTEXITCODE = 0
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとwrapper exit code 0を確認後、DOMを確認する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-title-display-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+title-only driftをbaselineへ戻す。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
+      --org <target-org> `
+      --project-number <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+targetがdata residencyの場合は初回importと同じendpoint optionを追加する。続けてrepairを明示検証する。
+
+```powershell
+$titleRepairReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-title-repair-report.json'
+Remove-Item -LiteralPath $titleRepairReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $titleRepairReport
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+$titleRepair = Get-Content -LiteralPath $titleRepairReport -Raw | ConvertFrom-Json
+$titleRepairView = @($titleRepair.categories | Where-Object category -eq 'View')
+$titleRepairDifferences = @($titleRepair.differences | Where-Object category -eq 'View')
+if ($LASTEXITCODE -ne 0 -or
+    $titleRepairView.Count -ne 1 -or
+    $titleRepairView[0].status -ne 'Match' -or
+    $titleRepairDifferences.Count -ne 0) {
+    throw 'Title-only Roadmap repair did not return View to Match.'
+}
+Write-Output 'GHPMV_ROADMAP_TITLE_REPAIR_MATCH'
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとexit code 0を確認した場合だけdate-only driftへ進む。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-date-display-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+同じterminalでbrowser-assisted View verifyを`roadmap-date-drift-report.json`へ出力する。
+
+```powershell
+$dateDriftReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-date-drift-report.json'
+Remove-Item -LiteralPath $dateDriftReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $dateDriftReport
+    $dateDriftExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+if ($dateDriftExitCode -eq 0) { throw 'Date-only Roadmap drift was not detected.' }
+$dateReport = Get-Content -LiteralPath $dateDriftReport -Raw | ConvertFrom-Json
+$dateViewCategory = @($dateReport.categories | Where-Object category -eq 'View')
+$dateOnlyDifferences = @($dateReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'show date fields mismatch' })
+$unexpectedTitleDifferences = @($dateReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'truncate titles mismatch' })
+$dateNonInfoDifferences = @($dateReport.differences | Where-Object severity -ne 'Info')
+if ($dateViewCategory.Count -ne 1 -or
+    $dateViewCategory[0].status -ne 'Mismatch' -or
+    $dateOnlyDifferences.Count -ne 2 -or
+    $unexpectedTitleDifferences.Count -ne 0 -or
+    $dateNonInfoDifferences.Count -ne 2) {
+    throw 'Date-only Roadmap drift did not produce exactly the two expected date mismatches.'
+}
+Write-Output 'GHPMV_ROADMAP_DATE_ONLY_DRIFT_DETECTED'
+$global:LASTEXITCODE = 0
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとwrapper exit code 0を確認後、次を実行する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-date-display-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+truncated title / visible datesのDOM確認後、browser-assisted importを同じtargetへ再実行する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
+      --org <target-org> `
+      --project-number <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --enable-browser-automation `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+targetがdata residencyの場合は初回importと同じendpoint optionを追加する。続けてdate repairを明示検証する。
+
+```powershell
+$dateRepairReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-date-repair-report.json'
+Remove-Item -LiteralPath $dateRepairReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $dateRepairReport
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+$dateRepair = Get-Content -LiteralPath $dateRepairReport -Raw | ConvertFrom-Json
+$dateRepairView = @($dateRepair.categories | Where-Object category -eq 'View')
+$dateRepairDifferences = @($dateRepair.differences | Where-Object category -eq 'View')
+if ($LASTEXITCODE -ne 0 -or
+    $dateRepairView.Count -ne 1 -or
+    $dateRepairView[0].status -ne 'Match' -or
+    $dateRepairDifferences.Count -ne 0) {
+    throw 'Date-only Roadmap repair did not return View to Match.'
+}
+Write-Output 'GHPMV_ROADMAP_DATE_REPAIR_MATCH'
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとexit code 0を確認した場合だけField default / Field sum driftへ進む。
+
+次に同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1599,27 +1899,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、同じ target に Roadmap display drift を適用する。
-
-```powershell
-$previousGhpmvToken = $env:GHPMV_TOKEN
-$previousGitHubToken = $env:GITHUB_TOKEN
-try {
-    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
-    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
-      --fixture-roadmap-display-drift `
-      --fixture-org <target-org> `
-      --fixture-project <target-project-number> `
-      --browser-profile target
-}
-finally {
-    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
-    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
-}
-```
-
-target が data residency の場合は同じ endpoint option を追加する。`Fixture Roadmap display drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、両Roadmapにshared `truncate titles` / `show date fields` mismatchが存在する場合だけ semantic success とする。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、Field default / Field sumだけのdrift verifyを送る。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1675,23 +1955,21 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
-    $roadmapTitleDifferences.Count -ne 2 -or
-    $roadmapDateDifferences.Count -ne 2 -or
-    $nonInfoDifferences.Count -ne 9 -or
+    $roadmapTitleDifferences.Count -ne 0 -or
+    $roadmapDateDifferences.Count -ne 0 -or
+    $nonInfoDifferences.Count -ne 5 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both shared Roadmap display mismatches for both Roadmap Views.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches and the View 1 field-sum mismatch.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
-Write-Output $roadmapTitleDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
-Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。3つの drift marker と wrapper exit code 0 を確認した場合だけ各 feature status=`drift-detected` とする。
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。2つの drift marker と wrapper exit code 0 を確認した場合だけField default / Field sum status=`drift-detected`としてrepairへ進む。
 
 続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
 

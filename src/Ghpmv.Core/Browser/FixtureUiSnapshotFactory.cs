@@ -53,8 +53,18 @@ public static class FixtureUiSnapshotFactory
         };
     }
 
-    /// <summary>Creates deliberate project-shared Roadmap display drift for every Roadmap View.</summary>
+    /// <summary>Creates title-only Roadmap display drift for every Roadmap View.</summary>
     public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
+        => CreateRoadmapDisplayDrift(repositoryName, truncateTitles: false, showDateFields: false);
+
+    /// <summary>Creates date-only Roadmap display drift for every Roadmap View.</summary>
+    public static ProjectSnapshot CreateRoadmapDateDisplayDrift(string repositoryName = "fixture-repo")
+        => CreateRoadmapDisplayDrift(repositoryName, truncateTitles: true, showDateFields: true);
+
+    private static ProjectSnapshot CreateRoadmapDisplayDrift(
+        string repositoryName,
+        bool truncateTitles,
+        bool showDateFields)
     {
         var snapshot = Create(repositoryName);
         return snapshot with
@@ -67,8 +77,8 @@ public static class FixtureUiSnapshotFactory
                         {
                             Roadmap = view.Ui.Roadmap! with
                             {
-                                TruncateTitles = false,
-                                ShowDateFields = true,
+                                TruncateTitles = truncateTitles,
+                                ShowDateFields = showDateFields,
                             },
                         },
                     }

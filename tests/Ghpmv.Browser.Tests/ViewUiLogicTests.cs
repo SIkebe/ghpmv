@@ -504,11 +504,16 @@ public class ViewUiLogicTests
         var drift = Assert.Single(
             FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift().Views,
             view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
+        var dateDrift = Assert.Single(
+            FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift().Views,
+            view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
 
         Assert.True(standard.TruncateTitles);
         Assert.False(standard.ShowDateFields);
         Assert.False(drift.TruncateTitles);
-        Assert.True(drift.ShowDateFields);
+        Assert.False(drift.ShowDateFields);
+        Assert.True(dateDrift.TruncateTitles);
+        Assert.True(dateDrift.ShowDateFields);
     }
 
     [Fact]

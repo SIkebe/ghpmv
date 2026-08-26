@@ -653,12 +653,17 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 
 `Rendered Field sums verified` が3 Viewに出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=3` と exit code 0 になることを確認します。
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
-4. `ghpmv setup --fixture-field-default-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` と既存の `--fixture-field-sum-drift` を同じ target に実行します。前者は Text / zero Number / Single-select を変更し、negative Number default を clear します。
-5. browser-assisted verify を `--categories Field,View` で再実行し、4 件の `default value mismatch` と `view 'View 1': field sum mismatch` を確認します。
-6. 7.3 の再 import を `--project-number <target-project-number>` で一度だけ実行し、Status Updates の idempotence、field defaults、Field sum の復元を同時に確認します。
-7. browser-assisted verify を `--categories Field,Item,View` で実行します。`Field: Match` / `View: Match`に加え、`Item`差分がcleanup同意待ちのinventory済みcheck draft 1件だけで、source由来itemの値差分がないことを確認します。その後`--fixture-field-default-check`を再実行して修復後の新規draftにdefaultsが適用されることを機械確認し、このdraftもinventoryへ追加します。
+4. `ghpmv setup --fixture-roadmap-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baseline `(true,false)` から titleだけを `(false,false)` へ変更します。
+5. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `truncate titles mismatch` だけを確認します。続けて `--fixture-roadmap-title-display-render-check` を実行し、full title / hidden datesをDOMで確認します。
+6. 7.3 の再 import を `--project-number <target-project-number>` で実行し、直後にbrowser-assisted verify `--categories View`で`View: Match` / View差分0を確認してから次へ進みます。
+7. `ghpmv setup --fixture-roadmap-date-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baselineからdateだけを `(true,true)` へ変更します。
+8. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `show date fields mismatch` だけを確認します。続けて `--fixture-roadmap-date-display-render-check` を実行し、truncated title / visible datesをDOMで確認します。
+9. 7.3 の再 import を実行してRoadmap stateをbaselineへ戻し、`View: Match`を確認します。
+10. `ghpmv setup --fixture-field-default-drift ...` と `--fixture-field-sum-drift ...` を同じtargetに実行し、browser-assisted verify `--categories Field,View` で4件のdefault mismatchとView 1 field-sum mismatchだけを確認します。
+11. 7.3 の再 import を同じtargetへ一度実行し、Status Updates、field defaults、Field sumを同時に復元します。
+12. browser-assisted verifyを`--categories Field,Item,View`で実行し、`Field: Match` / `View: Match`とinventory済みdraft以外のItem差分がないことを確認します。最後に`--fixture-field-default-check`を再実行して修復後defaultsを確認します。
 
-この統合で追加実行するのは、初回functional check、field-default drift、field-sum drift、drift verify、修復用re-import、repair verify、修復後functional checkの7 commandです。同じsnapshot / target / mappingsを再利用し、証跡は11、draftとProjectの削除は10の既存cleanup同意へまとめます。
+同じsnapshot / target / mappingsを再利用し、Roadmapの各controlはexactly-one-property driftと直後のDOM observationで独立に検証します。draftとProjectの削除は既存cleanup同意へまとめます。
 
 warning / error が出た場合は、次の観点で切り分けます。
 
@@ -714,7 +719,8 @@ warning / error が出た場合は、次の観点で切り分けます。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap の長い title と date-field 表示が source/target で一致し、reload 後も維持される。
-- [ ] `setup --fixture-roadmap-display-drift` がProject-shared stateを `(true,false)` から `(false,true)` へ変更し、verify が両Roadmapの両property mismatchを報告して、同じ target への再 import で `View: Match` に戻る。
+- [ ] `setup --fixture-roadmap-display-drift` がtitleだけを `(false,false)` へ変更し、title mismatchとfull-title/hidden-date DOMを確認後、再 importで復元される。
+- [ ] `setup --fixture-roadmap-date-display-drift` がdateだけを `(true,true)` へ変更し、date mismatchとtruncated-title/visible-date DOMを確認後、再 importで復元される。
 - [ ] View 名が一致。
 - [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。

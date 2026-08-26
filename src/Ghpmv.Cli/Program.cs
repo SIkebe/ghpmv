@@ -1142,11 +1142,23 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
-    Description = "Switch the project-shared Roadmap display state to full titles with visible dates.",
+    Description = "Disable project-shared Roadmap title truncation while preserving hidden dates.",
+};
+var fixtureRoadmapDateDisplayDriftOption = new Option<bool>("--fixture-roadmap-date-display-drift")
+{
+    Description = "Enable project-shared Roadmap date display while preserving title truncation.",
 };
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {
     Description = "Verify visible grouped-header Field sum rendering on an existing standard fixture Project.",
+};
+var fixtureRoadmapDateDisplayRenderCheckOption = new Option<bool>("--fixture-roadmap-date-display-render-check")
+{
+    Description = "Verify the date-only Roadmap display drift renders truncated titles with visible dates.",
+};
+var fixtureRoadmapTitleDisplayRenderCheckOption = new Option<bool>("--fixture-roadmap-title-display-render-check")
+{
+    Description = "Verify the title-only Roadmap display drift renders full titles with hidden dates.",
 };
 var fixtureFieldDefaultCheckOption = new Option<bool>("--fixture-field-default-check")
 {
@@ -1212,7 +1224,10 @@ setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
 setupCommand.Options.Add(fixtureFieldSumDriftOption);
 setupCommand.Options.Add(fixtureRoadmapDisplayDriftOption);
+setupCommand.Options.Add(fixtureRoadmapDateDisplayDriftOption);
 setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
+setupCommand.Options.Add(fixtureRoadmapDateDisplayRenderCheckOption);
+setupCommand.Options.Add(fixtureRoadmapTitleDisplayRenderCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultDriftOption);
 setupCommand.Options.Add(fixtureFieldDefaultCleanupItemOption);
@@ -1249,7 +1264,10 @@ setupCommand.Validators.Add(result =>
     if (!result.GetValue(fixtureUiOption)
         && !result.GetValue(fixtureFieldSumDriftOption)
         && !result.GetValue(fixtureRoadmapDisplayDriftOption)
+        && !result.GetValue(fixtureRoadmapDateDisplayDriftOption)
         && !result.GetValue(fixtureFieldSumRenderCheckOption)
+        && !result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        && !result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
         && !result.GetValue(fixtureFieldDefaultCheckOption)
         && !result.GetValue(fixtureFieldDefaultDriftOption)
         && result.GetValue(fixtureFieldDefaultCleanupItemOption) is null
@@ -1260,7 +1278,10 @@ setupCommand.Validators.Add(result =>
 
     if ((result.GetValue(fixtureFieldSumDriftOption)
             || result.GetValue(fixtureRoadmapDisplayDriftOption)
+            || result.GetValue(fixtureRoadmapDateDisplayDriftOption)
             || result.GetValue(fixtureFieldSumRenderCheckOption)
+            || result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+            || result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
             || result.GetValue(fixtureFieldDefaultCheckOption)
             || result.GetValue(fixtureFieldDefaultDriftOption)
             || result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null)
@@ -1273,7 +1294,10 @@ setupCommand.Validators.Add(result =>
     {
         result.GetValue(fixtureFieldSumDriftOption),
         result.GetValue(fixtureRoadmapDisplayDriftOption),
+        result.GetValue(fixtureRoadmapDateDisplayDriftOption),
         result.GetValue(fixtureFieldSumRenderCheckOption),
+        result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption),
+        result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption),
         result.GetValue(fixtureFieldDefaultCheckOption),
         result.GetValue(fixtureFieldDefaultDriftOption),
         result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null,
@@ -1307,7 +1331,10 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureUiOption)
         && !parseResult.GetValue(fixtureFieldSumDriftOption)
         && !parseResult.GetValue(fixtureRoadmapDisplayDriftOption)
+        && !parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption)
         && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
+        && !parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        && !parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultDriftOption)
         && parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is null
@@ -1371,7 +1398,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
-    if (parseResult.GetValue(fixtureFieldSumRenderCheckOption))
+    if (parseResult.GetValue(fixtureFieldSumRenderCheckOption)
+        || parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        || parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption))
     {
         try
         {
@@ -1448,7 +1477,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             {
                 OnProgress = Console.Error.WriteLine,
             };
-            await observer.ValidateStandardFixtureAsync(
+            var expected = parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+                ? FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift()
+                : parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
+                    ? FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift()
+                    : FixtureUiSnapshotFactory.Create();
+            await observer.ValidateFixtureAsync(
+                expected,
                 org,
                 ProjectOwnerType.Organization,
                 projectNumber,
@@ -1663,7 +1698,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
-    if (parseResult.GetValue(fixtureRoadmapDisplayDriftOption))
+    if (parseResult.GetValue(fixtureRoadmapDisplayDriftOption)
+        || parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption))
     {
         try
         {
@@ -1693,8 +1729,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
 
-            var snapshot = FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(
-                parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
+            var snapshot = parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption)
+                ? FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift(
+                    parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo")
+                : FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(
+                    parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
             var view = snapshot.Views.Single(candidate =>
                 string.Equals(candidate.Name, "Fixture Roadmap", StringComparison.Ordinal));
             var projectData = await client.QueryAsync(
@@ -1745,7 +1784,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             Console.Error.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"Fixture Roadmap display drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
+                $"Fixture Roadmap {(parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption) ? "date-display" : "title-truncation")} drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
             return viewImporter.Warnings.Count == 0 ? 0 : 1;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)

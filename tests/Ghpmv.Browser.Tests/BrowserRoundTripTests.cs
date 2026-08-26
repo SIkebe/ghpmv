@@ -285,17 +285,6 @@ public class BrowserRoundTripTests
                         StringComparer.Ordinal),
                     cancellationToken);
 
-                var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
-                await viewImporter.ApplyFieldSumAsync(
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    result.ViewNumbers[sourceTable.Number],
-                    sourceTable.Name,
-                    ["Fixture Number"],
-                    cancellationToken);
-                Assert.Empty(viewImporter.Warnings);
-
                 var sourceRoadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap");
                 await viewImporter.ApplyRoadmapDisplayOptionsAsync(
                     TargetOrg,
@@ -304,7 +293,128 @@ public class BrowserRoundTripTests
                     result.ViewNumbers[sourceRoadmap.Number],
                     sourceRoadmap.Name,
                     truncateTitles: false,
+                    showDateFields: false,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+
+                var titleDriftReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Equal(2, titleDriftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal)));
+                Assert.Equal(2, titleDriftReport.Differences.Count(difference =>
+                    difference.Severity != VerifySeverity.Info));
+                Assert.Equal(
+                    VerifyStatus.Mismatch,
+                    Assert.Single(titleDriftReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                Assert.DoesNotContain(titleDriftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
+                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
+                    FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
+
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: true,
+                    showDateFields: false,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+                var titleRepairReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Equal(
+                    VerifyStatus.Match,
+                    Assert.Single(titleRepairReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                Assert.DoesNotContain(titleRepairReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View);
+
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: true,
                     showDateFields: true,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+                var dateDriftReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.DoesNotContain(dateDriftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.Equal(2, dateDriftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
+                Assert.Equal(2, dateDriftReport.Differences.Count(difference =>
+                    difference.Severity != VerifySeverity.Info));
+                Assert.Equal(
+                    VerifyStatus.Mismatch,
+                    Assert.Single(dateDriftReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
+                    FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift(),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
+
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: true,
+                    showDateFields: false,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+                var dateRepairReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Equal(
+                    VerifyStatus.Match,
+                    Assert.Single(dateRepairReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                Assert.DoesNotContain(dateRepairReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View);
+
+                var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
+                await viewImporter.ApplyFieldSumAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceTable.Number],
+                    sourceTable.Name,
+                    ["Fixture Number"],
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
@@ -335,27 +445,10 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
-                Assert.Contains(driftReport.Differences, difference =>
-                    difference.Severity == VerifySeverity.Error
-                    && difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
-                Assert.Contains(driftReport.Differences, difference =>
-                    difference.Severity == VerifySeverity.Error
-                    && difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
-                Assert.Contains(driftReport.Differences, difference =>
+                Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("Fixture Roadmap Dates Hidden", StringComparison.Ordinal));
-                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
-                    FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(),
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    snapshot.Views.ToDictionary(
-                        view => view.Name,
-                        view => result.ViewNumbers[view.Number],
-                        StringComparer.Ordinal),
-                    cancellationToken);
+                    && (difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal)
+                        || difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -427,7 +520,7 @@ public class BrowserRoundTripTests
                     result.ProjectNumber,
                     cancellationToken);
 
-                Assert.Equal(3, browserVerificationCount);
+                Assert.Equal(7, browserVerificationCount);
             }
             finally
             {
