@@ -87,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field defaults / sums | typed defaults と4 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
+| browser-e2e field defaults / sums | typed defaults と5 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -190,7 +190,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | browser-e2e field-default contract | `Fixture Text=既定値 🌏`, `Fixture Number=-7`, `Fixture Number 2=0`, `Fixture Select=Beta` |
 | browser-e2e field-default status | `fixture-pending`, `snapshot-match`, `target-field-match`, `new-draft-observed`, `drift-detected`, `repair-match` |
-| browser-e2e Roadmap display contract | `Fixture Roadmap: truncateTitles=true, showDateFields=true` |
+| browser-e2e Roadmap display contract | Project-shared state: both Roadmaps=`(truncateTitles=true, showDateFields=false)` |
 | browser-e2e Roadmap display status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
 
@@ -202,12 +202,13 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | `Fixture Roadmap` | `ROADMAP_LAYOUT` / `Status` | `Fixture Number 2` |
 | `Fixture Board` | `BOARD_LAYOUT` / `Status` | `Fixture Number` |
 | `Fixture Empty Sums` | `TABLE_LAYOUT` / `Status` | empty |
+| `Fixture Roadmap Dates Hidden` | `ROADMAP_LAYOUT` / `Status` | `Fixture Number 2` |
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
-同じ `Fixture Roadmap` で `truncateTitles=true` と `showDateFields=true` も常に検証する。Step 6 は両 property が boolean として capture されたことを確認し、初回 browser-assisted verify は `View: Match` を要求する。negative-test phase では `setup --fixture-roadmap-display-drift` を既存 target に実行し、両 property の mismatch を確認してから、Field default / Field sum と同じ一回の repair import で戻す。別 scenario や別 target は作らない。
+同じ round-trip でProject-shared Roadmap state `(truncateTitles=true, showDateFields=false)` を両Roadmapからcaptureし、DOM checkpointでtitle truncationとdate非表示を検証する。negative-test phaseは片方のcontrolからshared stateを`(false,true)`へ変更し、両Roadmapに両property mismatchが出ることと、DOMでtitle非truncation/date表示を確認してから同じrepair importで戻す。
 
 ## Feature checkpoint の実行時間最小化
 
@@ -543,7 +544,7 @@ settings の `execution.fixturePreparation`、`execution.repositoryPreparationMo
 
 `api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
-`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、4 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
+`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、5 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
 
 同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
@@ -898,7 +899,7 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 `browser-e2e` では fixture preparation にかかわらず、Step 5 の開始時に次を state へ記録する。
 
-- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`
+- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`, `Fixture Roadmap Dates Hidden`
 - Number field names: `Fixture Number`, `Fixture Number 2`
 - Grouping field: `Status`
 - expected FieldSum: session state の fixture contract 表
@@ -981,7 +982,7 @@ source が data residency の場合は選択した source command に `--api-bas
 同じ Project に明示的に再実行すると non-default Views が重複する。次のどちらかを選んでもらう。
 
 1. 新しい fixture Project を作る（推奨）
-2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` を手動削除して再実行する
+2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` / `Fixture Roadmap Dates Hidden` を手動削除して再実行する
 
 Workflow は再設定できる。warning が出た場合は、目視だけで終了せず、後続 export が UI settings を警告なしで取得できるか確認する。
 
@@ -1076,7 +1077,8 @@ $expectedViews = @(
     [pscustomobject]@{ Name = 'View 1'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Count', 'Fixture Number', 'Fixture Number 2') },
     [pscustomobject]@{ Name = 'Fixture Board'; Layout = 'BOARD_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number') },
     [pscustomobject]@{ Name = 'Fixture Roadmap'; Layout = 'ROADMAP_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number 2') },
-    [pscustomobject]@{ Name = 'Fixture Empty Sums'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @() }
+    [pscustomobject]@{ Name = 'Fixture Empty Sums'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @() },
+    [pscustomobject]@{ Name = 'Fixture Roadmap Dates Hidden'; Layout = 'ROADMAP_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number 2') }
 )
 foreach ($requiredField in @('Fixture Number', 'Fixture Number 2')) {
     $numberFields = @($snapshot.fields | Where-Object { $_.name -eq $requiredField -and $_.dataType -eq 'NUMBER' })
@@ -1107,8 +1109,15 @@ foreach ($expected in $expectedViews) {
 $roadmap = @($snapshot.views | Where-Object name -eq 'Fixture Roadmap')
 if ($roadmap.Count -ne 1 -or
     $roadmap[0].ui.roadmap.truncateTitles -ne $true -or
-    $roadmap[0].ui.roadmap.showDateFields -ne $true) {
-    Stop-FieldSumSnapshotCheck 'Fixture Roadmap must capture truncateTitles=true and showDateFields=true.'
+    $roadmap[0].ui.roadmap.showDateFields -ne $false) {
+    Stop-FieldSumSnapshotCheck 'Fixture Roadmap must capture truncateTitles=true and showDateFields=false.'
+    return
+}
+$roadmapDatesHidden = @($snapshot.views | Where-Object name -eq 'Fixture Roadmap Dates Hidden')
+if ($roadmapDatesHidden.Count -ne 1 -or
+    $roadmapDatesHidden[0].ui.roadmap.truncateTitles -ne $true -or
+    $roadmapDatesHidden[0].ui.roadmap.showDateFields -ne $false) {
+    Stop-FieldSumSnapshotCheck 'Fixture Roadmap Dates Hidden must capture truncateTitles=true and showDateFields=false.'
     return
 }
 Write-Output 'GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH'
@@ -1523,6 +1532,7 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 - `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
+- `Fixture Roadmap Dates Hidden`: layout、Group by=`Status`、Field sum=`Fixture Number 2`、Show date fields=false
 
 このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。Issue #62 の派生描画 checkpoint も、初回 `View: Match` 後に次の Playwright command で自動検証する。ユーザーへ browser reload や自己申告を求めない。
 
@@ -1544,7 +1554,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label に加え、Roadmap の長い title が実際に clip/ellipsis され、date field が同じ item に描画されることを DOM で検査する。両 View の `Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=2`、command exit code 0 を確認した場合だけ Field sum と Roadmap display の status を `target-render-observed` として deliberate drift へ進む。欠落は非ゼロ終了にし、対話用質問で補完しない。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と2つのRoadmapをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示をDOMで検査する。3 Viewの`Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=3`、command exit code 0を確認した場合だけ Field sum と Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
 
 ### Deliberate drift と repair
 
@@ -1609,7 +1619,7 @@ finally {
 }
 ```
 
-target が data residency の場合は同じ endpoint option を追加する。`Fixture Roadmap display drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、field sum と Roadmap の2 property mismatch が存在する場合だけ semantic success とする。
+target が data residency の場合は同じ endpoint option を追加する。`Fixture Roadmap display drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、両Roadmapにshared `truncate titles` / `show date fields` mismatchが存在する場合だけ semantic success とする。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1649,9 +1659,11 @@ $driftFieldCategories = @($driftReport.categories | Where-Object category -eq 'F
 $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
 $fieldDefaultDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'Field' -and $_.message -match 'default value mismatch' })
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
-$roadmapDisplayDifferences = @($driftReport.differences | Where-Object {
-    $_.category -eq 'View' -and
-    $_.message -match "view 'Fixture Roadmap': (truncate titles|show date fields) mismatch"
+$roadmapTitleDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': truncate titles mismatch"
+})
+$roadmapDateDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': show date fields mismatch"
 })
 $nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
 $unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
@@ -1663,15 +1675,16 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
-    $roadmapDisplayDifferences.Count -ne 2 -or
-    $nonInfoDifferences.Count -ne 7 -or
+    $roadmapTitleDifferences.Count -ne 2 -or
+    $roadmapDateDifferences.Count -ne 2 -or
+    $nonInfoDifferences.Count -ne 9 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both Fixture Roadmap display-option mismatches.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both shared Roadmap display mismatches for both Roadmap Views.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
-Write-Output $roadmapDisplayDifferences.message
+Write-Output $roadmapTitleDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
 Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'

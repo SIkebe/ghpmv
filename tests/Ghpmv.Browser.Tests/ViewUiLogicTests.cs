@@ -286,16 +286,17 @@ public class ViewUiLogicTests
     }
 
     [Theory]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void Rendered_roadmap_observation_requires_truncation_and_dates(
+    [InlineData(true, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    public void Rendered_roadmap_observation_requires_configured_truncation_and_date_visibility(
         bool titleTruncated,
-        bool datesRendered)
+        bool datesRendered,
+        bool expected)
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(candidate => candidate.Name == "Fixture Roadmap");
 
-        if (titleTruncated && datesRendered)
+        if (expected)
         {
             FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
             return;
@@ -303,6 +304,23 @@ public class ViewUiLogicTests
 
         Assert.Throws<InvalidOperationException>(
             () => FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered));
+    }
+
+    [Fact]
+    public void Rendered_roadmap_observation_rejects_dates_when_the_view_hides_them()
+    {
+        var view = FixtureUiSnapshotFactory.Create().Views.Single(
+            candidate => candidate.Name == "Fixture Roadmap Dates Hidden");
+
+        FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(
+            view,
+            titleTruncated: true,
+            datesRendered: false);
+        Assert.Throws<InvalidOperationException>(
+            () => FieldSumRenderingObserver.ValidateRoadmapDisplayObservation(
+                view,
+                titleTruncated: true,
+                datesRendered: true));
     }
 
     [Fact]
@@ -402,6 +420,32 @@ public class ViewUiLogicTests
         Assert.Equal(2, differences.Count);
     }
 
+    [Fact]
+    public void Persistence_check_skips_only_uncaptured_roadmap_display_options()
+    {
+        var view = View("Roadmap", "ROADMAP_LAYOUT") with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    TruncateTitles = null,
+                    ShowDateFields = null,
+                },
+            },
+        };
+        var persisted = new ViewUiImporter.PersistedViewSettings(
+            GroupBy: null,
+            ColumnBy: null,
+            SliceBy: null,
+            FieldSumAvailable: false,
+            FieldSum: [],
+            TruncateTitles: false,
+            ShowDateFields: true);
+
+        Assert.Empty(ViewUiImporter.CollectPersistenceDifferences(view, persisted));
+    }
+
     [Theory]
     [InlineData(true, false, true, true)]
     [InlineData(false, true, true, true)]
@@ -423,14 +467,17 @@ public class ViewUiLogicTests
         var snapshot = FixtureUiSnapshotFactory.Create("fixture-repo");
 
         Assert.Equal(
-            ["View 1", "Fixture Board", "Fixture Roadmap", "Fixture Empty Sums"],
+            ["View 1", "Fixture Board", "Fixture Roadmap", "Fixture Empty Sums", "Fixture Roadmap Dates Hidden"],
             snapshot.Views.Select(v => v.Name));
         Assert.Equal(
-            ["Fixture Roadmap", "View 1", "Fixture Board", "Fixture Empty Sums"],
+            ["Fixture Roadmap", "View 1", "Fixture Board", "Fixture Empty Sums", "Fixture Roadmap Dates Hidden"],
             snapshot.Views.OrderBy(view => view.TabPosition).Select(view => view.Name));
         var roadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
         Assert.True(roadmap.TruncateTitles);
-        Assert.True(roadmap.ShowDateFields);
+        Assert.False(roadmap.ShowDateFields);
+        var datesHidden = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap Dates Hidden").Ui!.Roadmap!;
+        Assert.True(datesHidden.TruncateTitles);
+        Assert.False(datesHidden.ShowDateFields);
         Assert.Equal(
             ["Count", "Fixture Number", "Fixture Number 2"],
             snapshot.Views.Single(view => view.Name == "View 1").Ui!.FieldSum);
@@ -449,7 +496,7 @@ public class ViewUiLogicTests
     }
 
     [Fact]
-    public void FixtureUiSnapshotFactory_creates_independent_roadmap_display_drift()
+    public void FixtureUiSnapshotFactory_creates_project_shared_roadmap_display_drift()
     {
         var standard = Assert.Single(
             FixtureUiSnapshotFactory.Create().Views,
@@ -459,9 +506,29 @@ public class ViewUiLogicTests
             view => view.Name == "Fixture Roadmap").Ui!.Roadmap!;
 
         Assert.True(standard.TruncateTitles);
-        Assert.True(standard.ShowDateFields);
+        Assert.False(standard.ShowDateFields);
         Assert.False(drift.TruncateTitles);
-        Assert.False(drift.ShowDateFields);
+        Assert.True(drift.ShowDateFields);
+    }
+
+    [Fact]
+    public void Shared_roadmap_display_settings_reject_conflicting_view_values()
+    {
+        var snapshot = FixtureUiSnapshotFactory.Create();
+        ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
+        var conflicting = snapshot.Views.Select(view =>
+            view.Name == "Fixture Roadmap Dates Hidden"
+                ? view with
+                {
+                    Ui = view.Ui! with
+                    {
+                        Roadmap = view.Ui.Roadmap! with { ShowDateFields = true },
+                    },
+                }
+                : view).ToList();
+
+        Assert.Throws<InvalidOperationException>(
+            () => ViewUiImporter.ValidateSharedRoadmapDisplaySettings(conflicting));
     }
 
     [Fact]
@@ -780,6 +847,30 @@ public class ViewUiLogicTests
             difference => difference.Category == "View");
 
         Assert.Contains(expectedMessage, difference.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Verifier_skips_only_uncaptured_roadmap_display_options()
+    {
+        var source = View("Roadmap", "ROADMAP_LAYOUT") with
+        {
+            Ui = new ViewUiSnapshot { Roadmap = new RoadmapSettingsSnapshot() },
+        };
+        var target = source with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    TruncateTitles = true,
+                    ShowDateFields = false,
+                },
+            },
+        };
+
+        var report = ProjectVerifier.Compare(Snapshot([], source), Snapshot([], target));
+
+        Assert.DoesNotContain(report.Differences, difference => difference.Category == "View");
     }
 
     [Fact]

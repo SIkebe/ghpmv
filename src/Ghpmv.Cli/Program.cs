@@ -1142,7 +1142,7 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
-    Description = "Disable both standard Fixture Roadmap display options to exercise browser-assisted drift detection.",
+    Description = "Switch the project-shared Roadmap display state to full titles with visible dates.",
 };
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {
@@ -1413,7 +1413,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 """,
                 new { login = org, number = projectNumber },
                 cancellationToken);
-            var expectedNames = new HashSet<string>(["View 1", "Fixture Roadmap"], StringComparer.Ordinal);
+            var expectedNames = new HashSet<string>(
+                ["View 1", "Fixture Roadmap", "Fixture Roadmap Dates Hidden"],
+                StringComparer.Ordinal);
             var viewNumbers = projectData
                 .GetProperty("organization")
                 .GetProperty("projectV2")
@@ -1733,8 +1735,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 projectNumber,
                 targetViews[0].GetProperty("number").GetInt32(),
                 view.Name,
-                roadmap.TruncateTitles,
-                roadmap.ShowDateFields,
+                roadmap.TruncateTitles!.Value,
+                roadmap.ShowDateFields!.Value,
                 cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
@@ -1827,6 +1829,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
+            IncludeRoadmapRenderingItem = parseResult.GetValue(fixtureUiOption),
             BeforeWriteAsync = ValidateFixtureBeforeWriteAsync,
         };
         try
@@ -1936,6 +1939,20 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
             await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
+        if (!parseResult.GetValue(fixtureOption))
+        {
+            var existingFixture = await new ProjectExporter(fixtureUiClient)
+            {
+                Sections = ProjectExportSections.Items,
+            }.ExportAsync(org, projectNumber.Value, cancellationToken);
+            if (!existingFixture.Items.Any(FixtureProjectBuilder.IsRoadmapRenderingItem))
+            {
+                throw new InvalidOperationException(
+                    $"Project #{projectNumber.Value} does not contain the unarchived, dated Roadmap rendering item. "
+                    + "Create the browser fixture with setup --fixture --fixture-ui.");
+            }
         }
 
         File.Delete(uiCompletionPath);

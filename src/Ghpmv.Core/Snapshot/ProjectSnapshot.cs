@@ -275,11 +275,11 @@ public sealed record RoadmapSettingsSnapshot
 
     public IReadOnlyList<string>? Markers { get; init; }
 
-    /// <summary>Whether long item titles are truncated.</summary>
-    public bool TruncateTitles { get; init; }
+    /// <summary>Whether long item titles are truncated. Null when the UI control could not be read.</summary>
+    public bool? TruncateTitles { get; init; }
 
-    /// <summary>Whether item date fields are rendered on the Roadmap.</summary>
-    public bool ShowDateFields { get; init; }
+    /// <summary>Whether item date fields are rendered. Null when the UI control could not be read.</summary>
+    public bool? ShowDateFields { get; init; }
 }
 
 /// <summary>

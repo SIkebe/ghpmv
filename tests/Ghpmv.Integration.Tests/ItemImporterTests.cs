@@ -1,6 +1,5 @@
 using System.Globalization;
 using Ghpmv.Core.Export;
-using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
@@ -122,8 +121,8 @@ public class ItemImporterTests
             Assert.Equal(sourceDrafts.Select(StatusOf), importedDrafts.Select(StatusOf));
 
             // Every typed field value round-trips on draft 1 (text with non-ASCII, number, date, select, iteration).
-            var sourceDraft1 = Assert.Single(sourceDrafts, i => i.Draft!.Title == FixtureProjectBuilder.RoadmapLongTitle);
-            var importedDraft1 = Assert.Single(importedDrafts, i => i.Draft!.Title == FixtureProjectBuilder.RoadmapLongTitle);
+            var sourceDraft1 = Assert.Single(sourceDrafts, i => i.Draft!.Title == "Fixture draft 1");
+            var importedDraft1 = Assert.Single(importedDrafts, i => i.Draft!.Title == "Fixture draft 1");
             foreach (var fieldName in (string[])["Fixture Text", "Fixture Number", "Fixture Date", "Fixture Select", "Fixture Sprint"])
             {
                 var expected = sourceDraft1.FieldValues.Single(v => v.FieldName == fieldName);

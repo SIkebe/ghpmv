@@ -580,7 +580,7 @@ public class SnapshotTests
 
         var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
 
-        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates!);
+        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates);
         Assert.Null(restoredUpdate.Status);
         Assert.Equal("Update without a status.", restoredUpdate.Body);
     }

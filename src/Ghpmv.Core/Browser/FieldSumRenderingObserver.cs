@@ -26,12 +26,28 @@ public sealed partial class FieldSumRenderingObserver
         int projectNumber,
         IReadOnlyDictionary<string, int> viewNumbers,
         CancellationToken cancellationToken = default)
+        => await ValidateFixtureAsync(
+            FixtureUiSnapshotFactory.Create(),
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            viewNumbers,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task ValidateFixtureAsync(
+        ProjectSnapshot expected,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        IReadOnlyDictionary<string, int> viewNumbers,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
 
-        var expectedViews = FixtureUiSnapshotFactory.Create().Views
-            .Where(view => view.Name is "View 1" or "Fixture Roadmap")
+        var expectedViews = expected.Views
+            .Where(view => view.Name is "View 1" or "Fixture Roadmap" or "Fixture Roadmap Dates Hidden")
             .ToArray();
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         foreach (var view in expectedViews)
@@ -110,14 +126,24 @@ public sealed partial class FieldSumRenderingObserver
     {
         var roadmap = view.Ui?.Roadmap
             ?? throw new InvalidOperationException($"view '{view.Name}': expected Roadmap display state is unavailable");
-        if (roadmap.TruncateTitles && !titleTruncated)
+        if (roadmap.TruncateTitles is true && !titleTruncated)
         {
             throw new InvalidOperationException($"view '{view.Name}': long item title was not visibly truncated");
         }
 
-        if (roadmap.ShowDateFields && !datesRendered)
+        if (roadmap.TruncateTitles is false && titleTruncated)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': long item title was truncated despite being disabled");
+        }
+
+        if (roadmap.ShowDateFields is true && !datesRendered)
         {
             throw new InvalidOperationException($"view '{view.Name}': item date fields were not visibly rendered");
+        }
+
+        if (roadmap.ShowDateFields is false && datesRendered)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': item date fields were rendered despite being disabled");
         }
     }
 
@@ -129,10 +155,19 @@ public sealed partial class FieldSumRenderingObserver
             State = WaitForSelectorState.Visible,
             Timeout = 15_000,
         }).ConfigureAwait(false);
-        var titleTruncated = await title.EvaluateAsync<bool>(
+        var item = Sel.RoadmapItem(title);
+        if (await item.CountAsync().ConfigureAwait(false) == 0)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
+        }
+
+        var titleTruncated = await item.EvaluateAsync<bool>(
             """
-            element => {
-              for (let node = element; node && node instanceof HTMLElement; node = node.parentElement) {
+            (item, titleText) => {
+              const element = Array.from(item.querySelectorAll('*'))
+                .find(node => node.children.length === 0 && node.textContent?.trim() === titleText);
+              for (let node = element; node && node instanceof HTMLElement && item.contains(node); node = node.parentElement) {
                 const style = getComputedStyle(node);
                 if (node.scrollWidth > node.clientWidth &&
                     (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden')) {
@@ -141,19 +176,11 @@ public sealed partial class FieldSumRenderingObserver
               }
               return false;
             }
-            """).ConfigureAwait(false);
-        var datesRendered = await title.EvaluateAsync<bool>(
-            """
-            element => {
-              const datePattern = /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[\/-]\d{1,2}|\d{1,2}月/;
-              for (let node = element.parentElement; node && node instanceof HTMLElement; node = node.parentElement) {
-                if (node.querySelector('time, relative-time') || datePattern.test(node.innerText.replace(element.innerText, ''))) {
-                  return true;
-                }
-              }
-              return false;
-            }
-            """).ConfigureAwait(false);
+            """,
+            FixtureProjectBuilder.RoadmapLongTitle).ConfigureAwait(false);
+        var itemText = await item.InnerTextAsync().ConfigureAwait(false);
+        var datesRendered = await Sel.RoadmapItemDateElements(item).CountAsync().ConfigureAwait(false) > 0
+            || RenderedDate().IsMatch(itemText);
         ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
     }
 
@@ -177,4 +204,7 @@ public sealed partial class FieldSumRenderingObserver
 
     [GeneratedRegex(@"^\s*[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)\b", RegexOptions.CultureInvariant)]
     private static partial Regex NumericRendering();
+
+    [GeneratedRegex(@"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[/-]\d{1,2}|\d{1,2}月", RegexOptions.CultureInvariant)]
+    private static partial Regex RenderedDate();
 }
