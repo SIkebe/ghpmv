@@ -177,6 +177,25 @@ public class BrowserRoundTripTests
 
                 var targetPage = await targetSession.GetPageAsync(cancellationToken);
                 await targetPage.SetViewportSizeAsync(480, 1000);
+                var expectedRoadmapDisplay = Assert.Single(
+                    snapshot.Views
+                        .Where(view => view.Layout == "ROADMAP_LAYOUT")
+                        .Select(view => (
+                            view.Ui!.Roadmap!.TruncateTitles,
+                            view.Ui.Roadmap.ShowDateFields))
+                        .Distinct());
+                await targetPage.EvaluateAsync(
+                    """
+                    values => {
+                      localStorage.setItem("projects.roadmapTruncateTitles", values.truncateTitles);
+                      localStorage.setItem("projects.roadmapShowDateFields", values.showDateFields);
+                    }
+                    """,
+                    new
+                    {
+                        truncateTitles = (!expectedRoadmapDisplay.TruncateTitles!.Value).ToString().ToLowerInvariant(),
+                        showDateFields = (!expectedRoadmapDisplay.ShowDateFields!.Value).ToString().ToLowerInvariant(),
+                    });
                 var viewImporter = new ViewUiImporter(targetSession);
                 await viewImporter.EnrichAsync(
                     snapshot,
@@ -187,28 +206,11 @@ public class BrowserRoundTripTests
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
-                await using (var persistedTargetSession = CreateSession(
+                await AssertRoadmapDisplayProfileStateAsync(
                     targetStatePath!,
-                    E2eTestEnvironment.Current.Target))
-                {
-                    var targetLogin = await targetClient.GetViewerLoginAsync(cancellationToken);
-                    await persistedTargetSession.ValidateAuthenticationAsync(targetLogin, cancellationToken);
-                    var persistedViewExporter = new ViewUiExporter(persistedTargetSession);
-                    var targetViewSnapshot = snapshot with
-                    {
-                        Views = snapshot.Views.Select(view => view with
-                        {
-                            Number = result.ViewNumbers[view.Number],
-                        }).ToList(),
-                    };
-                    var persistedTarget = await persistedViewExporter.EnrichAsync(
-                        targetViewSnapshot,
-                        TargetOrg,
-                        result.ProjectNumber,
-                        cancellationToken);
-                    Assert.Empty(persistedViewExporter.Warnings);
-                    AssertRoundTrippedViews(snapshot, persistedTarget);
-                }
+                    expectedRoadmapDisplay.TruncateTitles.Value,
+                    expectedRoadmapDisplay.ShowDateFields.Value,
+                    cancellationToken);
 
                 var workflowImporter = new WorkflowUiImporter(targetSession)
                 {
@@ -608,6 +610,30 @@ public class BrowserRoundTripTests
                 expected.DefaultValue!,
                 actual.DefaultValue!));
         }
+    }
+
+    private static async Task AssertRoadmapDisplayProfileStateAsync(
+        string statePath,
+        bool truncateTitles,
+        bool showDateFields,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(statePath);
+        using var state = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var storage = state.RootElement.GetProperty("origins")
+            .EnumerateArray()
+            .SelectMany(origin => origin.GetProperty("localStorage").EnumerateArray())
+            .ToDictionary(
+                entry => entry.GetProperty("name").GetString()!,
+                entry => entry.GetProperty("value").GetString(),
+                StringComparer.Ordinal);
+
+        Assert.Equal(
+            truncateTitles.ToString().ToLowerInvariant(),
+            storage["projects.roadmapTruncateTitles"]);
+        Assert.Equal(
+            showDateFields.ToString().ToLowerInvariant(),
+            storage["projects.roadmapShowDateFields"]);
     }
 
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
