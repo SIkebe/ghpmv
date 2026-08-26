@@ -149,7 +149,7 @@ public sealed partial class FieldSumRenderingObserver
 
     private static async Task ValidateRoadmapDisplayAsync(IPage page, ViewSnapshot view)
     {
-        var title = page.GetByText(FixtureProjectBuilder.RoadmapLongTitle, new() { Exact = true }).First;
+        var title = Sel.RoadmapPillTitle(page, FixtureProjectBuilder.RoadmapLongTitle);
         await title.WaitForAsync(new()
         {
             State = WaitForSelectorState.Visible,
@@ -162,15 +162,22 @@ public sealed partial class FieldSumRenderingObserver
                 $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
         }
 
-        var titleTruncated = await item.EvaluateAsync<bool>(
+        var titleTruncated = await title.EvaluateAsync<bool>(
             """
-            (item, titleText) => {
-              const element = Array.from(item.querySelectorAll('*'))
-                .find(node => node.children.length === 0 && node.textContent?.trim() === titleText);
-              for (let node = element; node && node instanceof HTMLElement && item.contains(node); node = node.parentElement) {
+            (element, titleText) => {
+              for (let node = element;
+                   node && node instanceof HTMLElement &&
+                     node.textContent?.trim() === titleText;
+                   node = node.parentElement) {
                 const style = getComputedStyle(node);
-                if (node.scrollWidth > node.clientWidth &&
-                    (style.textOverflow === 'ellipsis' || style.overflowX === 'hidden')) {
+                const horizontallyEllipsized =
+                  style.whiteSpace === 'nowrap' &&
+                  style.textOverflow === 'ellipsis' &&
+                  node.scrollWidth > node.clientWidth;
+                const lineClamp = Number.parseInt(style.webkitLineClamp, 10);
+                const verticallyClamped =
+                  Number.isFinite(lineClamp) && lineClamp > 0 && node.scrollHeight > node.clientHeight;
+                if (horizontallyEllipsized || verticallyClamped) {
                   return true;
                 }
               }

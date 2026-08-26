@@ -50,6 +50,7 @@ GitHub.com の一時 organization-owned Project #74 で `Truncate titles` / `Sho
 4. 値はProject APIではなくBrowserContextのbrowser storageへ保存される。contextだけを変更してprofileのstorage-state fileへflushしない場合、fresh BrowserSessionでは両値が`false`へ戻る
 5. `BrowserSession.SaveStateAsync`でprofileへflush後、別process/fresh BrowserSessionがProject #74のshared state `(false,true)` を取得できた。さらにfresh contextから`(true,false)`へ修復・flushし、別のfresh BrowserSessionで同値を確認した
 6. このため両controlはbrowser profile間で移行可能だが、write後のprofile flushとfresh-session read-backをdurability gateとして必須にする
+7. 2026-08-26 の target Project #4746 では同じitem titleが固定左列とRoadmap pillの両方に描画された。truncation renderingの判定は`[class*='roadmap-pill-module__SanitizedHtml']`へ限定し、固定左列の常設ellipsisをRoadmap stateとして誤認しない
 
 ## Field default UI contract (2026-08-25 live discovery)
 

@@ -79,6 +79,12 @@ internal static class Sel
     public static ILocator GroupHeaderAggregateLabels(IPage page)
         => page.Locator("[class*='aggregate-labels-module__Label']:visible");
 
+    /// <summary>The title rendered inside a Roadmap pill rather than the fixed left-hand table.</summary>
+    public static ILocator RoadmapPillTitle(IPage page, string title)
+        => page.Locator("[class*='roadmap-pill-module__SanitizedHtml']")
+            .Filter(new() { HasText = title })
+            .First;
+
     /// <summary>The Roadmap item/card containing an item-title locator.</summary>
     public static ILocator RoadmapItem(ILocator title)
         => title.Locator(
