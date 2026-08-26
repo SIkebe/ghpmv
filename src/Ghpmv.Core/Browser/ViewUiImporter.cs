@@ -239,9 +239,11 @@ public sealed class ViewUiImporter
         ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
 
         OnProgress?.Invoke($"Applying Roadmap display-option drift for view '{viewName}'...");
+        var sessionStarted = false;
         try
         {
             var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            sessionStarted = true;
             var url = BrowserProjectUrl.Build(
                 _session.BaseUrl,
                 ownerLogin,
@@ -271,7 +273,6 @@ public sealed class ViewUiImporter
                 if (persisted.TruncateTitles == truncateTitles
                     && persisted.ShowDateFields == showDateFields)
                 {
-                    await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
                     return;
                 }
 
@@ -302,6 +303,14 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
+        }
+        finally
+        {
+            if (sessionStarted)
+            {
+                // Preserve partial browser-storage writes even when read-back reports a recoverable mismatch.
+                await _session.SaveStateAsync(CancellationToken.None).ConfigureAwait(false);
+            }
         }
     }
 

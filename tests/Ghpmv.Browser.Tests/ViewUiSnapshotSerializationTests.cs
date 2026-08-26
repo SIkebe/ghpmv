@@ -122,7 +122,7 @@ public class ViewUiSnapshotSerializationTests
         var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+            Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
             Fields = [],
             Views =
             [
@@ -147,6 +147,9 @@ public class ViewUiSnapshotSerializationTests
             ],
             Workflows = [],
             Items = [],
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
         };
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-browser-tests-" + Guid.NewGuid().ToString("N"));
         try

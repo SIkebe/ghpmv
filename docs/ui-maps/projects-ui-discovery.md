@@ -47,8 +47,9 @@ GitHub.com の一時 organization-owned Project #74 で `Truncate titles` / `Sho
 1. 両 control は親 View menu の direct `menuitemcheckbox` で、state は `aria-checked`、disabled=false。menu text に current value は表示されない
 2. click 直後に menu は閉じ、`Unsaved changes` / `Save view` は表示されない。menu 再openと同じ BrowserSession 内の reload では変更値を読める
 3. 片方の Roadmap で変更すると未操作の Roadmap にも同じ値が反映され、View単位のstateではない
-4. BrowserSession を破棄して fresh browser exportすると両値は `false` に戻った。同一session内のreloadはdurabilityを証明せず、snapshot/import/verifyで移行できる永続stateではない
-5. このため両 control は現行GitHub UIでは **unsupported**。snapshot schemaへ追加せず、import/verify/E2E contractにも含めない
+4. 値はProject APIではなくBrowserContextのbrowser storageへ保存される。contextだけを変更してprofileのstorage-state fileへflushしない場合、fresh BrowserSessionでは両値が`false`へ戻る
+5. `BrowserSession.SaveStateAsync`でprofileへflush後、別process/fresh BrowserSessionがProject #74のshared state `(false,true)` を取得できた。さらにfresh contextから`(true,false)`へ修復・flushし、別のfresh BrowserSessionで同値を確認した
+6. このため両controlはbrowser profile間で移行可能だが、write後のprofile flushとfresh-session read-backをdurability gateとして必須にする
 
 ## Field default UI contract (2026-08-25 live discovery)
 
