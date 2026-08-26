@@ -444,6 +444,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 return;
             }
 
+            if (enableBrowserAutomation)
+            {
+                ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
+            }
+
             await ImportCapabilityPreflight.ValidateAsync(
                 ownerType == ProjectOwnerType.Organization
                     ? capabilityPlan

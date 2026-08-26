@@ -332,28 +332,6 @@ public class BrowserRoundTripTests
                     result.ViewNumbers[sourceRoadmap.Number],
                     sourceRoadmap.Name,
                     truncateTitles: true,
-                    showDateFields: false,
-                    cancellationToken);
-                Assert.Empty(viewImporter.Warnings);
-                var titleRepairReport = await verifier.VerifyAsync(
-                    snapshot,
-                    TargetOrg,
-                    result.ProjectNumber,
-                    cancellationToken);
-                Assert.Equal(
-                    VerifyStatus.Match,
-                    Assert.Single(titleRepairReport.Categories, category =>
-                        category.Category == VerifyCategories.View).Status);
-                Assert.DoesNotContain(titleRepairReport.Differences, difference =>
-                    difference.Category == VerifyCategories.View);
-
-                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    result.ViewNumbers[sourceRoadmap.Number],
-                    sourceRoadmap.Name,
-                    truncateTitles: true,
                     showDateFields: true,
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
@@ -384,28 +362,6 @@ public class BrowserRoundTripTests
                         view => result.ViewNumbers[view.Number],
                         StringComparer.Ordinal),
                     cancellationToken);
-
-                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
-                    TargetOrg,
-                    ProjectOwnerType.Organization,
-                    result.ProjectNumber,
-                    result.ViewNumbers[sourceRoadmap.Number],
-                    sourceRoadmap.Name,
-                    truncateTitles: true,
-                    showDateFields: false,
-                    cancellationToken);
-                Assert.Empty(viewImporter.Warnings);
-                var dateRepairReport = await verifier.VerifyAsync(
-                    snapshot,
-                    TargetOrg,
-                    result.ProjectNumber,
-                    cancellationToken);
-                Assert.Equal(
-                    VerifyStatus.Match,
-                    Assert.Single(dateRepairReport.Categories, category =>
-                        category.Category == VerifyCategories.View).Status);
-                Assert.DoesNotContain(dateRepairReport.Differences, difference =>
-                    difference.Category == VerifyCategories.View);
 
                 var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
                 await viewImporter.ApplyFieldSumAsync(
@@ -447,8 +403,10 @@ public class BrowserRoundTripTests
                     && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
                 Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
-                    && (difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal)
-                        || difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.Equal(2, driftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -520,7 +478,7 @@ public class BrowserRoundTripTests
                     result.ProjectNumber,
                     cancellationToken);
 
-                Assert.Equal(7, browserVerificationCount);
+                Assert.Equal(5, browserVerificationCount);
             }
             finally
             {

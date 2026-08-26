@@ -164,7 +164,7 @@ public sealed class ViewUiImporter
         await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    internal static void ValidateSharedRoadmapDisplaySettings(IReadOnlyList<ViewSnapshot> views)
+    public static void ValidateSharedRoadmapDisplaySettings(IReadOnlyList<ViewSnapshot> views)
     {
         ArgumentNullException.ThrowIfNull(views);
         var roadmaps = views

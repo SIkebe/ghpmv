@@ -655,13 +655,12 @@ dotnet run --project src/Ghpmv.Cli -- setup `
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-roadmap-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baseline `(true,false)` から titleだけを `(false,false)` へ変更します。
 5. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `truncate titles mismatch` だけを確認します。続けて `--fixture-roadmap-title-display-render-check` を実行し、full title / hidden datesをDOMで確認します。
-6. 7.3 の再 import を `--project-number <target-project-number>` で実行し、直後にbrowser-assisted verify `--categories View`で`View: Match` / View差分0を確認してから次へ進みます。
-7. `ghpmv setup --fixture-roadmap-date-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baselineからdateだけを `(true,true)` へ変更します。
-8. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `show date fields mismatch` だけを確認します。続けて `--fixture-roadmap-date-display-render-check` を実行し、truncated title / visible datesをDOMで確認します。
-9. 7.3 の再 import を実行してRoadmap stateをbaselineへ戻し、`View: Match`を確認します。
-10. `ghpmv setup --fixture-field-default-drift ...` と `--fixture-field-sum-drift ...` を同じtargetに実行し、browser-assisted verify `--categories Field,View` で4件のdefault mismatchとView 1 field-sum mismatchだけを確認します。
-11. 7.3 の再 import を同じtargetへ一度実行し、Status Updates、field defaults、Field sumを同時に復元します。
-12. browser-assisted verifyを`--categories Field,Item,View`で実行し、`Field: Match` / `View: Match`とinventory済みdraft以外のItem差分がないことを確認します。最後に`--fixture-field-default-check`を再実行して修復後defaultsを確認します。
+6. repairを挟まず `ghpmv setup --fixture-roadmap-date-display-drift ...` を実行します。この`(true,true)` transitionはtitleだけをbaselineへ戻し、dateだけをdriftします。
+7. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `show date fields mismatch` だけを確認します。続けて `--fixture-roadmap-date-display-render-check` を実行し、truncated title / visible datesをDOMで確認します。
+8. `ghpmv setup --fixture-field-default-drift ...` と `--fixture-field-sum-drift ...` を同じtargetに実行します。
+9. browser-assisted verify `--categories Field,View` で4件のdefault mismatch、View 1 field-sum mismatch、2件のdate mismatchだけを確認します。
+10. 7.3 の再 import を同じtargetへ一度だけ実行し、Status Updates、field defaults、Field sum、Roadmap stateを同時に復元します。
+11. browser-assisted verifyを`--categories Field,Item,View`で実行し、`Field: Match` / `View: Match`とinventory済みdraft以外のItem差分がないことを確認します。最後に`--fixture-field-default-check`を再実行して修復後defaultsを確認します。
 
 同じsnapshot / target / mappingsを再利用し、Roadmapの各controlはexactly-one-property driftと直後のDOM observationで独立に検証します。draftとProjectの削除は既存cleanup同意へまとめます。
 

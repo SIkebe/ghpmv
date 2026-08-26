@@ -1645,70 +1645,7 @@ finally {
 }
 ```
 
-title-only driftをbaselineへ戻す。
-
-```powershell
-$previousGhpmvToken = $env:GHPMV_TOKEN
-$previousGitHubToken = $env:GITHUB_TOKEN
-try {
-    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
-    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
-      --org <target-org> `
-      --project-number <target-project-number> `
-      --in $env:GHPMV_DEMO_SNAPSHOT `
-      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --enable-browser-automation `
-      --browser-profile target
-}
-finally {
-    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
-    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
-}
-```
-
-targetがdata residencyの場合は初回importと同じendpoint optionを追加する。続けてrepairを明示検証する。
-
-```powershell
-$titleRepairReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-title-repair-report.json'
-Remove-Item -LiteralPath $titleRepairReport -ErrorAction SilentlyContinue
-$previousGhpmvToken = $env:GHPMV_TOKEN
-$previousGitHubToken = $env:GITHUB_TOKEN
-try {
-    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
-    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
-      --org <target-org> `
-      --project <target-project-number> `
-      --in $env:GHPMV_DEMO_SNAPSHOT `
-      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories View `
-      --enable-browser-automation `
-      --browser-profile target `
-      --fail-on-warning `
-      --report-json $titleRepairReport
-}
-finally {
-    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
-    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
-}
-$titleRepair = Get-Content -LiteralPath $titleRepairReport -Raw | ConvertFrom-Json
-$titleRepairView = @($titleRepair.categories | Where-Object category -eq 'View')
-$titleRepairDifferences = @($titleRepair.differences | Where-Object category -eq 'View')
-if ($LASTEXITCODE -ne 0 -or
-    $titleRepairView.Count -ne 1 -or
-    $titleRepairView[0].status -ne 'Match' -or
-    $titleRepairDifferences.Count -ne 0) {
-    throw 'Title-only Roadmap repair did not return View to Match.'
-}
-Write-Output 'GHPMV_ROADMAP_TITLE_REPAIR_MATCH'
-```
-
-targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとexit code 0を確認した場合だけdate-only driftへ進む。
+title-only checkpoint後はrepair importを挟まない。次のdate-only drift `(true,true)` がtitle truncationだけをbaselineへ戻し、date displayだけをdriftさせる。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1793,70 +1730,7 @@ finally {
 }
 ```
 
-truncated title / visible datesのDOM確認後、browser-assisted importを同じtargetへ再実行する。
-
-```powershell
-$previousGhpmvToken = $env:GHPMV_TOKEN
-$previousGitHubToken = $env:GITHUB_TOKEN
-try {
-    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
-    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- import `
-      --org <target-org> `
-      --project-number <target-project-number> `
-      --in $env:GHPMV_DEMO_SNAPSHOT `
-      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --enable-browser-automation `
-      --browser-profile target
-}
-finally {
-    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
-    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
-}
-```
-
-targetがdata residencyの場合は初回importと同じendpoint optionを追加する。続けてdate repairを明示検証する。
-
-```powershell
-$dateRepairReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-date-repair-report.json'
-Remove-Item -LiteralPath $dateRepairReport -ErrorAction SilentlyContinue
-$previousGhpmvToken = $env:GHPMV_TOKEN
-$previousGitHubToken = $env:GITHUB_TOKEN
-try {
-    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
-    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
-    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
-      --org <target-org> `
-      --project <target-project-number> `
-      --in $env:GHPMV_DEMO_SNAPSHOT `
-      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
-      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
-      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
-      --categories View `
-      --enable-browser-automation `
-      --browser-profile target `
-      --fail-on-warning `
-      --report-json $dateRepairReport
-}
-finally {
-    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
-    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
-}
-$dateRepair = Get-Content -LiteralPath $dateRepairReport -Raw | ConvertFrom-Json
-$dateRepairView = @($dateRepair.categories | Where-Object category -eq 'View')
-$dateRepairDifferences = @($dateRepair.differences | Where-Object category -eq 'View')
-if ($LASTEXITCODE -ne 0 -or
-    $dateRepairView.Count -ne 1 -or
-    $dateRepairView[0].status -ne 'Match' -or
-    $dateRepairDifferences.Count -ne 0) {
-    throw 'Date-only Roadmap repair did not return View to Match.'
-}
-Write-Output 'GHPMV_ROADMAP_DATE_REPAIR_MATCH'
-```
-
-targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとexit code 0を確認した場合だけField default / Field sum driftへ進む。
+truncated title / visible datesのDOM確認後、date-only driftを維持したままField default / Field sum driftへ進む。すべてのdriftは既存の最終re-import 1回で同時にrepairする。
 
 次に同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
 
@@ -1956,20 +1830,21 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
     $roadmapTitleDifferences.Count -ne 0 -or
-    $roadmapDateDifferences.Count -ne 0 -or
-    $nonInfoDifferences.Count -ne 5 -or
+    $roadmapDateDifferences.Count -ne 2 -or
+    $nonInfoDifferences.Count -ne 7 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches and the View 1 field-sum mismatch.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both Roadmap date-display mismatches.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
+Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。2つの drift marker と wrapper exit code 0 を確認した場合だけField default / Field sum status=`drift-detected`としてrepairへ進む。
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。3つの drift marker と wrapper exit code 0 を確認した場合だけ各feature status=`drift-detected`としてrepairへ進む。
 
 続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
 
