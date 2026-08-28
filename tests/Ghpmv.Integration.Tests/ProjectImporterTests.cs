@@ -305,11 +305,15 @@ public class ProjectImporterTests
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views = [],
@@ -343,6 +347,7 @@ public class ProjectImporterTests
             Readme = project.GetProperty("readme").GetString(),
             Public = project.GetProperty("public").GetBoolean(),
             Closed = project.GetProperty("closed").GetBoolean(),
+            Template = false,
         };
     }
 
@@ -592,11 +597,14 @@ public class ProjectImporterTests
     private static ProjectSnapshot StatusUpdateSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views = [],

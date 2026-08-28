@@ -87,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field defaults / sums | typed defaults と4 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
+| browser-e2e field defaults / sums | typed defaults と5 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -190,6 +190,8 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | browser-e2e field-default contract | `Fixture Text=既定値 🌏`, `Fixture Number=-7`, `Fixture Number 2=0`, `Fixture Select=Beta` |
 | browser-e2e field-default status | `fixture-pending`, `snapshot-match`, `target-field-match`, `new-draft-observed`, `drift-detected`, `repair-match` |
+| browser-e2e Roadmap display contract | Project-shared state: both Roadmaps=`(truncateTitles=true, showDateFields=false)` |
+| browser-e2e Roadmap display status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | resource inventory | この run が作成した Project / repository の side、name、URL / number、作成 Step、cleanup 状態 |
 
 `browser-e2e` の既存 round-trip は次の field-sum contract も常に検証する。別 scenario には分岐させず、settings に重複保存しない。
@@ -200,10 +202,15 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | `Fixture Roadmap` | `ROADMAP_LAYOUT` / `Status` | `Fixture Number 2` |
 | `Fixture Board` | `BOARD_LAYOUT` / `Status` | `Fixture Number` |
 | `Fixture Empty Sums` | `TABLE_LAYOUT` / `Status` | empty |
+| `Fixture Roadmap Dates Hidden` | `ROADMAP_LAYOUT` / `Status` | `Fixture Number 2` |
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
+
+同じ round-trip でProject-shared Roadmap state `(truncateTitles=true, showDateFields=false)` を両Roadmapからcaptureし、DOM checkpointでtitle truncationとdate非表示を検証する。negative-test phaseはtitle-only `(false,false)` とdate-only `(true,true)` をそれぞれ別checkpointで適用し、exact mismatch、DOM rendering、baseline repairを各段階で確認する。
+
+> **Undocumented UI warning:** `Truncate titles` / `Show date fields` と対応するbrowser storageはGitHubの公開API・互換性契約ではない。GitHubのUI、selector、storage key、保存動作が予告なく変更・削除されるとcapture/import/DOM checkpointが失敗し得る。`browser-e2e`でfixtureを作成する前に、この依存と失敗時はwarningを成功扱いしないことをoperatorへ明示する。
 
 ## Feature checkpoint の実行時間最小化
 
@@ -539,7 +546,7 @@ settings の `execution.fixturePreparation`、`execution.repositoryPreparationMo
 
 `api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
-`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、4 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
+`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、5 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
 
 同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
@@ -894,7 +901,7 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 `browser-e2e` では fixture preparation にかかわらず、Step 5 の開始時に次を state へ記録する。
 
-- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`
+- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`, `Fixture Roadmap Dates Hidden`
 - Number field names: `Fixture Number`, `Fixture Number 2`
 - Grouping field: `Status`
 - expected FieldSum: session state の fixture contract 表
@@ -970,6 +977,8 @@ source が data residency の場合は選択した source command に `--api-bas
 
 `fixture preparation=create` の成功後、出力された source Project title / number / URL を resource inventory に `created` として追加する。`source empty-repository fallback=selected` なら `<source-org>/<source-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。`browser-e2e` では作成された source fixture が上記 contract を持つことを前提にせず、Step 6 の gate で必ず確認する。
 
+`browser-e2e` の実resource作成前説明には、作成するresource名に加え、Roadmap title/date controlsがundocumented browser UI/browser storage依存であり、GitHub側の変更時は後続automationがfail-closedで停止することを必ず含める。
+
 `browser-e2e` の再試行も同じ combined command と同じ title / repository を使う。CLI は owned fixture の `fixture-ui-complete` marker を確認し、完了済みなら UI setup を自動で skipし、未完了なら再開する。marker-aware retry を迂回するため、通常の再試行で `--fixture-ui --fixture-project <source-project-number>` を実行しない。
 
 ### Fixture UI 再実行
@@ -977,7 +986,7 @@ source が data residency の場合は選択した source command に `--api-bas
 同じ Project に明示的に再実行すると non-default Views が重複する。次のどちらかを選んでもらう。
 
 1. 新しい fixture Project を作る（推奨）
-2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` を手動削除して再実行する
+2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` / `Fixture Roadmap Dates Hidden` を手動削除して再実行する
 
 Workflow は再設定できる。warning が出た場合は、目視だけで終了せず、後続 export が UI settings を警告なしで取得できるか確認する。
 
@@ -1072,7 +1081,8 @@ $expectedViews = @(
     [pscustomobject]@{ Name = 'View 1'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Count', 'Fixture Number', 'Fixture Number 2') },
     [pscustomobject]@{ Name = 'Fixture Board'; Layout = 'BOARD_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number') },
     [pscustomobject]@{ Name = 'Fixture Roadmap'; Layout = 'ROADMAP_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number 2') },
-    [pscustomobject]@{ Name = 'Fixture Empty Sums'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @() }
+    [pscustomobject]@{ Name = 'Fixture Empty Sums'; Layout = 'TABLE_LAYOUT'; GroupBy = @('Status'); FieldSum = @() },
+    [pscustomobject]@{ Name = 'Fixture Roadmap Dates Hidden'; Layout = 'ROADMAP_LAYOUT'; GroupBy = @('Status'); FieldSum = @('Fixture Number 2') }
 )
 foreach ($requiredField in @('Fixture Number', 'Fixture Number 2')) {
     $numberFields = @($snapshot.fields | Where-Object { $_.name -eq $requiredField -and $_.dataType -eq 'NUMBER' })
@@ -1100,12 +1110,54 @@ foreach ($expected in $expectedViews) {
     }
     Write-Output ("GHPMV_FIELD_SUM_VIEW:{0}:{1}" -f $expected.Name, ($actualFieldSum -join ', '))
 }
+$roadmap = @($snapshot.views | Where-Object name -eq 'Fixture Roadmap')
+if ($roadmap.Count -ne 1 -or
+    $roadmap[0].ui.roadmap.truncateTitles -ne $true -or
+    $roadmap[0].ui.roadmap.showDateFields -ne $false) {
+    Stop-FieldSumSnapshotCheck 'Fixture Roadmap must capture truncateTitles=true and showDateFields=false.'
+    return
+}
+$roadmapDatesHidden = @($snapshot.views | Where-Object name -eq 'Fixture Roadmap Dates Hidden')
+if ($roadmapDatesHidden.Count -ne 1 -or
+    $roadmapDatesHidden[0].ui.roadmap.truncateTitles -ne $true -or
+    $roadmapDatesHidden[0].ui.roadmap.showDateFields -ne $false) {
+    Stop-FieldSumSnapshotCheck 'Fixture Roadmap Dates Hidden must capture truncateTitles=true and showDateFields=false.'
+    return
+}
+$roadmapLongTitle = 'Fixture roadmap item with a deliberately long title for truncation rendering verification'
+$roadmapItems = @($snapshot.items | Where-Object {
+    $_.type -eq 'DRAFT_ISSUE' -and $_.draft.title -eq $roadmapLongTitle
+})
+if ($roadmapItems.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Expected exactly one Roadmap rendering draft '$roadmapLongTitle', found $($roadmapItems.Count)."
+    return
+}
+$roadmapItem = $roadmapItems[0]
+if ($roadmapItem.isArchived -ne $false) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must be unarchived."
+    return
+}
+$roadmapDates = @($roadmapItem.fieldValues | Where-Object {
+    $_.fieldName -eq 'Fixture Date' -and -not [string]::IsNullOrWhiteSpace($_.date)
+})
+if ($roadmapDates.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must have exactly one non-empty Fixture Date value."
+    return
+}
+$roadmapIterations = @($roadmapItem.fieldValues | Where-Object {
+    $_.fieldName -eq 'Fixture Sprint' -and -not [string]::IsNullOrWhiteSpace($_.iterationTitle)
+})
+if ($roadmapIterations.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Roadmap rendering draft '$roadmapLongTitle' must have exactly one non-empty Fixture Sprint value."
+    return
+}
+Write-Output 'GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_SNAPSHOT_MATCH'
 Write-Output 'GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-`GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH`、`GHPMV_FIELD_SUM_SNAPSHOT_MATCH`、command exit code 0 をすべて確認した場合だけ両 feature status を `snapshot-match` とし、先へ進む。zero は null と区別し、Single-select は source option ID でなく `singleSelectOptionName=Beta` を要求する。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
+`GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH`、`GHPMV_FIELD_SUM_SNAPSHOT_MATCH`、`GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH`、command exit code 0 をすべて確認した場合だけ各 feature status を `snapshot-match` とし、先へ進む。zero は null と区別し、Single-select は source option ID でなく `singleSelectOptionName=Beta` を要求する。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
 
 `api-only` / `browser-e2e`では、target PAT入力またはtarget resource準備より前に同じterminalでsnapshot-driven capabilityを算出する。
 
@@ -1511,6 +1563,7 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 - `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
+- `Fixture Roadmap Dates Hidden`: layout、Group by=`Status`、Field sum=`Fixture Number 2`、Show date fields=false
 
 このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。Issue #62 の派生描画 checkpoint も、初回 `View: Match` 後に次の Playwright command で自動検証する。ユーザーへ browser reload や自己申告を求めない。
 
@@ -1532,11 +1585,185 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と `Fixture Roadmap` を reload し、visible group header、`Count` rendering、各 Number field の numeric aggregate label を DOM で検査する。両 View の `Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=2`、command exit code 0 を確認した場合だけ `browser-e2e field-sum status=target-render-observed` として deliberate drift へ進む。欠落は非ゼロ終了にし、対話用質問で補完しない。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は `View 1` と2つのRoadmapをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示をDOMで検査する。3 Viewの`Rendered Field sums verified`、`Fixture field-sum rendering verified: ... views=3`、command exit code 0を確認した場合だけ Field sum と Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
 
 ### Deliberate drift と repair
 
-初回の機械的な `Field: Match` / `View: Match` と new-draft functional check 後、同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
+初回の機械的な `Field: Match` / `View: Match` と new-draft functional check 後、まずtitle-only Roadmap driftを同じtargetへ適用する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-display-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+同じterminalでbrowser-assisted verifyを実行する。
+
+```powershell
+$titleDriftReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-title-drift-report.json'
+Remove-Item -LiteralPath $titleDriftReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $titleDriftReport
+    $titleDriftExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+if ($titleDriftExitCode -eq 0) { throw 'Title-only Roadmap drift was not detected.' }
+$titleReport = Get-Content -LiteralPath $titleDriftReport -Raw | ConvertFrom-Json
+$titleViewCategory = @($titleReport.categories | Where-Object category -eq 'View')
+$titleDifferences = @($titleReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'truncate titles mismatch' })
+$dateDifferences = @($titleReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'show date fields mismatch' })
+$titleNonInfoDifferences = @($titleReport.differences | Where-Object severity -ne 'Info')
+$expectedTitleViews = @("view 'Fixture Roadmap': truncate titles mismatch", "view 'Fixture Roadmap Dates Hidden': truncate titles mismatch")
+if ($titleViewCategory.Count -ne 1 -or
+    $titleViewCategory[0].status -ne 'Mismatch' -or
+    $titleDifferences.Count -ne 2 -or
+    $dateDifferences.Count -ne 0 -or
+    $titleNonInfoDifferences.Count -ne 2 -or
+    @($expectedTitleViews | Where-Object { $expected = $_; -not ($titleDifferences.message | Where-Object { $_ -like "$expected*" }) }).Count -ne 0) {
+    throw 'Title-only Roadmap drift did not produce exactly the two expected title mismatches.'
+}
+Write-Output 'GHPMV_ROADMAP_TITLE_ONLY_DRIFT_DETECTED'
+$global:LASTEXITCODE = 0
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとwrapper exit code 0を確認後、DOMを確認する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-title-display-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+title-only checkpoint後はrepair importを挟まない。次のdate-only drift `(true,true)` がtitle truncationだけをbaselineへ戻し、date displayだけをdriftさせる。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-date-display-drift `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+同じterminalでbrowser-assisted View verifyを`roadmap-date-drift-report.json`へ出力する。
+
+```powershell
+$dateDriftReport = Join-Path $env:GHPMV_DEMO_SNAPSHOT 'roadmap-date-drift-report.json'
+Remove-Item -LiteralPath $dateDriftReport -ErrorAction SilentlyContinue
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- verify `
+      --org <target-org> `
+      --project <target-project-number> `
+      --in $env:GHPMV_DEMO_SNAPSHOT `
+      --repo-mapping "$env:GHPMV_DEMO_SNAPSHOT\repository-mappings.csv" `
+      --user-mapping "$env:GHPMV_DEMO_SNAPSHOT\user-mappings.csv" `
+      --org-mapping "$env:GHPMV_DEMO_SNAPSHOT\organization-mappings.csv" `
+      --categories View `
+      --enable-browser-automation `
+      --browser-profile target `
+      --fail-on-warning `
+      --report-json $dateDriftReport
+    $dateDriftExitCode = $LASTEXITCODE
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+if ($dateDriftExitCode -eq 0) { throw 'Date-only Roadmap drift was not detected.' }
+$dateReport = Get-Content -LiteralPath $dateDriftReport -Raw | ConvertFrom-Json
+$dateViewCategory = @($dateReport.categories | Where-Object category -eq 'View')
+$dateOnlyDifferences = @($dateReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'show date fields mismatch' })
+$unexpectedTitleDifferences = @($dateReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match 'truncate titles mismatch' })
+$dateNonInfoDifferences = @($dateReport.differences | Where-Object severity -ne 'Info')
+if ($dateViewCategory.Count -ne 1 -or
+    $dateViewCategory[0].status -ne 'Mismatch' -or
+    $dateOnlyDifferences.Count -ne 2 -or
+    $unexpectedTitleDifferences.Count -ne 0 -or
+    $dateNonInfoDifferences.Count -ne 2) {
+    throw 'Date-only Roadmap drift did not produce exactly the two expected date mismatches.'
+}
+Write-Output 'GHPMV_ROADMAP_DATE_ONLY_DRIFT_DETECTED'
+$global:LASTEXITCODE = 0
+```
+
+targetがdata residencyの場合は初回verifyと同じendpoint optionを追加する。markerとwrapper exit code 0を確認後、次を実行する。
+
+```powershell
+$previousGhpmvToken = $env:GHPMV_TOKEN
+$previousGitHubToken = $env:GITHUB_TOKEN
+try {
+    $env:GHPMV_TOKEN = $env:TARGET_TOKEN
+    Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue
+    dotnet run --project src\Ghpmv.Cli -c Release --no-build -- setup `
+      --fixture-roadmap-date-display-render-check `
+      --fixture-org <target-org> `
+      --fixture-project <target-project-number> `
+      --browser-profile target
+}
+finally {
+    if ($null -eq $previousGhpmvToken) { Remove-Item Env:GHPMV_TOKEN -ErrorAction SilentlyContinue } else { $env:GHPMV_TOKEN = $previousGhpmvToken }
+    if ($null -eq $previousGitHubToken) { Remove-Item Env:GITHUB_TOKEN -ErrorAction SilentlyContinue } else { $env:GITHUB_TOKEN = $previousGitHubToken }
+}
+```
+
+truncated title / visible datesのDOM確認後、date-only driftを維持したままField default / Field sum driftへ進む。すべてのdriftは既存の最終re-import 1回で同時にrepairする。
+
+次に同じ terminal で Field default と Field sum の deliberate drift command を順に送る。ユーザーへ手動変更を依頼しない。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1577,7 +1804,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、同じ terminal で次の drift verify command を送る。placeholder、optional mapping、profile、endpoint は初回 verify と同じ実値へ置き換える。この command は native exit code 0 を失敗とし、非ゼロ終了かつ report の View category が `Mismatch`、`field sum mismatch` が存在する場合だけ semantic success とする。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、保持中のRoadmap date-display driftを含め、Field default / Field sum / Roadmap date-displayの3 driftを同時検証するverifyを送る。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1617,6 +1844,12 @@ $driftFieldCategories = @($driftReport.categories | Where-Object category -eq 'F
 $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'View')
 $fieldDefaultDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'Field' -and $_.message -match 'default value mismatch' })
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
+$roadmapTitleDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': truncate titles mismatch"
+})
+$roadmapDateDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': show date fields mismatch"
+})
 $nonInfoDifferences = @($driftReport.differences | Where-Object severity -ne 'Info')
 $unexpectedCategoryStatuses = @($driftReport.categories | Where-Object {
     $_.category -notin @('Field', 'View') -and $_.status -notin @('Match', 'NotApplicable')
@@ -1627,19 +1860,22 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
-    $nonInfoDifferences.Count -ne 5 -or
+    $roadmapTitleDifferences.Count -ne 0 -or
+    $roadmapDateDifferences.Count -ne 2 -or
+    $nonInfoDifferences.Count -ne 7 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches and the expected View 1 field-sum mismatch.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, and both Roadmap date-display mismatches.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
+Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`GHPMV_FIELD_DEFAULT_DRIFT_DETECTED`、`GHPMV_FIELD_SUM_DRIFT_DETECTED`、wrapper exit code 0 を確認した場合だけ両 feature status=`drift-detected` とする。
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。3つの drift marker と wrapper exit code 0 を確認した場合だけ各feature status=`drift-detected`としてrepairへ進む。
 
 続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
 
@@ -1747,10 +1983,11 @@ if ($global:GHPMV_REPAIR_VERIFY_EXIT_CODE -eq 0 -or
 Write-Output 'GHPMV_ITEM_VALUES_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_DEFAULT_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
+Write-Output 'GHPMV_ROADMAP_DISPLAY_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。`GHPMV_FIELD_DEFAULT_REPAIR_MATCH`、`GHPMV_FIELD_SUM_REPAIR_MATCH`、command exit code 0 を確認後、次のfunctional checkを同じterminalへ送る。
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。Field default / Field sum / Roadmap display の3つの repair marker と command exit code 0 を確認後、次のfunctional checkを同じterminalへ送る。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1770,9 +2007,9 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、`GHPMV_ITEM_VALUES_REPAIR_MATCH`が既知のinventory draft以外にItem差分がないことを証明した場合、追加の対話用質問を行わず両 feature status=`repair-match` とする。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field defaults functionally verified: ... fields=4 draft=<id> title='<title>' cleanup=pending` と exit code 0 を確認し、修復後draftをnested resource inventoryへ`created`として追加する。修復後の new draftにも4 defaultsが入り、`GHPMV_ITEM_VALUES_REPAIR_MATCH`が既知のinventory draft以外にItem差分がないことを証明した場合、追加の対話用質問を行わず3 feature status=`repair-match` とする。
 
-`browser-e2e` は field-defaultの`new-draft-observed` / `repair-match` と field-sumの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
+`browser-e2e` は field-defaultの`new-draft-observed` / `repair-match`、field-sumとRoadmap displayの`target-render-observed` / `repair-match`へ到達してから Resource inventory の cleanup 同意へ進む。`api-only` は通常の Step 10 完了後に cleanup 同意へ進む。
 
 ## Troubleshooting
 

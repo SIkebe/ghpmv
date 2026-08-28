@@ -290,8 +290,8 @@ public class SnapshotTests
         const string Json =
             """
             {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
+              "schemaVersion": 2,
+              "project": { "title": "T", "public": false, "closed": false, "template": false },
               "fields": [
                 { "name": "Text", "dataType": "TEXT" },
                 { "name": "Number", "dataType": "NUMBER" },
@@ -299,7 +299,10 @@ public class SnapshotTests
               ],
               "views": [],
               "workflows": [],
-              "items": []
+              "items": [],
+              "statusUpdates": [],
+              "linkedRepositories": [],
+              "linkedTeams": []
             }
             """;
 
@@ -310,63 +313,12 @@ public class SnapshotTests
     }
 
     [Fact]
-    public void Deserialize_snapshot_without_collaborators_and_linked_repositories_yields_null()
-    {
-        // Snapshots written before the collaborator/linked-repository fields stay loadable
-        // within schema version 1; the new fields deserialize as null ("not captured").
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [], "views": [], "workflows": [], "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.NotNull(restored);
-        Assert.Null(restored.Collaborators);
-        Assert.Null(restored.LinkedRepositories);
-        Assert.Null(restored.LinkedTeams);
-    }
-
-    [Fact]
-    public void View_without_tab_position_remains_backward_compatible()
-    {
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [],
-              "views": [{
-                "number": 7,
-                "name": "Legacy",
-                "layout": "TABLE_LAYOUT",
-                "groupByFields": [],
-                "sortByFields": [],
-                "verticalGroupByFields": [],
-                "visibleFields": []
-              }],
-              "workflows": [],
-              "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.Null(Assert.Single(restored!.Views).TabPosition);
-        Assert.Equal(1, restored.SchemaVersion);
-    }
-
-    [Fact]
     public void Serialized_json_contains_schema_version()
     {
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
     }
 
     [Fact]
@@ -414,6 +366,156 @@ public class SnapshotTests
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task SnapshotFile_rejects_an_unsupported_schema_version()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-version-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                """
+                {
+                  "schemaVersion": 1,
+                  "project": { "title": "Old", "public": false, "closed": false },
+                  "fields": [], "views": [], "workflows": [], "items": []
+                }
+                """,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains("unsupported schema version 1; expected 2", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SnapshotFile_rejects_schema_two_without_template_state()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-template-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                """
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false },
+                  "fields": [], "views": [], "workflows": [], "items": []
+                }
+                """,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains("missing required boolean 'project.template'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("statusUpdates", "null")]
+    [InlineData("linkedRepositories", "{}")]
+    [InlineData("linkedTeams", "null")]
+    public async Task SnapshotFile_rejects_missing_or_non_array_current_collections(
+        string propertyName,
+        string invalidValue)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-collection-").FullName;
+        try
+        {
+            var json = $$"""
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false, "template": false },
+                  "fields": [], "views": [], "workflows": [], "items": [],
+                  "statusUpdates": [],
+                  "linkedRepositories": [],
+                  "linkedTeams": [],
+                  "{{propertyName}}": {{invalidValue}}
+                }
+                """;
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                json,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains($"missing required array '{propertyName}'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SnapshotFile_rejects_an_omitted_current_collection()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-omitted-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                """
+                {
+                  "schemaVersion": 2,
+                  "project": { "title": "Malformed", "public": false, "closed": false, "template": false },
+                  "fields": [], "views": [], "workflows": [], "items": [],
+                  "linkedRepositories": [], "linkedTeams": []
+                }
+                """,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains("missing required array 'statusUpdates'", exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("[]", "must contain a JSON object")]
+    [InlineData("null", "must contain a JSON object")]
+    [InlineData("""{"schemaVersion":"2"}""", "missing required integer 'schemaVersion'")]
+    public async Task SnapshotFile_normalizes_malformed_root_and_schema_version_errors(
+        string json,
+        string expectedMessage)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-snapshot-malformed-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                json,
+                TestContext.Current.CancellationToken);
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                () => SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken));
+
+            Assert.Contains(expectedMessage, exception.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
@@ -478,44 +580,20 @@ public class SnapshotTests
 
         var restored = JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot);
 
-        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates!);
+        var restoredUpdate = Assert.Single(Assert.IsType<ProjectSnapshot>(restored).StatusUpdates);
         Assert.Null(restoredUpdate.Status);
         Assert.Equal("Update without a status.", restoredUpdate.Body);
     }
 
     [Fact]
-    public void Deserialize_snapshot_without_status_updates_yields_null()
+    public void Serialized_json_uses_current_schema_when_status_updates_are_present()
     {
-        // Snapshots written before status update support stay loadable within schema
-        // version 1; the new collection deserializes as null ("not captured").
-        const string Json =
-            """
-            {
-              "schemaVersion": 1,
-              "project": { "title": "T", "public": false, "closed": false },
-              "fields": [], "views": [], "workflows": [], "items": []
-            }
-            """;
-
-        var restored = JsonSerializer.Deserialize(Json, SnapshotJsonContext.Default.ProjectSnapshot);
-
-        Assert.NotNull(restored);
-        Assert.Null(restored.Project.Template);
-        Assert.Null(restored.StatusUpdates);
-        Assert.Empty(restored.Items);
-    }
-
-    [Fact]
-    public void Serialized_json_keeps_schema_version_one_when_status_updates_are_present()
-    {
-        // Status updates are an additive schema-v1 field: capturing them must not bump
-        // the version, otherwise every previously written snapshot becomes unreadable.
-        Assert.Equal(1, ProjectSnapshot.CurrentSchemaVersion);
+        Assert.Equal(2, ProjectSnapshot.CurrentSchemaVersion);
 
         var json = JsonSerializer.Serialize(CreateFullSnapshot(), SnapshotJsonContext.Default.ProjectSnapshot);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(ProjectSnapshot.CurrentSchemaVersion, document.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.Equal(2, document.RootElement.GetProperty("statusUpdates").GetArrayLength());
         Assert.True(document.RootElement.GetProperty("project").GetProperty("template").GetBoolean());
     }

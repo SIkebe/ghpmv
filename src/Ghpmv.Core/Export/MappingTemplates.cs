@@ -33,7 +33,7 @@ public static class MappingTemplates
         var repositories = new List<string>();
         foreach (var repository in snapshotList.SelectMany(s => s.Items)
                      .Select(item => item.Repository)
-                     .Concat(snapshotList.SelectMany(s => s.LinkedRepositories ?? []))
+                     .Concat(snapshotList.SelectMany(s => s.LinkedRepositories))
                      .Concat(snapshotList.SelectMany(s => s.Workflows)
                          .Select(workflow => workflow.Ui?.Repository))
                      .Concat(FilterIdentifiers(snapshotList, "repo").Select(identifier => identifier.Value)))
@@ -115,7 +115,7 @@ public static class MappingTemplates
         ArgumentNullException.ThrowIfNull(snapshots);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         return snapshots
-            .SelectMany(snapshot => snapshot.LinkedTeams ?? [])
+            .SelectMany(snapshot => snapshot.LinkedTeams)
             .Select(team => team.Identity)
             .Where(seen.Add)
             .ToList();

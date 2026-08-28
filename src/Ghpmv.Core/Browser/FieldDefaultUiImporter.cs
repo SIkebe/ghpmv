@@ -8,6 +8,7 @@ namespace Ghpmv.Core.Browser;
 /// <summary>Applies browser-only defaults after Project fields, options, and existing items exist.</summary>
 public sealed class FieldDefaultUiImporter
 {
+    private const int PersistenceAttempts = 3;
     private readonly BrowserSession _session;
     private readonly List<string> _warnings = [];
 
@@ -236,60 +237,72 @@ public sealed class FieldDefaultUiImporter
         int projectNumber,
         CancellationToken cancellationToken)
     {
-        await FieldDefaultUiExporter.OpenFieldSettingsAsync(
-            page,
-            _session,
-            ownerLogin,
-            ownerType,
-            projectNumber,
-            field.Name,
-            cancellationToken).ConfigureAwait(false);
-
-        var current = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
-            .ConfigureAwait(false);
-        if (ValuesEqual(field.DataType, field.DefaultValue!, current))
+        FieldDefaultValueSnapshot? actual = null;
+        for (var attempt = 1; attempt <= PersistenceAttempts; attempt++)
         {
-            return;
+            await FieldDefaultUiExporter.OpenFieldSettingsAsync(
+                page,
+                _session,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                field.Name,
+                cancellationToken).ConfigureAwait(false);
+
+            var current = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
+                .ConfigureAwait(false);
+            if (ValuesEqual(field.DataType, field.DefaultValue!, current))
+            {
+                return;
+            }
+
+            var control = Sel.FieldDefaultControl(page);
+            switch (field.DataType)
+            {
+                case "TEXT":
+                    await control.FillAsync(field.DefaultValue!.Text ?? string.Empty).ConfigureAwait(false);
+                    break;
+                case "NUMBER":
+                    await control.FillAsync(field.DefaultValue!.Number?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty)
+                        .ConfigureAwait(false);
+                    break;
+                case "SINGLE_SELECT":
+                    await ApplySingleSelectAsync(
+                        page,
+                        current.SingleSelectOptionName,
+                        field.DefaultValue!.SingleSelectOptionName)
+                        .ConfigureAwait(false);
+                    break;
+            }
+
+            // Field settings auto-save. Leave enough time for the request to become durable
+            // before navigation can cancel it, then verify by reload.
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            await FieldDefaultUiExporter.OpenFieldSettingsAsync(
+                page,
+                _session,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                field.Name,
+                cancellationToken).ConfigureAwait(false);
+            actual = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
+                .ConfigureAwait(false);
+            if (ValuesEqual(field.DataType, field.DefaultValue!, actual))
+            {
+                return;
+            }
+
+            if (attempt < PersistenceAttempts)
+            {
+                OnProgress?.Invoke(
+                    $"Field '{field.Name}' default did not persist; retrying ({attempt + 1}/{PersistenceAttempts})...");
+            }
         }
 
-        var control = Sel.FieldDefaultControl(page);
-        switch (field.DataType)
-        {
-            case "TEXT":
-                await control.FillAsync(field.DefaultValue!.Text ?? string.Empty).ConfigureAwait(false);
-                break;
-            case "NUMBER":
-                await control.FillAsync(field.DefaultValue!.Number?.ToString("R", CultureInfo.InvariantCulture) ?? string.Empty)
-                    .ConfigureAwait(false);
-                break;
-            case "SINGLE_SELECT":
-                await ApplySingleSelectAsync(
-                    page,
-                    current.SingleSelectOptionName,
-                    field.DefaultValue!.SingleSelectOptionName)
-                    .ConfigureAwait(false);
-                break;
-        }
-
-        // Field settings auto-save. As with View persistence, leave enough time for the
-        // request to become durable before navigation can cancel it, then verify by reload.
-        await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
-
-        await FieldDefaultUiExporter.OpenFieldSettingsAsync(
-            page,
-            _session,
-            ownerLogin,
-            ownerType,
-            projectNumber,
-            field.Name,
-            cancellationToken).ConfigureAwait(false);
-        var actual = await FieldDefaultUiExporter.ReadDefaultValueAsync(page, field)
-            .ConfigureAwait(false);
-        if (!ValuesEqual(field.DataType, field.DefaultValue!, actual))
-        {
-            throw new InvalidOperationException(
-                $"saved value did not persist (expected {Display(field)}, actual {Display(field with { DefaultValue = actual })})");
-        }
+        throw new InvalidOperationException(
+            $"saved value did not persist after {PersistenceAttempts} attempts "
+            + $"(expected {Display(field)}, actual {Display(field with { DefaultValue = actual })})");
     }
 
     private static async Task ApplySingleSelectAsync(

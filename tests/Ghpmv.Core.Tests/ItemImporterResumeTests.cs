@@ -684,7 +684,10 @@ public class ItemImporterResumeTests
         => new()
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false },
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
+            Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false, Template = false },
             Fields = [],
             Views = [],
             Workflows = [],
@@ -720,7 +723,10 @@ public class ItemImporterResumeTests
         => new()
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false },
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
+            Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false, Template = false },
             Fields = [],
             Views = [],
             Workflows = [],

@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Fixtures;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -25,12 +26,28 @@ public sealed partial class FieldSumRenderingObserver
         int projectNumber,
         IReadOnlyDictionary<string, int> viewNumbers,
         CancellationToken cancellationToken = default)
+        => await ValidateFixtureAsync(
+            FixtureUiSnapshotFactory.Create(),
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            viewNumbers,
+            cancellationToken).ConfigureAwait(false);
+
+    public async Task ValidateFixtureAsync(
+        ProjectSnapshot expected,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        IReadOnlyDictionary<string, int> viewNumbers,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(expected);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
 
-        var expectedViews = FixtureUiSnapshotFactory.Create().Views
-            .Where(view => view.Name is "View 1" or "Fixture Roadmap")
+        var expectedViews = expected.Views
+            .Where(view => view.Name is "View 1" or "Fixture Roadmap" or "Fixture Roadmap Dates Hidden")
             .ToArray();
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         foreach (var view in expectedViews)
@@ -58,6 +75,10 @@ public sealed partial class FieldSumRenderingObserver
             var headerTexts = await ReadNormalizedTextsAsync(headers).ConfigureAwait(false);
             var labelTexts = await ReadNormalizedTextsAsync(Sel.GroupHeaderAggregateLabels(page)).ConfigureAwait(false);
             ValidateObservation(view, headerTexts, labelTexts);
+            if (string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal))
+            {
+                await ValidateRoadmapDisplayAsync(page, view).ConfigureAwait(false);
+            }
             OnProgress?.Invoke(
                 $"Rendered Field sums verified for view '{view.Name}': headers=[{string.Join(" | ", headerTexts)}]");
         }
@@ -98,6 +119,78 @@ public sealed partial class FieldSumRenderingObserver
         }
     }
 
+    internal static void ValidateRoadmapDisplayObservation(
+        ViewSnapshot view,
+        bool titleTruncated,
+        bool datesRendered)
+    {
+        var roadmap = view.Ui?.Roadmap
+            ?? throw new InvalidOperationException($"view '{view.Name}': expected Roadmap display state is unavailable");
+        if (roadmap.TruncateTitles is true && !titleTruncated)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': long item title was not visibly truncated");
+        }
+
+        if (roadmap.TruncateTitles is false && titleTruncated)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': long item title was truncated despite being disabled");
+        }
+
+        if (roadmap.ShowDateFields is true && !datesRendered)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': item date fields were not visibly rendered");
+        }
+
+        if (roadmap.ShowDateFields is false && datesRendered)
+        {
+            throw new InvalidOperationException($"view '{view.Name}': item date fields were rendered despite being disabled");
+        }
+    }
+
+    private static async Task ValidateRoadmapDisplayAsync(IPage page, ViewSnapshot view)
+    {
+        var title = Sel.RoadmapPillTitle(page, FixtureProjectBuilder.RoadmapLongTitle);
+        await title.WaitForAsync(new()
+        {
+            State = WaitForSelectorState.Visible,
+            Timeout = 15_000,
+        }).ConfigureAwait(false);
+        var item = Sel.RoadmapItem(title);
+        if (await item.CountAsync().ConfigureAwait(false) == 0)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
+        }
+
+        var titleTruncated = await title.EvaluateAsync<bool>(
+            """
+            (element, titleText) => {
+              for (let node = element;
+                   node && node instanceof HTMLElement &&
+                     node.textContent?.trim() === titleText;
+                   node = node.parentElement) {
+                const style = getComputedStyle(node);
+                const horizontallyEllipsized =
+                  style.whiteSpace === 'nowrap' &&
+                  style.textOverflow === 'ellipsis' &&
+                  node.scrollWidth > node.clientWidth;
+                const lineClamp = Number.parseInt(style.webkitLineClamp, 10);
+                const verticallyClamped =
+                  Number.isFinite(lineClamp) && lineClamp > 0 && node.scrollHeight > node.clientHeight;
+                if (horizontallyEllipsized || verticallyClamped) {
+                  return true;
+                }
+              }
+              return false;
+            }
+            """,
+            FixtureProjectBuilder.RoadmapLongTitle).ConfigureAwait(false);
+        var itemText = await item.InnerTextAsync().ConfigureAwait(false);
+        var datesRendered = await Sel.RoadmapItemDateElements(item).CountAsync().ConfigureAwait(false) > 0
+            || RenderedDate().IsMatch(itemText);
+        ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
+    }
+
     private static async Task<IReadOnlyList<string>> ReadNormalizedTextsAsync(ILocator locator)
     {
         var result = new List<string>();
@@ -118,4 +211,7 @@ public sealed partial class FieldSumRenderingObserver
 
     [GeneratedRegex(@"^\s*[-+]?(?:\d+(?:[.,]\d+)?|[.,]\d+)\b", RegexOptions.CultureInvariant)]
     private static partial Regex NumericRendering();
+
+    [GeneratedRegex(@"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b|\d{1,4}[/-]\d{1,2}|\d{1,2}月", RegexOptions.CultureInvariant)]
+    private static partial Regex RenderedDate();
 }

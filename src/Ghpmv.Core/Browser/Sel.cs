@@ -39,6 +39,10 @@ internal static class Sel
     public static ILocator CheckboxOptions(ILocator menu)
         => menu.GetByRole(AriaRole.Menuitemcheckbox).Or(menu.GetByRole(AriaRole.Option));
 
+    /// <summary>A direct checkbox in the parent View configuration menu.</summary>
+    public static ILocator ViewOptionCheckbox(ILocator menu, string name)
+        => menu.GetByRole(AriaRole.Menuitemcheckbox, new() { Name = name, Exact = true });
+
     /// <summary>View tab by name (prefix match — an unsaved-changes dot can alter the suffix).</summary>
     public static ILocator ViewTab(IPage page, string name)
         => page.GetByRole(AriaRole.Tab, new() { NameRegex = new Regex($"^{Regex.Escape(name)}") });
@@ -74,6 +78,21 @@ internal static class Sel
     /// <summary>Visible numeric Field sum labels rendered inside grouped Table/Roadmap headers.</summary>
     public static ILocator GroupHeaderAggregateLabels(IPage page)
         => page.Locator("[class*='aggregate-labels-module__Label']:visible");
+
+    /// <summary>The title rendered inside a Roadmap pill rather than the fixed left-hand table.</summary>
+    public static ILocator RoadmapPillTitle(IPage page, string title)
+        => page.Locator("[class*='roadmap-pill-module__SanitizedHtml']")
+            .Filter(new() { HasText = title })
+            .First;
+
+    /// <summary>The Roadmap item/card containing an item-title locator.</summary>
+    public static ILocator RoadmapItem(ILocator title)
+        => title.Locator(
+            "xpath=ancestor::*[@role='row' or @role='listitem' or contains(@data-testid,'roadmap-item') or contains(@class,'roadmap-item') or contains(@class,'RoadmapItem')][1]");
+
+    /// <summary>Semantic date/time elements rendered within one Roadmap item.</summary>
+    public static ILocator RoadmapItemDateElements(ILocator item)
+        => item.Locator("time:visible, relative-time:visible");
 
     /// <summary>"Select date fields" dialog opened from the "Dates" configuration item (Roadmap).</summary>
     public static ILocator DateFieldsDialog(IPage page)

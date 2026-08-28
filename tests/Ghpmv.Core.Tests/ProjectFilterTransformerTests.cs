@@ -197,7 +197,10 @@ public class ProjectFilterTransformerTests
     private static ProjectSnapshot Snapshot(string viewFilter, string workflowFilter) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
         Fields = [],
         Views =
         [

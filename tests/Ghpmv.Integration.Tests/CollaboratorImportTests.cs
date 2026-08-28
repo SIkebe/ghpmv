@@ -49,11 +49,14 @@ public class CollaboratorImportTests
         var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+            StatusUpdates = [],
+            LinkedTeams = [],
             Project = new ProjectInfoSnapshot
             {
                 Title = "ghpmv-collab-test-" + Guid.NewGuid().ToString("N"),
                 Public = false,
                 Closed = false,
+                Template = false,
             },
             Fields = [],
             Views = [],

@@ -277,17 +277,9 @@ public sealed class ProjectVerifier
                 target.Fields.Where(field => field.IssueField is not null).Select(field => field.Name).ToHashSet(StringComparer.Ordinal),
                 differences);
         }
-        var statusUpdatesExplicitlyRequested = includedCategories?.Contains(VerifyCategories.StatusUpdate) == true;
         if (Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
-            if (source.StatusUpdates is null && statusUpdatesExplicitlyRequested)
-            {
-                notVerified.Add(VerifyCategories.StatusUpdate);
-            }
-            else
-            {
-                CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
-            }
+            CompareStatusUpdates(source.StatusUpdates, target.StatusUpdates, differences);
         }
         if (Includes(includedCategories, VerifyCategories.Collaborator))
         {
@@ -295,11 +287,11 @@ public sealed class ProjectVerifier
         }
         if (Includes(includedCategories, VerifyCategories.LinkedRepository))
         {
-            CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences, notVerified);
+            CompareLinkedRepositories(source.LinkedRepositories, target.LinkedRepositories, differences);
         }
         if (teamLinksApplicable && Includes(includedCategories, VerifyCategories.TeamLink))
         {
-            CompareLinkedTeams(source.LinkedTeams, target.LinkedTeams, differences, notVerified);
+            CompareLinkedTeams(source.LinkedTeams, target.LinkedTeams, differences);
         }
 
         var categories = new List<VerifyCategoryResult>();
@@ -310,8 +302,7 @@ public sealed class ProjectVerifier
         AddCategoryIfIncluded(categories, VerifyCategories.Workflow, includedCategories, differences, notVerified);
         AddCategoryIfIncluded(categories, VerifyCategories.Collaborator, includedCategories, differences, notVerified);
         AddCategoryIfIncluded(categories, VerifyCategories.LinkedRepository, includedCategories, differences, notVerified);
-        if ((source.StatusUpdates is not null || statusUpdatesExplicitlyRequested)
-            && Includes(includedCategories, VerifyCategories.StatusUpdate))
+        if (Includes(includedCategories, VerifyCategories.StatusUpdate))
         {
             categories.Add(CategoryResult(VerifyCategories.StatusUpdate, differences, notVerified));
         }
@@ -415,7 +406,7 @@ public sealed class ProjectVerifier
                     : item).ToList()
                 : source.Items,
             LinkedRepositories = Includes(includedCategories, VerifyCategories.LinkedRepository)
-                ? source.LinkedRepositories?.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
+                ? source.LinkedRepositories.Select(repository => repositoryMapping.TryGetValue(repository, out var mappedRepository)
                     ? mappedRepository
                     : repository).ToList()
                 : source.LinkedRepositories,
@@ -460,7 +451,7 @@ public sealed class ProjectVerifier
         ProjectSnapshot source,
         IReadOnlyDictionary<string, string> teamMapping)
     {
-        var collaboratorMapping = (source.LinkedTeams ?? [])
+        var collaboratorMapping = source.LinkedTeams
             .Select(team =>
             {
                 if (!teamMapping.TryGetValue(team.Identity, out var mapped)
@@ -480,7 +471,7 @@ public sealed class ProjectVerifier
 
         return source with
         {
-            LinkedTeams = source.LinkedTeams?.Select(team =>
+            LinkedTeams = source.LinkedTeams.Select(team =>
             {
                 if (!teamMapping.TryGetValue(team.Identity, out var mapped)
                     || !TeamLinkMapping.TryParseIdentity(mapped, out var organization, out var slug))
@@ -834,23 +825,10 @@ public sealed class ProjectVerifier
         => $"{collaborator.Type.ToUpperInvariant()} '{collaborator.Login}'";
 
     private static void CompareLinkedRepositories(
-        IReadOnlyList<string>? source,
-        IReadOnlyList<string>? target,
-        List<VerifyDifference> differences,
-        HashSet<string> notVerified)
+        IReadOnlyList<string> source,
+        IReadOnlyList<string> target,
+        List<VerifyDifference> differences)
     {
-        if (source is null || target is null)
-        {
-            notVerified.Add(LinkedRepositoryCategory);
-            if (source is not null)
-            {
-                Add(differences, VerifySeverity.Warning, LinkedRepositoryCategory,
-                    "linked repositories were captured in the source but could not be read from the target");
-            }
-
-            return;
-        }
-
         var targetSet = target.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var repository in source.Where(r => !targetSet.Contains(r)))
         {
@@ -867,23 +845,10 @@ public sealed class ProjectVerifier
     }
 
     private static void CompareLinkedTeams(
-        IReadOnlyList<LinkedTeamSnapshot>? source,
-        IReadOnlyList<LinkedTeamSnapshot>? target,
-        List<VerifyDifference> differences,
-        HashSet<string> notVerified)
+        IReadOnlyList<LinkedTeamSnapshot> source,
+        IReadOnlyList<LinkedTeamSnapshot> target,
+        List<VerifyDifference> differences)
     {
-        if (source is null || target is null)
-        {
-            notVerified.Add(TeamLinkCategory);
-            if (source is not null)
-            {
-                Add(differences, VerifySeverity.Warning, TeamLinkCategory,
-                    "linked Teams were captured in the source but could not be read from the target");
-            }
-
-            return;
-        }
-
         var targetSet = target.Select(team => team.Identity).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var team in source.Where(team => !targetSet.Contains(team.Identity)))
         {
@@ -1067,7 +1032,9 @@ public sealed class ProjectVerifier
             && string.Equals(source.StartField, target.StartField, StringComparison.Ordinal)
             && string.Equals(source.TargetField, target.TargetField, StringComparison.Ordinal)
             && string.Equals(source.Zoom, target.Zoom, StringComparison.Ordinal)
-            && UiListEquals(source.Markers, target.Markers);
+            && UiListEquals(source.Markers, target.Markers)
+            && (source.TruncateTitles is null || source.TruncateTitles == target.TruncateTitles)
+            && (source.ShowDateFields is null || source.ShowDateFields == target.ShowDateFields);
 
     private static bool MultisetEquals<T>(
         IReadOnlyList<T> source,
@@ -1158,6 +1125,35 @@ public sealed class ProjectVerifier
                 AddError(differences, ViewCategory,
                     $"view '{name}': markers mismatch (source [{JoinUi(sourceRoadmap.Markers)}], target [{JoinUi(targetRoadmap.Markers)}])");
             }
+
+            CompareUiBoolean(
+                differences,
+                name,
+                "truncate titles",
+                sourceRoadmap.TruncateTitles,
+                targetRoadmap.TruncateTitles);
+            CompareUiBoolean(
+                differences,
+                name,
+                "show date fields",
+                sourceRoadmap.ShowDateFields,
+                targetRoadmap.ShowDateFields);
+        }
+    }
+
+    private static void CompareUiBoolean(
+        List<VerifyDifference> differences,
+        string viewName,
+        string setting,
+        bool? source,
+        bool? target)
+    {
+        if (source is not null && source != target)
+        {
+            AddError(
+                differences,
+                ViewCategory,
+                $"view '{viewName}': {setting} mismatch (source '{source.Value.ToString().ToLowerInvariant()}', target '{target?.ToString().ToLowerInvariant() ?? "not captured"}')");
         }
     }
 
@@ -1361,18 +1357,10 @@ public sealed class ProjectVerifier
     }
 
     private static void CompareStatusUpdates(
-        IReadOnlyList<StatusUpdateSnapshot>? source,
-        IReadOnlyList<StatusUpdateSnapshot>? target,
+        IReadOnlyList<StatusUpdateSnapshot> source,
+        IReadOnlyList<StatusUpdateSnapshot> target,
         List<VerifyDifference> differences)
     {
-        // Null is the schema-v1 compatibility sentinel: older snapshots did not capture
-        // this collection and retain the pre-status-update verification behavior.
-        if (source is null)
-        {
-            return;
-        }
-
-        target ??= [];
         if (source.Count != target.Count)
         {
             AddError(differences, StatusUpdateCategory, string.Create(

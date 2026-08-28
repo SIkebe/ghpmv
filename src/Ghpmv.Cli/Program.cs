@@ -444,6 +444,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 return;
             }
 
+            if (enableBrowserAutomation)
+            {
+                ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
+            }
+
             await ImportCapabilityPreflight.ValidateAsync(
                 ownerType == ProjectOwnerType.Organization
                     ? capabilityPlan
@@ -733,12 +738,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
         }
-        else if (snapshot.Project.Template is { } desiredTemplate)
+        else
         {
             await ProjectTemplateWriteSession.SetFinalStateAsync(
                 client,
                 result.ProjectId,
-                desiredTemplate,
+                snapshot.Project.Template,
                 Console.Error.WriteLine,
                 cancellationToken);
         }
@@ -1140,9 +1145,25 @@ var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 {
     Description = "Apply the standard View 1 field-sum drift to an existing fixture Project using browser automation.",
 };
+var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
+{
+    Description = "Disable project-shared Roadmap title truncation while preserving hidden dates.",
+};
+var fixtureRoadmapDateDisplayDriftOption = new Option<bool>("--fixture-roadmap-date-display-drift")
+{
+    Description = "Enable project-shared Roadmap date display while preserving title truncation.",
+};
 var fixtureFieldSumRenderCheckOption = new Option<bool>("--fixture-field-sum-render-check")
 {
     Description = "Verify visible grouped-header Field sum rendering on an existing standard fixture Project.",
+};
+var fixtureRoadmapDateDisplayRenderCheckOption = new Option<bool>("--fixture-roadmap-date-display-render-check")
+{
+    Description = "Verify the date-only Roadmap display drift renders truncated titles with visible dates.",
+};
+var fixtureRoadmapTitleDisplayRenderCheckOption = new Option<bool>("--fixture-roadmap-title-display-render-check")
+{
+    Description = "Verify the title-only Roadmap display drift renders full titles with hidden dates.",
 };
 var fixtureFieldDefaultCheckOption = new Option<bool>("--fixture-field-default-check")
 {
@@ -1207,7 +1228,11 @@ setupApiBaseUrlOption.Validators.Add(ValidateBaseUrl);
 setupCommand.Options.Add(fixtureOption);
 setupCommand.Options.Add(fixtureUiOption);
 setupCommand.Options.Add(fixtureFieldSumDriftOption);
+setupCommand.Options.Add(fixtureRoadmapDisplayDriftOption);
+setupCommand.Options.Add(fixtureRoadmapDateDisplayDriftOption);
 setupCommand.Options.Add(fixtureFieldSumRenderCheckOption);
+setupCommand.Options.Add(fixtureRoadmapDateDisplayRenderCheckOption);
+setupCommand.Options.Add(fixtureRoadmapTitleDisplayRenderCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultCheckOption);
 setupCommand.Options.Add(fixtureFieldDefaultDriftOption);
 setupCommand.Options.Add(fixtureFieldDefaultCleanupItemOption);
@@ -1220,7 +1245,6 @@ setupCommand.Options.Add(fixtureRequireNewOption);
 setupCommand.Options.Add(fixtureAllowExistingEmptyRepoOption);
 setupCommand.Options.Add(fixtureTeamOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
-setupCommand.Options.Add(baseUrlOption);
 setupCommand.Options.Add(browserBaseUrlOption);
 setupCommand.Options.Add(tokenOption);
 setupCommand.Options.Add(setupApiBaseUrlOption);
@@ -1244,7 +1268,11 @@ setupCommand.Validators.Add(result =>
 
     if (!result.GetValue(fixtureUiOption)
         && !result.GetValue(fixtureFieldSumDriftOption)
+        && !result.GetValue(fixtureRoadmapDisplayDriftOption)
+        && !result.GetValue(fixtureRoadmapDateDisplayDriftOption)
         && !result.GetValue(fixtureFieldSumRenderCheckOption)
+        && !result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        && !result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
         && !result.GetValue(fixtureFieldDefaultCheckOption)
         && !result.GetValue(fixtureFieldDefaultDriftOption)
         && result.GetValue(fixtureFieldDefaultCleanupItemOption) is null
@@ -1254,7 +1282,11 @@ setupCommand.Validators.Add(result =>
     }
 
     if ((result.GetValue(fixtureFieldSumDriftOption)
+            || result.GetValue(fixtureRoadmapDisplayDriftOption)
+            || result.GetValue(fixtureRoadmapDateDisplayDriftOption)
             || result.GetValue(fixtureFieldSumRenderCheckOption)
+            || result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+            || result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
             || result.GetValue(fixtureFieldDefaultCheckOption)
             || result.GetValue(fixtureFieldDefaultDriftOption)
             || result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null)
@@ -1266,7 +1298,11 @@ setupCommand.Validators.Add(result =>
     var fixtureBrowserOperationCount = new[]
     {
         result.GetValue(fixtureFieldSumDriftOption),
+        result.GetValue(fixtureRoadmapDisplayDriftOption),
+        result.GetValue(fixtureRoadmapDateDisplayDriftOption),
         result.GetValue(fixtureFieldSumRenderCheckOption),
+        result.GetValue(fixtureRoadmapDateDisplayRenderCheckOption),
+        result.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption),
         result.GetValue(fixtureFieldDefaultCheckOption),
         result.GetValue(fixtureFieldDefaultDriftOption),
         result.GetValue(fixtureFieldDefaultCleanupItemOption) is not null,
@@ -1280,12 +1316,6 @@ setupCommand.Validators.Add(result =>
         != (result.GetValue(fixtureFieldDefaultCleanupTitleOption) is null))
     {
         result.AddError("--fixture-field-default-cleanup-item and --fixture-field-default-cleanup-title must be provided together.");
-    }
-
-    if (result.GetResult(baseUrlOption) is { Implicit: false }
-        && result.GetResult(browserBaseUrlOption) is { Implicit: false })
-    {
-        result.AddError("Browser fixture operations accept either --browser-base-url or the legacy --base-url, not both.");
     }
 
     if (string.IsNullOrWhiteSpace(result.GetValue(fixtureOrgOption)))
@@ -1305,7 +1335,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         && !parseResult.GetValue(fixtureOption)
         && !parseResult.GetValue(fixtureUiOption)
         && !parseResult.GetValue(fixtureFieldSumDriftOption)
+        && !parseResult.GetValue(fixtureRoadmapDisplayDriftOption)
+        && !parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption)
         && !parseResult.GetValue(fixtureFieldSumRenderCheckOption)
+        && !parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        && !parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultCheckOption)
         && !parseResult.GetValue(fixtureFieldDefaultDriftOption)
         && parseResult.GetValue(fixtureFieldDefaultCleanupItemOption) is null
@@ -1369,7 +1403,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
-    if (parseResult.GetValue(fixtureFieldSumRenderCheckOption))
+    if (parseResult.GetValue(fixtureFieldSumRenderCheckOption)
+        || parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+        || parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption))
     {
         try
         {
@@ -1387,14 +1423,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1414,7 +1447,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 """,
                 new { login = org, number = projectNumber },
                 cancellationToken);
-            var expectedNames = new HashSet<string>(["View 1", "Fixture Roadmap"], StringComparer.Ordinal);
+            var expectedNames = new HashSet<string>(
+                ["View 1", "Fixture Roadmap", "Fixture Roadmap Dates Hidden"],
+                StringComparer.Ordinal);
             var viewNumbers = projectData
                 .GetProperty("organization")
                 .GetProperty("projectV2")
@@ -1447,7 +1482,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             {
                 OnProgress = Console.Error.WriteLine,
             };
-            await observer.ValidateStandardFixtureAsync(
+            var expected = parseResult.GetValue(fixtureRoadmapDateDisplayRenderCheckOption)
+                ? FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift()
+                : parseResult.GetValue(fixtureRoadmapTitleDisplayRenderCheckOption)
+                    ? FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift()
+                    : FixtureUiSnapshotFactory.Create();
+            await observer.ValidateFixtureAsync(
+                expected,
                 org,
                 ProjectOwnerType.Organization,
                 projectNumber,
@@ -1482,14 +1523,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1534,14 +1572,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1595,14 +1630,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                ? parseResult.GetValue(baseUrlOption)
-                : null;
             await using var browserSession = new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
             using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
@@ -1671,6 +1703,102 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         }
     }
 
+    if (parseResult.GetValue(fixtureRoadmapDisplayDriftOption)
+        || parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption))
+    {
+        try
+        {
+            var org = parseResult.GetValue(fixtureOrgOption)!;
+            var projectNumber = parseResult.GetValue(fixtureProjectOption)!.Value;
+            var token = parseResult.GetValue(tokenOption)
+                ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TOKEN")
+                ?? Environment.GetEnvironmentVariable("GHPMV_TEST_TOKEN");
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN / GHPMV_TEST_TOKEN.");
+                return 1;
+            }
+
+            var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
+            var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
+            await using var browserSession = new BrowserSession(new BrowserSessionOptions
+            {
+                BaseUrl = BrowserBaseUrl.Resolve(
+                    graphQlBaseUri,
+                    parseResult.GetValue(browserBaseUrlOption)),
+                Profile = parseResult.GetValue(setupBrowserProfileOption),
+            });
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            client.OnRetry = Console.Error.WriteLine;
+            var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
+            await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+
+            var snapshot = parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption)
+                ? FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift(
+                    parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo")
+                : FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(
+                    parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
+            var view = snapshot.Views.Single(candidate =>
+                string.Equals(candidate.Name, "Fixture Roadmap", StringComparison.Ordinal));
+            var projectData = await client.QueryAsync(
+                """
+                query($login: String!, $number: Int!) {
+                  organization(login: $login) {
+                    projectV2(number: $number) {
+                      views(first: 100) { nodes { number name } }
+                    }
+                  }
+                }
+                """,
+                new { login = org, number = projectNumber },
+                cancellationToken);
+            var targetViews = projectData
+                .GetProperty("organization")
+                .GetProperty("projectV2")
+                .GetProperty("views")
+                .GetProperty("nodes")
+                .EnumerateArray()
+                .Where(node => string.Equals(
+                    node.GetProperty("name").GetString(),
+                    view.Name,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (targetViews.Length != 1)
+            {
+                Console.Error.WriteLine(
+                    $"error: expected exactly one target View named '{view.Name}', found {targetViews.Length}.");
+                return 1;
+            }
+
+            var roadmap = view.Ui!.Roadmap!;
+            var viewImporter = new ViewUiImporter(browserSession) { OnProgress = Console.Error.WriteLine };
+            await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                targetViews[0].GetProperty("number").GetInt32(),
+                view.Name,
+                roadmap.TruncateTitles!.Value,
+                roadmap.ShowDateFields!.Value,
+                cancellationToken);
+            foreach (var warning in viewImporter.Warnings)
+            {
+                Console.Error.WriteLine($"warning: {warning}");
+            }
+
+            Console.Error.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"Fixture Roadmap {(parseResult.GetValue(fixtureRoadmapDateDisplayDriftOption) ? "date-display" : "title-truncation")} drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
+            return viewImporter.Warnings.Count == 0 ? 0 : 1;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
+        {
+            Console.Error.WriteLine($"error: {exception.Message}");
+            return 1;
+        }
+    }
+
     BrowserSession? authenticatedFixtureUiSession = null;
     int? createdFixtureProjectNumber = null;
     FixtureProjectSetupResult? fixtureResult = null;
@@ -1712,14 +1840,11 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 ct);
             if (parseResult.GetValue(fixtureUiOption) && authenticatedFixtureUiSession is null)
             {
-                var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-                    ? parseResult.GetValue(baseUrlOption)
-                    : null;
                 var browserSession = new BrowserSession(new BrowserSessionOptions
                 {
                     BaseUrl = BrowserBaseUrl.Resolve(
                         graphQlBaseUri,
-                        parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                        parseResult.GetValue(browserBaseUrlOption)),
                     Profile = parseResult.GetValue(setupBrowserProfileOption),
                 });
                 try
@@ -1748,6 +1873,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
+            IncludeRoadmapRenderingItem = parseResult.GetValue(fixtureUiOption),
             BeforeWriteAsync = ValidateFixtureBeforeWriteAsync,
         };
         try
@@ -1841,16 +1967,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             return 1;
         }
 
-        var legacyBrowserBaseUrl = parseResult.GetResult(baseUrlOption) is { Implicit: false }
-            ? parseResult.GetValue(baseUrlOption)
-            : null;
         var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
         var fixtureUiSession = authenticatedFixtureUiSession
             ?? new BrowserSession(new BrowserSessionOptions
             {
                 BaseUrl = BrowserBaseUrl.Resolve(
                     graphQlBaseUri,
-                    parseResult.GetValue(browserBaseUrlOption) ?? legacyBrowserBaseUrl),
+                    parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
         await using var fixtureUiSessionScope = fixtureUiSession;
@@ -1860,6 +1983,20 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
         {
             var apiLogin = await fixtureUiClient.GetViewerLoginAsync(cancellationToken);
             await fixtureUiSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
+        }
+
+        if (!parseResult.GetValue(fixtureOption))
+        {
+            var existingFixture = await new ProjectExporter(fixtureUiClient)
+            {
+                Sections = ProjectExportSections.Items,
+            }.ExportAsync(org, projectNumber.Value, cancellationToken);
+            if (!existingFixture.Items.Any(FixtureProjectBuilder.IsRoadmapRenderingItem))
+            {
+                throw new InvalidOperationException(
+                    $"Project #{projectNumber.Value} does not contain the unarchived, dated Roadmap rendering item. "
+                    + "Create the browser fixture with setup --fixture --fixture-ui.");
+            }
         }
 
         File.Delete(uiCompletionPath);

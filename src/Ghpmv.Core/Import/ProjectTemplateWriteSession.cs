@@ -157,25 +157,15 @@ public sealed class ProjectTemplateWriteSession
         _restored = true;
     }
 
-    /// <summary>
-    /// Applies a captured template state as the final successful import stage. A null
-    /// snapshot value restores a temporarily unmarked legacy target without otherwise
-    /// changing its state.
-    /// </summary>
-    public async Task CompleteAsync(bool? desiredTemplate, CancellationToken cancellationToken = default)
+    /// <summary>Applies the template state as the final successful import stage.</summary>
+    public async Task CompleteAsync(bool desiredTemplate, CancellationToken cancellationToken = default)
     {
-        if (desiredTemplate is null)
+        if (_currentTemplate != desiredTemplate)
         {
-            await RestoreAsync(cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
-        if (_currentTemplate != desiredTemplate.Value)
-        {
-            OnProgress?.Invoke(desiredTemplate.Value
+            OnProgress?.Invoke(desiredTemplate
                 ? "Marking the target project as a template as the final import stage..."
                 : "Unmarking the target project as a template as the final import stage...");
-            await SetTemplateAsync(desiredTemplate.Value, cancellationToken).ConfigureAwait(false);
+            await SetTemplateAsync(desiredTemplate, cancellationToken).ConfigureAwait(false);
         }
 
         if (RestorationRequired && _persistRestorationStateAsync is not null)

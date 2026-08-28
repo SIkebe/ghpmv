@@ -39,12 +39,6 @@ public sealed class StatusUpdateImporter
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
 
-        if (snapshot.StatusUpdates is null)
-        {
-            OnProgress?.Invoke("Status updates were not captured by this schema-v1 snapshot; leaving the target history unchanged.");
-            return EmptyResult();
-        }
-
         ValidateStatusUpdates(snapshot.StatusUpdates);
         var log = await LoadLogAsync(snapshot, target.ProjectId, logDirectory, cancellationToken).ConfigureAwait(false);
         ValidateLogAgainstSnapshot(log, snapshot.StatusUpdates.Count, target.ProjectId);

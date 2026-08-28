@@ -90,7 +90,7 @@ public sealed class ProjectExporter
             : [];
         var statusUpdates = Sections.HasFlag(ProjectExportSections.StatusUpdates)
             ? await FetchStatusUpdatesAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
-            : null;
+            : [];
         var fields = Sections.HasFlag(ProjectExportSections.Fields)
             ? await FetchApiFieldsAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
             : [];
@@ -101,7 +101,7 @@ public sealed class ProjectExporter
 
         OnProgress?.Invoke(string.Create(
             CultureInfo.InvariantCulture,
-            $"Fetched {fields.Count} fields, {items.Count} items, and {statusUpdates?.Count ?? 0} status updates."));
+            $"Fetched {fields.Count} fields, {items.Count} items, and {statusUpdates.Count} status updates."));
 
         var snapshot = new ProjectSnapshot
         {
@@ -488,17 +488,7 @@ public sealed class ProjectExporter
     }
 
     private static List<string> ParseVisibleFields(JsonElement view)
-    {
-        if (view.TryGetProperty("configuration", out var configuration)
-            && configuration.ValueKind == JsonValueKind.Object)
-        {
-            return ParseFieldNameConnection(configuration, "visibleFields");
-        }
-
-        // Backward compatibility for snapshots produced from responses captured
-        // before ProjectV2View.configuration was added on 2026-07-30.
-        return ParseFieldNameConnection(view, "fields");
-    }
+        => ParseFieldNameConnection(view.GetProperty("configuration"), "visibleFields");
 
     private static List<string> ParseFieldNameConnection(JsonElement view, string propertyName)
     {

@@ -814,7 +814,10 @@ public class ProjectImporterResumeTests
     private static ProjectSnapshot Snapshot(bool withField = false) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "Project", Public = false, Closed = false, Template = false },
         Fields = withField ? [new FieldSnapshot { Name = "Custom", DataType = "TEXT" }] : [],
         Views = [],
         Workflows = [],

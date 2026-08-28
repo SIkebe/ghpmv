@@ -34,8 +34,58 @@ public static class SnapshotFile
         var stream = File.OpenRead(path);
         await using (stream.ConfigureAwait(false))
         {
-            return await JsonSerializer.DeserializeAsync(stream, SnapshotJsonContext.Default.ProjectSnapshot, cancellationToken).ConfigureAwait(false)
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException($"'{path}' must contain a JSON object.");
+            }
+
+            if (!root.TryGetProperty("schemaVersion", out var schemaVersionElement)
+                || schemaVersionElement.ValueKind != JsonValueKind.Number
+                || !schemaVersionElement.TryGetInt32(out var schemaVersion))
+            {
+                throw new InvalidDataException($"'{path}' is missing required integer 'schemaVersion'.");
+            }
+
+            if (schemaVersion != ProjectSnapshot.CurrentSchemaVersion)
+            {
+                throw new InvalidDataException(
+                    $"'{path}' uses unsupported schema version {schemaVersion}; expected {ProjectSnapshot.CurrentSchemaVersion}.");
+            }
+
+            if (!root.TryGetProperty("project", out var project)
+                || project.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidDataException($"'{path}' is missing required object 'project'.");
+            }
+
+            if (!project.TryGetProperty("template", out var template)
+                || template.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                throw new InvalidDataException($"'{path}' is missing required boolean 'project.template'.");
+            }
+
+            RequireArray(root, "fields", path);
+            RequireArray(root, "views", path);
+            RequireArray(root, "workflows", path);
+            RequireArray(root, "items", path);
+            RequireArray(root, "statusUpdates", path);
+            RequireArray(root, "linkedRepositories", path);
+            RequireArray(root, "linkedTeams", path);
+
+            return root.Deserialize(SnapshotJsonContext.Default.ProjectSnapshot)
                 ?? throw new InvalidDataException($"'{path}' contained a null snapshot.");
+        }
+    }
+
+    private static void RequireArray(JsonElement root, string propertyName, string path)
+    {
+        if (!root.TryGetProperty(propertyName, out var property)
+            || property.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidDataException(
+                $"'{path}' is missing required array '{propertyName}'.");
         }
     }
 }

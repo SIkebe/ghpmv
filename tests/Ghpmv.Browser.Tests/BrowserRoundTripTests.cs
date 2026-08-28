@@ -5,6 +5,7 @@ using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
 using Ghpmv.TestSupport;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
 namespace Ghpmv.Browser.Tests;
@@ -136,6 +137,13 @@ public class BrowserRoundTripTests
             };
 
             var operationLogDirectory = CreateOperationLogDirectory();
+            var expectedRoadmapDisplay = Assert.Single(
+                snapshot.Views
+                    .Where(view => view.Layout == "ROADMAP_LAYOUT")
+                    .Select(view => (
+                        view.Ui!.Roadmap!.TruncateTitles,
+                        view.Ui.Roadmap.ShowDateFields))
+                    .Distinct());
             var importer = new ProjectImporter(targetClient)
             {
                 OperationLogDirectory = operationLogDirectory,
@@ -147,6 +155,8 @@ public class BrowserRoundTripTests
                 UserMapping = userMapping,
             };
             var result = await importer.ImportAsync(apiImportSnapshot, TargetOrg, cancellationToken);
+            Exception? testFailure = null;
+            Exception? cleanupFailure = null;
             try
             {
                 var initialItemResult = await new ItemImporter(targetClient)
@@ -177,6 +187,18 @@ public class BrowserRoundTripTests
 
                 var targetPage = await targetSession.GetPageAsync(cancellationToken);
                 await targetPage.SetViewportSizeAsync(480, 1000);
+                await targetPage.EvaluateAsync(
+                    """
+                    values => {
+                      localStorage.setItem("projects.roadmapTruncateTitles", values.truncateTitles);
+                      localStorage.setItem("projects.roadmapShowDateFields", values.showDateFields);
+                    }
+                    """,
+                    new
+                    {
+                        truncateTitles = (!expectedRoadmapDisplay.TruncateTitles!.Value).ToString().ToLowerInvariant(),
+                        showDateFields = (!expectedRoadmapDisplay.ShowDateFields!.Value).ToString().ToLowerInvariant(),
+                    });
                 var viewImporter = new ViewUiImporter(targetSession);
                 await viewImporter.EnrichAsync(
                     snapshot,
@@ -186,6 +208,16 @@ public class BrowserRoundTripTests
                     result.ViewNumbers,
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
+
+                var sourceRoadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap");
+                await AssertRoadmapDisplayFreshSessionAsync(
+                    targetStatePath!,
+                    E2eTestEnvironment.Current.Target,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    expectedRoadmapDisplay.TruncateTitles.Value,
+                    expectedRoadmapDisplay.ShowDateFields.Value,
+                    cancellationToken);
 
                 var workflowImporter = new WorkflowUiImporter(targetSession)
                 {
@@ -250,6 +282,92 @@ public class BrowserRoundTripTests
                     TargetOrg,
                     result.ProjectNumber,
                     cancellationToken);
+                await new FieldSumRenderingObserver(targetSession).ValidateStandardFixtureAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
+
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: false,
+                    showDateFields: false,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+
+                var titleDriftReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.Equal(2, titleDriftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal)));
+                Assert.Equal(2, titleDriftReport.Differences.Count(difference =>
+                    difference.Severity != VerifySeverity.Info));
+                Assert.Equal(
+                    VerifyStatus.Mismatch,
+                    Assert.Single(titleDriftReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                Assert.DoesNotContain(titleDriftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal));
+                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
+                    FixtureUiSnapshotFactory.CreateRoadmapDisplayDrift(),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
+
+                await viewImporter.ApplyRoadmapDisplayOptionsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
+                    sourceRoadmap.Name,
+                    truncateTitles: true,
+                    showDateFields: true,
+                    cancellationToken);
+                Assert.Empty(viewImporter.Warnings);
+                var dateDriftReport = await verifier.VerifyAsync(
+                    snapshot,
+                    TargetOrg,
+                    result.ProjectNumber,
+                    cancellationToken);
+                Assert.DoesNotContain(dateDriftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.Equal(2, dateDriftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
+                Assert.Equal(2, dateDriftReport.Differences.Count(difference =>
+                    difference.Severity != VerifySeverity.Info));
+                Assert.Equal(
+                    VerifyStatus.Mismatch,
+                    Assert.Single(dateDriftReport.Categories, category =>
+                        category.Category == VerifyCategories.View).Status);
+                await new FieldSumRenderingObserver(targetSession).ValidateFixtureAsync(
+                    FixtureUiSnapshotFactory.CreateRoadmapDateDisplayDrift(),
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
 
                 var sourceTable = Assert.Single(snapshot.Views, view => view.Name == "View 1");
                 await viewImporter.ApplyFieldSumAsync(
@@ -289,6 +407,12 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
+                Assert.DoesNotContain(driftReport.Differences, difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
+                Assert.Equal(2, driftReport.Differences.Count(difference =>
+                    difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("show date fields mismatch", StringComparison.Ordinal)));
                 Assert.Contains(driftReport.Differences, difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.Workflow
@@ -360,11 +484,63 @@ public class BrowserRoundTripTests
                     result.ProjectNumber,
                     cancellationToken);
 
-                Assert.Equal(3, browserVerificationCount);
+                Assert.Equal(5, browserVerificationCount);
+            }
+            catch (Exception exception)
+            {
+                testFailure = exception;
             }
             finally
             {
-                await DeleteProjectAsync(targetClient, result.ProjectId);
+                try
+                {
+                    var targetPage = await targetSession.GetPageAsync(CancellationToken.None);
+                    await targetPage.EvaluateAsync(
+                        """
+                        values => {
+                          localStorage.setItem("projects.roadmapTruncateTitles", values.truncateTitles);
+                          localStorage.setItem("projects.roadmapShowDateFields", values.showDateFields);
+                        }
+                        """,
+                        new
+                        {
+                            truncateTitles = expectedRoadmapDisplay.TruncateTitles!.Value.ToString().ToLowerInvariant(),
+                            showDateFields = expectedRoadmapDisplay.ShowDateFields!.Value.ToString().ToLowerInvariant(),
+                        });
+                    await targetSession.SaveStateAsync(CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    cleanupFailure = exception;
+                }
+                finally
+                {
+                    try
+                    {
+                        await DeleteProjectAsync(targetClient, result.ProjectId);
+                    }
+                    catch (Exception exception)
+                    {
+                        cleanupFailure = cleanupFailure is null
+                            ? exception
+                            : new AggregateException(cleanupFailure, exception);
+                    }
+                }
+            }
+
+            if (testFailure is not null)
+            {
+                if (cleanupFailure is not null)
+                {
+                    testFailure.Data["BrowserRoundTrip cleanup failure"] = cleanupFailure.ToString();
+                }
+
+                ExceptionDispatchInfo.Capture(testFailure).Throw();
+            }
+
+            if (cleanupFailure is not null)
+            {
+                ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
             }
         }
         finally
@@ -395,6 +571,11 @@ public class BrowserRoundTripTests
         Assert.Equal(["Fixture Number 2"], sourceRoadmap.Ui!.FieldSum);
         Assert.Equal("Quarter", sourceRoadmap.Ui.Roadmap?.Zoom);
         Assert.Contains("Fixture Date", sourceRoadmap.Ui.Roadmap?.Markers ?? []);
+        Assert.True(sourceRoadmap.Ui.Roadmap?.TruncateTitles);
+        Assert.False(sourceRoadmap.Ui.Roadmap?.ShowDateFields);
+        var sourceDatesHidden = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap Dates Hidden");
+        Assert.True(sourceDatesHidden.Ui!.Roadmap?.TruncateTitles);
+        Assert.False(sourceDatesHidden.Ui.Roadmap?.ShowDateFields);
 
         var sourceEmptySums = Assert.Single(source.Views, view => view.Name == "Fixture Empty Sums");
         Assert.Equal(["Status"], sourceEmptySums.GroupByFields);
@@ -496,6 +677,8 @@ public class BrowserRoundTripTests
                 Assert.Equal(roadmap.TargetField, actual.Ui.Roadmap.TargetField);
                 Assert.Equal(roadmap.Zoom, actual.Ui.Roadmap.Zoom);
                 Assert.Equal(roadmap.Markers ?? [], actual.Ui.Roadmap.Markers ?? []);
+                Assert.Equal(roadmap.TruncateTitles, actual.Ui.Roadmap.TruncateTitles);
+                Assert.Equal(roadmap.ShowDateFields, actual.Ui.Roadmap.ShowDateFields);
             }
         }
     }
@@ -536,6 +719,40 @@ public class BrowserRoundTripTests
                 expected.DefaultValue!,
                 actual.DefaultValue!));
         }
+    }
+
+    private static async Task AssertRoadmapDisplayFreshSessionAsync(
+        string statePath,
+        E2eEndpointSettings endpoint,
+        int projectNumber,
+        int viewNumber,
+        bool truncateTitles,
+        bool showDateFields,
+        CancellationToken cancellationToken)
+    {
+        await using var session = CreateSession(statePath, endpoint);
+        var page = await session.GotoAsync(
+            BrowserProjectUrl.Build(
+                session.BaseUrl,
+                TargetOrg,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                $"views/{viewNumber}"),
+            cancellationToken);
+        var storage = await page.EvaluateAsync<Dictionary<string, string?>>(
+            """
+            () => ({
+              "projects.roadmapTruncateTitles": localStorage.getItem("projects.roadmapTruncateTitles"),
+              "projects.roadmapShowDateFields": localStorage.getItem("projects.roadmapShowDateFields")
+            })
+            """);
+
+        Assert.Equal(
+            truncateTitles.ToString().ToLowerInvariant(),
+            storage["projects.roadmapTruncateTitles"]);
+        Assert.Equal(
+            showDateFields.ToString().ToLowerInvariant(),
+            storage["projects.roadmapShowDateFields"]);
     }
 
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)

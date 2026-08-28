@@ -7,7 +7,7 @@ namespace Ghpmv.Core.Snapshot;
 public sealed record ProjectSnapshot
 {
     /// <summary>The schema version written by the current tool.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public required int SchemaVersion { get; init; }
 
@@ -21,11 +21,8 @@ public sealed record ProjectSnapshot
 
     public required IReadOnlyList<ItemSnapshot> Items { get; init; }
 
-    /// <summary>
-    /// Project status update history in reverse chronological order. Null when the
-    /// snapshot predates status update support (a backward-compatible schema-v1 addition).
-    /// </summary>
-    public IReadOnlyList<StatusUpdateSnapshot>? StatusUpdates { get; init; }
+    /// <summary>Project status update history in reverse chronological order.</summary>
+    public required IReadOnlyList<StatusUpdateSnapshot> StatusUpdates { get; init; }
 
     /// <summary>
     /// Project collaborators (users/teams with an explicit project role). Null when not
@@ -39,16 +36,14 @@ public sealed record ProjectSnapshot
     public IReadOnlyList<CollaboratorSnapshot>? Collaborators { get; init; }
 
     /// <summary>
-    /// Repositories linked to the project, in "owner/name" form. Null when the snapshot
-    /// predates this field (schema additions are backward compatible within version 1).
+    /// Repositories linked to the project, in "owner/name" form.
     /// </summary>
-    public IReadOnlyList<string>? LinkedRepositories { get; init; }
+    public required IReadOnlyList<string> LinkedRepositories { get; init; }
 
     /// <summary>
-    /// Teams linked to an organization-owned Project. Null when the snapshot predates
-    /// this schema-v1 addition. Current user-owned Project exports always use an empty list.
+    /// Teams linked to an organization-owned Project. User-owned Project exports use an empty list.
     /// </summary>
-    public IReadOnlyList<LinkedTeamSnapshot>? LinkedTeams { get; init; }
+    public required IReadOnlyList<LinkedTeamSnapshot> LinkedTeams { get; init; }
 }
 
 /// <summary>A historical Project status update.</summary>
@@ -57,8 +52,7 @@ public sealed record StatusUpdateSnapshot
     public required string Body { get; init; }
 
     /// <summary>
-    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no
-    /// status or when a schema-v1 snapshot predates this optional property.
+    /// GraphQL <c>ProjectV2StatusUpdateStatus</c>. Null when the source update has no status.
     /// </summary>
     public string? Status { get; init; }
 
@@ -117,11 +111,8 @@ public sealed record ProjectInfoSnapshot
 
     public required bool Closed { get; init; }
 
-    /// <summary>
-    /// Whether an organization-owned Project is a template. Null when the snapshot
-    /// predates template support and import must preserve the target's current state.
-    /// </summary>
-    public bool? Template { get; init; }
+    /// <summary>Whether an organization-owned Project is a template.</summary>
+    public required bool Template { get; init; }
 }
 
 /// <summary>
@@ -216,7 +207,7 @@ public sealed record IterationSnapshot
 
 /// <summary>
 /// A project view. GraphQL-readable settings are captured here;
-/// UI-only settings (Slice by, Field sum, Roadmap dates/zoom/markers) are
+/// UI-only settings (Slice by, Field sum, Roadmap dates/zoom/markers/display options) are
 /// reserved in <see cref="Ui"/> and populated by the browser module (M6).
 /// </summary>
 public sealed record ViewSnapshot
@@ -283,6 +274,12 @@ public sealed record RoadmapSettingsSnapshot
     public string? Zoom { get; init; }
 
     public IReadOnlyList<string>? Markers { get; init; }
+
+    /// <summary>Whether long item titles are truncated. Null when the UI control could not be read.</summary>
+    public bool? TruncateTitles { get; init; }
+
+    /// <summary>Whether item date fields are rendered. Null when the UI control could not be read.</summary>
+    public bool? ShowDateFields { get; init; }
 }
 
 /// <summary>

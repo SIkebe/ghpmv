@@ -247,7 +247,10 @@ public class MappingTemplatesTests
     private static ProjectSnapshot SnapshotWithItems(IReadOnlyList<CollaboratorSnapshot>? collaborators, params ItemSnapshot[] items) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false },
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "t", Public = false, Closed = false, Template = false },
         Fields = [],
         Views = [],
         Workflows = [],

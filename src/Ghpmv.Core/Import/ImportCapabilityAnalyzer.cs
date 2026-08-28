@@ -77,7 +77,7 @@ public static class ImportCapabilityAnalyzer
             Add(requirements, repository, capability);
         }
 
-        foreach (var repository in snapshot.LinkedRepositories ?? [])
+        foreach (var repository in snapshot.LinkedRepositories)
         {
             Add(
                 requirements,

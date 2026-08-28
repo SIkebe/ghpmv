@@ -83,7 +83,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 
 | Category | Verification coverage |
 |---|---|
-| Project | Description, README, visibility, closed state, and organization template state. A changed title is informational because import supports title overrides. Legacy snapshots without `project.template` preserve and do not compare the target template state. |
+| Project | Description, README, visibility, closed state, and organization template state. A changed title is informational because import supports title overrides. |
 | Field | Field presence/type, select option order/name/color/description, Issue Field description/visibility/linkage, and iteration dates/durations. |
 | Item | Counts/types, issue and pull request identity, draft body, field values (including Project and Issue Field multi-select values), active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
 | StatusUpdate | History order, body (including the imported attribution note), status, start date, and target date. |

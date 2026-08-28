@@ -11,7 +11,10 @@ public class IntegrationFixtureSnapshotTests
         var snapshot = new ProjectSnapshot
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-            Project = new ProjectInfoSnapshot { Title = "fixture", Public = false, Closed = false },
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
+            Project = new ProjectInfoSnapshot { Title = "fixture", Public = false, Closed = false, Template = false },
             Fields = [],
             Views = [],
             Workflows = [],

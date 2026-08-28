@@ -80,7 +80,10 @@ public class ItemImporterLogicTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+                StatusUpdates = [],
+                LinkedRepositories = [],
+                LinkedTeams = [],
+                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
                 Fields =
                 [
                     new FieldSnapshot
@@ -217,7 +220,10 @@ public class ItemImporterLogicTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+                StatusUpdates = [],
+                LinkedRepositories = [],
+                LinkedTeams = [],
+                Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
                 Fields =
                 [
                     new FieldSnapshot
@@ -388,11 +394,15 @@ public class ItemImporterLogicTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+                StatusUpdates = [],
+                LinkedRepositories = [],
+                LinkedTeams = [],
                 Project = new ProjectInfoSnapshot
                 {
                     Title = "Snapshot",
                     Public = false,
                     Closed = false,
+                    Template = false,
                 },
                 Fields = [],
                 Views = [],
@@ -450,7 +460,10 @@ public class ItemImporterLogicTests
             var snapshot = new ProjectSnapshot
             {
                 SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-                Project = new ProjectInfoSnapshot { Title = "Snapshot", Public = false, Closed = false },
+                StatusUpdates = [],
+                LinkedRepositories = [],
+                LinkedTeams = [],
+                Project = new ProjectInfoSnapshot { Title = "Snapshot", Public = false, Closed = false, Template = false },
                 Fields = [],
                 Views = [],
                 Workflows = [],

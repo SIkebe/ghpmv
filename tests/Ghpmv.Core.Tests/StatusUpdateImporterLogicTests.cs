@@ -188,38 +188,6 @@ public class StatusUpdateImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_does_nothing_when_the_snapshot_predates_status_updates()
-    {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
-        try
-        {
-            using var handler = new StatusUpdateHandler();
-            using var client = CreateClient(handler);
-            var progress = new List<string>();
-            var importer = new StatusUpdateImporter(client) { OnProgress = progress.Add };
-
-            var result = await importer.ImportAsync(
-                CreateSnapshot((IReadOnlyList<StatusUpdateSnapshot>?)null),
-                Target,
-                directory,
-                TestContext.Current.CancellationToken);
-
-            Assert.Empty(handler.RequestBodies);
-            Assert.Equal(0, result.Created);
-            Assert.Equal(0, result.Resumed);
-            Assert.Equal(0, result.AlreadyComplete);
-            Assert.Equal(
-                ["Status updates were not captured by this schema-v1 snapshot; leaving the target history unchanged."],
-                progress);
-            Assert.False(File.Exists(Path.Combine(directory, ImportLog.FileName)));
-        }
-        finally
-        {
-            Directory.Delete(directory, recursive: true);
-        }
-    }
-
-    [Fact]
     public async Task Import_does_nothing_when_the_snapshot_has_an_empty_status_update_list()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-status-").FullName;
@@ -241,8 +209,7 @@ public class StatusUpdateImporterLogicTests
             Assert.Equal(0, result.Resumed);
             Assert.Equal(0, result.AlreadyComplete);
 
-            // An empty list is "captured, but there is nothing to replay" — a different
-            // state from a schema-v1 snapshot, so the summary is still emitted.
+            // An empty captured list still emits the stable summary line.
             Assert.Equal(
                 ["Status update import finished: 0 created, 0 resumed, 0 already complete."],
                 progress);
@@ -574,13 +541,12 @@ public class StatusUpdateImporterLogicTests
             UpdatedAt = createdAt,
         };
 
-    private static ProjectSnapshot CreateSnapshot(params StatusUpdateSnapshot[] updates)
-        => CreateSnapshot((IReadOnlyList<StatusUpdateSnapshot>?)updates);
-
-    private static ProjectSnapshot CreateSnapshot(IReadOnlyList<StatusUpdateSnapshot>? updates) => new()
+    private static ProjectSnapshot CreateSnapshot(params StatusUpdateSnapshot[] updates) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
-        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false },
+        LinkedRepositories = [],
+        LinkedTeams = [],
+        Project = new ProjectInfoSnapshot { Title = "Roadmap", Public = false, Closed = false, Template = false },
         Fields = [],
         Views = [],
         Workflows = [],

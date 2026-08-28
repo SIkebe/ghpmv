@@ -12,12 +12,14 @@ namespace Ghpmv.Core.Fixtures;
 /// <summary>Creates the standard API-backed integration-test fixture without PowerShell or gh CLI.</summary>
 public sealed class FixtureProjectBuilder
 {
+    public const string RoadmapLongTitle = "Fixture roadmap item with a deliberately long title for truncation rendering verification";
+
     private const string RepositoryClaimFileName = "fixture-repository.txt";
     private const string ReferenceDateFileName = "fixture-reference-date";
     private const string PendingRepositoryStatus = "pending";
     private const string FallbackPendingRepositoryStatus = "fallback-pending";
     private const string ClaimedRepositoryStatus = "claimed";
-    private static readonly DateOnly LegacyFixtureReferenceDate = new(2026, 1, 1);
+    private static readonly DateOnly StableFixtureReferenceDate = new(2026, 1, 1);
 
     private readonly GitHubGraphQLClient _graphQl;
     private readonly GitHubRestClient _rest;
@@ -39,6 +41,8 @@ public sealed class FixtureProjectBuilder
     public bool RequireNewResources { get; init; }
 
     public bool AllowExistingEmptyRepository { get; init; }
+
+    public bool IncludeRoadmapRenderingItem { get; init; }
 
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
 
@@ -80,15 +84,11 @@ public sealed class FixtureProjectBuilder
             OperationLogDirectory,
             apiHost,
             repositoryFullName);
-        var hasPriorOperationState = File.Exists(Path.Combine(operationDirectory, ProjectImportLog.FileName))
-            || File.Exists(Path.Combine(operationDirectory, ImportLog.FileName))
-            || File.Exists(Path.Combine(operationDirectory, RepositoryClaimFileName));
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var referenceDate = await ResolveFixtureReferenceDateAsync(
             operationDirectory,
             useCurrentWeek: RequireNewResources,
-            hasPriorOperationState,
             DateOnly.FromDateTime(TimeProvider.GetLocalNow().DateTime),
             cancellationToken).ConfigureAwait(false);
         var projectMatches = await FindProjectsByTitleAsync(organization, title, cancellationToken).ConfigureAwait(false);
@@ -226,6 +226,10 @@ public sealed class FixtureProjectBuilder
                 pullRequestNumber,
                 teamSlug,
                 referenceDate);
+            if (IncludeRoadmapRenderingItem)
+            {
+                snapshot = AddRoadmapRenderingItem(snapshot);
+            }
             var importStatusUpdates = true;
             IReadOnlyDictionary<int, string> matchedFixtureStatusUpdates =
                 new Dictionary<int, string>();
@@ -234,31 +238,18 @@ public sealed class FixtureProjectBuilder
                 var snapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot);
                 if (!string.Equals(itemLog.SourceSnapshotFingerprint, snapshotFingerprint, StringComparison.Ordinal))
                 {
-                    itemLog = UpgradeLegacyFixtureLog(itemLog, snapshot);
-                    if (itemLog is null)
-                    {
-                        throw new InvalidOperationException(
-                            $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
-                    }
-
-                    await itemLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-                    templateLog = itemLog;
+                    throw new InvalidOperationException(
+                        $"{ImportLog.FileName} in '{operationDirectory}' belongs to a different fixture snapshot. Recreate the preview fixture instead of reusing incompatible artifacts.");
                 }
             }
 
-            await PersistLegacyProjectIdAsync(
-                projectLog,
-                itemLog,
-                operationDirectory,
-                cancellationToken).ConfigureAwait(false);
-
-            if (existing is not null && snapshot.StatusUpdates is { Count: > 0 } expectedStatusUpdates)
+            if (existing is not null && snapshot.StatusUpdates.Count > 0)
             {
                 var existingStatusUpdates = await FetchStatusUpdatesAsync(
                     existing.Id,
                     cancellationToken).ConfigureAwait(false);
                 var reconciliation = ReconcileFixtureStatusUpdates(
-                    expectedStatusUpdates,
+                    snapshot.StatusUpdates,
                     existingStatusUpdates,
                     itemLog);
                 matchedFixtureStatusUpdates = reconciliation.CanonicalMatches;
@@ -278,7 +269,7 @@ public sealed class FixtureProjectBuilder
                 {
                     OnProgress?.Invoke(string.Create(
                         CultureInfo.InvariantCulture,
-                        $"Fixture project contains {matchedFixtureStatusUpdates.Count}/{expectedStatusUpdates.Count} expected status updates; seeding only the missing fixture history and leaving unrelated history unchanged."));
+                        $"Fixture project contains {matchedFixtureStatusUpdates.Count}/{snapshot.StatusUpdates.Count} expected status updates; seeding only the missing fixture history and leaving unrelated history unchanged."));
                 }
             }
 
@@ -292,7 +283,7 @@ public sealed class FixtureProjectBuilder
                 await ProjectTemplateWriteSession.SetFinalStateAsync(
                     _graphQl,
                     existing.Id,
-                    snapshot.Project.Template!.Value,
+                    snapshot.Project.Template,
                     OnProgress,
                     cancellationToken).ConfigureAwait(false);
                 OnProgress?.Invoke($"Fixture project already completed; no API fixture writes are required: {existing.Url}");
@@ -418,7 +409,7 @@ public sealed class FixtureProjectBuilder
                 await ProjectTemplateWriteSession.SetFinalStateAsync(
                     _graphQl,
                     project.ProjectId,
-                    snapshot.Project.Template!.Value,
+                    snapshot.Project.Template,
                     OnProgress,
                     cancellationToken).ConfigureAwait(false);
             }
@@ -454,40 +445,6 @@ public sealed class FixtureProjectBuilder
             or { ItemStates.Count: > 0 }
             or { PendingDrafts.Count: > 0 }
             or { PendingContents.Count: > 0 };
-
-    internal static ImportLog? UpgradeLegacyFixtureLog(ImportLog log, ProjectSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(log);
-        ArgumentNullException.ThrowIfNull(snapshot);
-
-        var withoutTemplate = snapshot with
-        {
-            Project = snapshot.Project with { Template = null },
-        };
-        var matchesPreTemplateSnapshot = string.Equals(
-            log.SourceSnapshotFingerprint,
-            ImportLog.ComputeSnapshotFingerprint(withoutTemplate),
-            StringComparison.Ordinal);
-        var matchesPreStatusSnapshot = log.StatusUpdates.Count == 0
-            && log.PendingStatusUpdates.Count == 0
-            && (string.Equals(
-                    log.SourceSnapshotFingerprint,
-                    ImportLog.ComputeSnapshotFingerprint(snapshot with { StatusUpdates = null }),
-                    StringComparison.Ordinal)
-                || string.Equals(
-                    log.SourceSnapshotFingerprint,
-                    ImportLog.ComputeSnapshotFingerprint(withoutTemplate with { StatusUpdates = null }),
-                    StringComparison.Ordinal));
-        if (!matchesPreTemplateSnapshot && !matchesPreStatusSnapshot)
-        {
-            return null;
-        }
-
-        return log with
-        {
-            SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
-        };
-    }
 
     internal static IReadOnlyDictionary<int, string> MatchFixtureStatusUpdates(
         IReadOnlyList<StatusUpdateSnapshot> expected,
@@ -694,22 +651,6 @@ public sealed class FixtureProjectBuilder
         }
 
         return projectLog.ImportCompleted is true;
-    }
-
-    internal static async Task<bool> PersistLegacyProjectIdAsync(
-        ProjectImportLog projectLog,
-        ImportLog? itemLog,
-        string operationDirectory,
-        CancellationToken cancellationToken)
-    {
-        if (projectLog.CreatedProjectId is not null || itemLog is null)
-        {
-            return false;
-        }
-
-        projectLog.CreatedProjectId = itemLog.ProjectId;
-        await projectLog.SaveAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
     internal static void ValidateNewProjectRequirement(
@@ -1185,37 +1126,9 @@ public sealed class FixtureProjectBuilder
         string? teamSlug)
     {
         var teamIdentity = teamSlug is null ? string.Empty : $"\n{teamSlug.ToLowerInvariant()}";
-        var current = GetOperationDirectory(
+        return GetOperationDirectory(
             root,
             $"{apiHost}\n{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}{teamIdentity}");
-        if (HasDurableOperationState(current))
-        {
-            return current;
-        }
-
-        var legacyInputs = new List<string>
-        {
-            $"{apiHost}\n{organization}\n{title}\n{repositoryName}{(teamSlug is null ? string.Empty : $"\n{teamSlug}")}",
-        };
-        if (string.Equals(apiHost, "https://api.github.com", StringComparison.Ordinal))
-        {
-            legacyInputs.Add($"{organization.ToLowerInvariant()}\n{title}\n{repositoryName.ToLowerInvariant()}{teamIdentity}");
-            legacyInputs.Add($"{organization}\n{title}\n{repositoryName}{(teamSlug is null ? string.Empty : $"\n{teamSlug}")}");
-        }
-
-        var legacyDirectories = legacyInputs
-            .Select(input => GetOperationDirectory(root, input))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Where(path => !string.Equals(path, current, StringComparison.OrdinalIgnoreCase))
-            .Where(HasDurableOperationState)
-            .ToArray();
-        return legacyDirectories.Length switch
-        {
-            0 => current,
-            1 => legacyDirectories[0],
-            _ => throw new InvalidOperationException(
-                "Multiple legacy fixture operation logs match this fixture; refusing to choose an ownership record."),
-        };
     }
 
     private static string GetOperationDirectory(string root, string operationIdentity)
@@ -1226,23 +1139,16 @@ public sealed class FixtureProjectBuilder
         return Path.Combine(root, operationKey);
     }
 
-    private static bool HasDurableOperationState(string directory)
-        => File.Exists(Path.Combine(directory, ProjectImportLog.FileName))
-            || File.Exists(Path.Combine(directory, ImportLog.FileName))
-            || File.Exists(Path.Combine(directory, RepositoryClaimFileName))
-            || File.Exists(Path.Combine(directory, ReferenceDateFileName));
-
     internal static async Task<DateOnly> ResolveFixtureReferenceDateAsync(
         string operationDirectory,
         bool useCurrentWeek,
-        bool hasPriorOperationState,
         DateOnly currentDate,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(operationDirectory);
         if (!useCurrentWeek)
         {
-            return LegacyFixtureReferenceDate;
+            return StableFixtureReferenceDate;
         }
 
         Directory.CreateDirectory(operationDirectory);
@@ -1264,9 +1170,7 @@ public sealed class FixtureProjectBuilder
             return persistedDate;
         }
 
-        var referenceDate = hasPriorOperationState
-            ? LegacyFixtureReferenceDate
-            : StartOfWeek(currentDate);
+        var referenceDate = StartOfWeek(currentDate);
         var temporaryPath = path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
         try
         {
@@ -1472,7 +1376,7 @@ public sealed class FixtureProjectBuilder
         DateOnly? referenceDate = null)
     {
         repositoryFullName = repositoryFullName.ToLowerInvariant();
-        var today = (referenceDate ?? LegacyFixtureReferenceDate).ToDateTime(TimeOnly.MinValue);
+        var today = (referenceDate ?? StableFixtureReferenceDate).ToDateTime(TimeOnly.MinValue);
         var sprint0Start = today.AddDays(-28).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint1Start = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint2Start = today.AddDays(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -1670,6 +1574,29 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot IssueMultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
+    }
+
+    internal static ProjectSnapshot AddRoadmapRenderingItem(ProjectSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var source = snapshot.Items.First(item => item.Draft?.Title == "Fixture draft 1");
+        var item = source with
+        {
+            Position = snapshot.Items.Count,
+            Draft = source.Draft! with { Title = RoadmapLongTitle },
+        };
+        return snapshot with { Items = [.. snapshot.Items, item] };
+    }
+
+    public static bool IsRoadmapRenderingItem(ItemSnapshot item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        return !item.IsArchived
+            && string.Equals(item.Draft?.Title, RoadmapLongTitle, StringComparison.Ordinal)
+            && item.FieldValues.Any(value =>
+                value.FieldName == "Fixture Date" && value.Date is not null)
+            && item.FieldValues.Any(value =>
+                value.FieldName == "Fixture Sprint" && value.IterationTitle is not null);
     }
 
     private async Task EnsureMultiSelectIssueFieldValueAsync(

@@ -189,11 +189,15 @@ public class ImportCapabilityPreflightIntegrationTests
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [],
         Views = [],

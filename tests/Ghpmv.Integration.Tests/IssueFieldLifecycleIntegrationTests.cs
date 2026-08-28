@@ -133,11 +133,15 @@ public class IssueFieldLifecycleIntegrationTests
     private static ProjectSnapshot Snapshot(string title, FieldSnapshot issueField) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
+        StatusUpdates = [],
+        LinkedRepositories = [],
+        LinkedTeams = [],
         Project = new ProjectInfoSnapshot
         {
             Title = title,
             Public = false,
             Closed = false,
+            Template = false,
         },
         Fields = [issueField],
         Views = [],

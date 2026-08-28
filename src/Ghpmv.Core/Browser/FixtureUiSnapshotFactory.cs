@@ -25,11 +25,15 @@ public static class FixtureUiSnapshotFactory
                 Readme = null,
                 Public = false,
                 Closed = false,
+                Template = false,
             },
             Fields = CreateFields(),
             Views = CreateViews(),
             Workflows = CreateWorkflows(repositoryName),
             Items = [],
+            StatusUpdates = [],
+            LinkedRepositories = [],
+            LinkedTeams = [],
         };
     }
 
@@ -45,6 +49,39 @@ public static class FixtureUiSnapshotFactory
             Views = snapshot.Views.Select(view =>
                 string.Equals(view.Name, "View 1", StringComparison.Ordinal)
                     ? view with { Ui = view.Ui! with { FieldSum = ["Count", "Fixture Number"] } }
+                    : view).ToList(),
+        };
+    }
+
+    /// <summary>Creates title-only Roadmap display drift for every Roadmap View.</summary>
+    public static ProjectSnapshot CreateRoadmapDisplayDrift(string repositoryName = "fixture-repo")
+        => CreateRoadmapDisplayDrift(repositoryName, truncateTitles: false, showDateFields: false);
+
+    /// <summary>Creates date-only Roadmap display drift for every Roadmap View.</summary>
+    public static ProjectSnapshot CreateRoadmapDateDisplayDrift(string repositoryName = "fixture-repo")
+        => CreateRoadmapDisplayDrift(repositoryName, truncateTitles: true, showDateFields: true);
+
+    private static ProjectSnapshot CreateRoadmapDisplayDrift(
+        string repositoryName,
+        bool truncateTitles,
+        bool showDateFields)
+    {
+        var snapshot = Create(repositoryName);
+        return snapshot with
+        {
+            Views = snapshot.Views.Select(view =>
+                string.Equals(view.Layout, "ROADMAP_LAYOUT", StringComparison.Ordinal)
+                    ? view with
+                    {
+                        Ui = view.Ui! with
+                        {
+                            Roadmap = view.Ui.Roadmap! with
+                            {
+                                TruncateTitles = truncateTitles,
+                                ShowDateFields = showDateFields,
+                            },
+                        },
+                    }
                     : view).ToList(),
         };
     }
@@ -185,6 +222,8 @@ public static class FixtureUiSnapshotFactory
                     TargetField = "Fixture Sprint end",
                     Zoom = "Quarter",
                     Markers = ["Fixture Date"],
+                    TruncateTitles = true,
+                    ShowDateFields = false,
                 },
             },
         },
@@ -202,6 +241,31 @@ public static class FixtureUiSnapshotFactory
             Ui = new ViewUiSnapshot
             {
                 FieldSum = [],
+            },
+        },
+        new ViewSnapshot
+        {
+            Number = 5,
+            TabPosition = 4,
+            Name = "Fixture Roadmap Dates Hidden",
+            Layout = "ROADMAP_LAYOUT",
+            Filter = null,
+            GroupByFields = ["Status"],
+            SortByFields = [],
+            VerticalGroupByFields = [],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Fixture Number 2"],
+                Roadmap = new RoadmapSettingsSnapshot
+                {
+                    StartField = "Fixture Date",
+                    TargetField = "Fixture Sprint end",
+                    Zoom = "Quarter",
+                    Markers = ["Fixture Date"],
+                    TruncateTitles = true,
+                    ShowDateFields = false,
+                },
             },
         },
     ];

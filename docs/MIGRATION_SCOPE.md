@@ -19,7 +19,7 @@ Issue and pull request content and metadata, including labels, milestones, assig
 | Project collaborators | ✅ with browser automation / API import-only | GitHub exposes a write API but no read API for project collaborators. With `--enable-browser-automation`, `ghpmv` exports explicitly listed project collaborators from Settings → Manage access and imports them through the API. Inherited/base-role access is outside `ghpmv`'s scope and is expected to come from GEI, organization/team/repository settings, or enterprise policy. |
 | Project status updates | ✅ | Body, status, start/target dates, and history order are migrated. Because GitHub cannot preserve the original author or creation time, `ghpmv` prepends them to the recreated body. |
 | Project-to-Team links | ✅ for organization-owned Projects | Exported through `ProjectV2.teams`, stored as `organization/slug`, resolved before any write, and recreated with `linkProjectV2ToTeam`. Explicit Team collaborators remain separate. Target-only links are reported but not removed. User-owned Projects use empty/no-op/not-applicable behavior. |
-| Project templates | ✅ for organization-owned Projects | `ProjectV2.template` is exported and applied only after Items, Status Updates, Views, Workflows, and other writers finish. Existing template targets are temporarily unmarked when a blocked write is required. A legacy snapshot without `project.template` preserves the target state; user-owned Projects reject `template: true` before any write. |
+| Project templates | ✅ for organization-owned Projects | `ProjectV2.template` is exported and applied only after Items, Status Updates, Views, Workflows, and other writers finish. Existing template targets are temporarily unmarked when a blocked write is required; user-owned Projects reject `template: true` before any write. |
 
 ## Fields and field values
 
@@ -63,9 +63,9 @@ View names, layouts, filters, and ordered visible fields are imported through th
 |---|---:|---|
 | Table views | ✅ / best effort | Name, layout, filter, and visible-field order use GraphQL. Group by, the first sort key, Slice by, and grouped-view Field sum use browser enrichment. Field sums preserve Count, multiple Number fields, and an empty selection. Additional sort keys are exported but only the first is applied. |
 | Board views | ✅ | Column by, Swimlanes and Field sum are tested. |
-| Roadmap views | ✅ | Date fields, zoom level, markers, and grouped-view Field sum are tested. Field sums preserve Count, multiple Number fields, and an empty selection. |
+| Roadmap views | ✅ | Date fields, zoom level, markers, grouped-view Field sum, and the project-shared title truncation/date-field display state are tested. |
 | View API settings | ✅ | Name, layout, filter, and ordered visible fields are migrated without browser automation. |
-| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. |
+| View UI-only settings | ✅ | Grouping, sorting, slicing, field sums, and Roadmap settings are exported/imported by browser automation where the UI exposes them. Roadmap checkbox failures identify the property and View. |
 | View tab order | ✅ with browser automation | The public GraphQL `POSITION` order can differ from the saved-tab order shown by GitHub. Browser-assisted export/verify read tab `href` values in DOM order, and browser-assisted import applies the minimum drag-and-drop moves after all View settings. API-only export leaves tab order uncaptured, API-only import warns when a snapshot contains it, and API-only verify marks it not verified. |
 | Insights charts | ❌ | Out of scope for v1. They require a separate UI automation design. |
 
