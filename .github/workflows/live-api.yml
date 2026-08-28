@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: live-github-api-shared-fixture
@@ -30,6 +31,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      pull-requests: write
     env:
       GHPMV_TEST_ORG: ${{ vars.GHPMV_TEST_ORG || 'gpm-source' }}
       GHPMV_TEST_PROJECT_NUMBER: ${{ vars.GHPMV_TEST_PROJECT_NUMBER || '89' }}
@@ -80,6 +82,7 @@ jobs:
         if: ${{ steps.credentials.outputs.available == 'true' }}
         run: dotnet build Ghpmv.slnx -c Release --no-restore -warnaserror
       - name: Synchronize fixture and test
+        id: integration
         if: ${{ steps.credentials.outputs.available == 'true' }}
         env:
           GHPMV_TEST_TOKEN: ${{ secrets.GHPMV_TEST_TOKEN }}
@@ -102,6 +105,127 @@ jobs:
           if ($skipped.Count -gt 0) {
             $names = ($skipped | ForEach-Object { $_.testName }) -join ', '
             throw "Credentialed integration tests must not skip tests. Skipped: $names"
+          }
+      - name: Report integration failure
+        if: ${{ failure() && steps.credentials.outputs.available == 'true' && steps.integration.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $marker = '<!-- ghpmv-live-api-failure -->'
+          $reportPath = 'tests/Ghpmv.Integration.Tests/TestResults/ci/integration.trx'
+          $failedTests = @()
+          $messages = @()
+          if (Test-Path -LiteralPath $reportPath) {
+            [xml]$results = Get-Content -LiteralPath $reportPath
+            $failures = @($results.SelectNodes("//*[local-name()='UnitTestResult' and @outcome='Failed']"))
+            foreach ($failure in $failures) {
+              $failedTests += $failure.testName
+              $message = $failure.SelectSingleNode("./*[local-name()='Output']/*[local-name()='ErrorInfo']/*[local-name()='Message']")
+              if ($null -ne $message) {
+                $messages += $message.InnerText
+              }
+            }
+          }
+
+          $failureText = $messages -join "`n"
+          $diagnosis = if ($failureText -match 'Can only add 1000 curated projects to a repo') {
+            "The target fixture repository reached GitHub's 1,000 linked-Projects limit. Rotate the target fixture repository; rerunning without replacing it will fail again."
+          }
+          elseif ($failureText -match 'could not link repository') {
+            "Repository linking failed. Confirm the target fixture exists, the test token can administer it, and the repository has not reached GitHub's linked-Projects limit."
+          }
+          elseif ($failureText -match '(?i)rate limit') {
+            'GitHub API rate limiting interrupted the live test. Review the rate-limit entries in the run log before rerunning.'
+          }
+          elseif ($failureText -match 'Resource not accessible by personal access token') {
+            'The test token lacks access required by the failing GitHub operation. Review its scopes, repository access, approval, and SSO authorization.'
+          }
+          else {
+            'The live GitHub API test failed for an unclassified reason. Inspect the run log and uploaded TRX artifact.'
+          }
+
+          $testLines = if ($failedTests.Count -gt 0) {
+            @($failedTests | Sort-Object -Unique | ForEach-Object { "- ``$_``" })
+          }
+          else {
+            @('- Failed test names were unavailable; inspect the run log.')
+          }
+          $body = (@(
+            $marker
+            '### Live GitHub API check failed'
+            ''
+            "**Diagnosis:** $diagnosis"
+            ''
+            '**Failed tests:**'
+          ) + $testLines + @(
+            ''
+            "[Open the Actions run]($env:RUN_URL)"
+          )) -join "`n"
+
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($body.Replace($marker, '').Trim())
+          Write-Output "::error title=Live GitHub API check failed::$diagnosis"
+
+          if ([string]::IsNullOrWhiteSpace($env:PR_NUMBER)) {
+            Write-Output 'No pull request context; wrote the diagnosis to the job summary only.'
+            exit 0
+          }
+
+          $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not posted::Could not list existing pull request comments.'
+            exit 0
+          }
+          $comments = @($commentsJson | ConvertFrom-Json | ForEach-Object { $_ })
+          $comment = @($comments | Where-Object {
+            $_.user.login -eq 'github-actions[bot]' -and $_.body.Contains($marker, [StringComparison]::Ordinal)
+          } | Select-Object -Last 1)
+          $payload = @{ body = $body } | ConvertTo-Json -Compress
+          if ($comment.Count -eq 1) {
+            $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
+          }
+          else {
+            $payload | gh api --method POST "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments" --input -
+          }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not posted::The pull request comment API request failed.'
+          }
+      - name: Resolve integration failure comment
+        if: ${{ success() && steps.credentials.outputs.available == 'true' && steps.integration.outcome == 'success' && github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $marker = '<!-- ghpmv-live-api-failure -->'
+          $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not resolved::Could not list existing pull request comments.'
+            exit 0
+          }
+          $comments = @($commentsJson | ConvertFrom-Json | ForEach-Object { $_ })
+          $comment = @($comments | Where-Object {
+            $_.user.login -eq 'github-actions[bot]' -and $_.body.Contains($marker, [StringComparison]::Ordinal)
+          } | Select-Object -Last 1)
+          if ($comment.Count -eq 0) {
+            Write-Output 'No prior Live GitHub API failure comment exists.'
+            exit 0
+          }
+
+          $body = @"
+          $marker
+          ### Live GitHub API check recovered
+
+          The Live GitHub API check passed on the [latest Actions run]($env:RUN_URL).
+          "@
+          $payload = @{ body = $body.Trim() } | ConvertTo-Json -Compress
+          $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not resolved::The pull request comment API request failed.'
+            exit 0
           }
       - name: Upload integration test results
         if: ${{ failure() && steps.credentials.outputs.available == 'true' }}
