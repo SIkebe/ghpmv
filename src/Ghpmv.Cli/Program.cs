@@ -1448,7 +1448,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 new { login = org, number = projectNumber },
                 cancellationToken);
             var expectedNames = new HashSet<string>(
-                ["View 1", "Fixture Roadmap", "Fixture Roadmap Dates Hidden"],
+                [
+                    "View 1",
+                    "Fixture Board",
+                    "Fixture Iteration Board",
+                    "Fixture Roadmap",
+                    "Fixture Roadmap Dates Hidden",
+                ],
                 StringComparer.Ordinal);
             var viewNumbers = projectData
                 .GetProperty("organization")

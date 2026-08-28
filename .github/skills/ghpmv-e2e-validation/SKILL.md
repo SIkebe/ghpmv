@@ -551,7 +551,7 @@ settings の `execution.fixturePreparation`、`execution.repositoryPreparationMo
 
 `api-only` または `browser-e2e` では、settings の `execution.fixturePreparation` を `fixture preparation` として記録し、設定済みなら質問しない。設定がない場合だけ、既存 source Project を使うか fixture を作るかを一問で確認する。`api-only` の `existing` は Step 5 を実行せず、fixture 作成用権限を要求しない。`browser-e2e` の `existing` は resource を作成しない確認 Step として Step 5 を通り、現行標準 fixture contract を記録する。
 
-`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、5 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
+`browser-e2e` の fixture preparation 質問では、既存 round-trip が Text / Number / Single-select defaults と grouped Table / Roadmap の Field sum も検証することを質問文に含める。`create` は現行の標準 fixture が4 typed defaults、required Number fields、6 Viewsを決定的に作るため推奨する。`existing` は arbitrary Project ではなく、下記 contract を満たす現行標準 fixture または同等構成に限る。Step 6 の snapshot gate が不一致なら手編集で続行せず、新しい標準 fixture を作るか明示的に選び直す。
 
 同じ mode では、settings の `execution.repositoryPreparationMode` を `repository preparation mode` として記録し、設定済みなら質問しない。設定がない場合だけ、target repository を GEI で移行するか fixture seed で作るかを Step 4 より前に一問で確認する。token の用途が決まるまで PAT の入力を求めない。
 
@@ -906,7 +906,7 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 
 `browser-e2e` では fixture preparation にかかわらず、Step 5 の開始時に次を state へ記録する。
 
-- View names: `View 1`, `Fixture Board`, `Fixture Roadmap`, `Fixture Empty Sums`, `Fixture Roadmap Dates Hidden`
+- View names: `View 1`, `Fixture Board`, `Fixture Iteration Board`, `Fixture Roadmap`, `Fixture Empty Sums`, `Fixture Roadmap Dates Hidden`
 - Number field names: `Fixture Number`, `Fixture Number 2`
 - Grouping field: `Status`
 - expected FieldSum: session state の fixture contract 表
@@ -991,7 +991,7 @@ source が data residency の場合は選択した source command に `--api-bas
 同じ Project に明示的に再実行すると non-default Views が重複する。次のどちらかを選んでもらう。
 
 1. 新しい fixture Project を作る（推奨）
-2. `View 1` を残し、既存の `Fixture Board` / `Fixture Roadmap` / `Fixture Empty Sums` / `Fixture Roadmap Dates Hidden` を手動削除して再実行する
+2. `View 1` を残し、既存の `Fixture Board` / `Fixture Iteration Board` / `Fixture Roadmap` / `Fixture Empty Sums` / `Fixture Roadmap Dates Hidden` を手動削除して再実行する
 
 Workflow は再設定できる。warning が出た場合は、目視だけで終了せず、後続 export が UI settings を警告なしで取得できるか確認する。
 
@@ -1122,12 +1122,20 @@ $expectedBoardLimits = @(
     [pscustomobject]@{ View = 'Fixture Iteration Board'; Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 0'; Limit = 1 },
     [pscustomobject]@{ View = 'Fixture Iteration Board'; Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 1'; Limit = 3 }
 )
-foreach ($expected in $expectedBoardLimits) {
-    $views = @($snapshot.views | Where-Object name -eq $expected.View)
+foreach ($expectedView in @($expectedBoardLimits | Group-Object View)) {
+    $views = @($snapshot.views | Where-Object name -eq $expectedView.Name)
     if ($views.Count -ne 1 -or $null -eq $views[0].ui.boardColumnLimits) {
-        Stop-FieldSumSnapshotCheck "View '$($expected.View)' is missing captured boardColumnLimits."
+        Stop-FieldSumSnapshotCheck "View '$($expectedView.Name)' is missing captured boardColumnLimits."
         return
     }
+    $actualLimits = @($views[0].ui.boardColumnLimits)
+    if ($actualLimits.Count -ne $expectedView.Count) {
+        Stop-FieldSumSnapshotCheck "View '$($expectedView.Name)' boardColumnLimits must contain exactly $($expectedView.Count) configured limits; found $($actualLimits.Count)."
+        return
+    }
+}
+foreach ($expected in $expectedBoardLimits) {
+    $views = @($snapshot.views | Where-Object name -eq $expected.View)
     $matches = @($views[0].ui.boardColumnLimits | Where-Object {
         $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value -and $_.limit -eq $expected.Limit
     })

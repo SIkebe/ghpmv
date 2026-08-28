@@ -965,7 +965,10 @@ public sealed class ProjectVerifier
             var capturedIndex = availableTargets.FindIndex(targetView =>
                 targetView.Ui?.BoardColumnLimits is not null
                 && ViewApiEquals(sourceView, targetView)
-                && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetView.Ui));
+                && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetView.Ui)
+                && BoardColumnLimitsEqual(
+                    sourceView.Ui!.BoardColumnLimits,
+                    targetView.Ui.BoardColumnLimits));
             if (capturedIndex >= 0)
             {
                 availableTargets.RemoveAt(capturedIndex);
@@ -973,9 +976,9 @@ public sealed class ProjectVerifier
             }
 
             if (availableTargets.Any(targetView =>
-                    targetView.Ui is not null
+                    targetView.Ui is { BoardColumnLimits: null } targetUi
                     && ViewApiEquals(sourceView, targetView)
-                    && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetView.Ui)))
+                    && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetUi)))
             {
                 return true;
             }

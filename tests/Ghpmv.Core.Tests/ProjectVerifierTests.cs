@@ -1025,6 +1025,44 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_views_report_uncaptured_limits_when_other_captured_limits_differ()
+    {
+        var baseline = BuildSnapshot();
+        var captured = baseline.Views[0] with
+        {
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+            },
+        };
+        var legacy = captured with { Ui = new ViewUiSnapshot() };
+        var source = baseline with { Views = [captured, legacy] };
+        var target = baseline with
+        {
+            Views =
+            [
+                captured with
+                {
+                    Number = 8,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [Limit("Status", option: "Todo", limit: 2)],
+                    },
+                },
+                legacy with { Number = 9 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column limits", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Duplicate_view_names_are_compared_as_setting_multisets()
     {
         var baseline = BuildSnapshot();
