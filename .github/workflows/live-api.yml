@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: live-github-api-shared-fixture
@@ -32,7 +31,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      credentials-available: ${{ steps.credentials.outputs.available }}
+      credentials_available: ${{ steps.credentials.outputs.available }}
     env:
       GHPMV_TEST_ORG: ${{ vars.GHPMV_TEST_ORG || 'gpm-source' }}
       GHPMV_TEST_PROJECT_NUMBER: ${{ vars.GHPMV_TEST_PROJECT_NUMBER || '89' }}
@@ -119,7 +118,7 @@ jobs:
   report:
     name: Summarize integration result
     needs: integration
-    if: ${{ always() && needs.integration.outputs.credentials-available == 'true' }}
+    if: ${{ always() && needs.integration.outputs.credentials_available == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
