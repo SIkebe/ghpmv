@@ -393,6 +393,46 @@ public class ViewUiLogicTests
         Assert.Empty(plan.Targets);
     }
 
+    [Fact]
+    public void Board_limit_reconciliation_skips_all_writes_for_malformed_identities()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+            ],
+        };
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = [field.Name],
+        };
+        var desiredLimits = new[]
+        {
+            BoardLimit("Wrong Field", option: "Alpha", limit: 1),
+            BoardLimit(field.Name, iteration: "Alpha", limit: 2),
+            new BoardColumnLimitSnapshot
+            {
+                FieldName = field.Name,
+                SingleSelectOptionName = "Alpha",
+                IterationTitle = "Alpha",
+                Limit = 3,
+            },
+            BoardLimit(field.Name, option: "Alpha", limit: 0),
+        };
+
+        var plan = BoardColumnLimitUi.BuildReconciliationPlan(
+            view,
+            field,
+            desiredLimits,
+            ["Alpha"]);
+
+        Assert.Equal(4, plan.Warnings.Count);
+        Assert.Empty(plan.Targets);
+    }
+
     [Theory]
     [InlineData("TABLE_LAYOUT")]
     [InlineData("BOARD_LAYOUT")]

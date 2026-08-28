@@ -828,13 +828,19 @@ public sealed class ViewUiImporter
         // grouping change has been persisted and the View has reloaded.
         await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
 
+        var columnByReady = true;
         if (isBoard && view.VerticalGroupByFields.Count > 0)
         {
-            await TrySetSingleAsync(page, "Column by", view.VerticalGroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            columnByReady = await TrySetSingleAsync(
+                page,
+                "Column by",
+                view.VerticalGroupByFields[0],
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
         }
         else if (isBoard)
         {
-            await TrySetSingleAsync(
+            columnByReady = await TrySetSingleAsync(
                 page,
                 "Column by",
                 ["None", "No field"],
@@ -843,7 +849,7 @@ public sealed class ViewUiImporter
                 cancellationToken).ConfigureAwait(false);
         }
 
-        if (isBoard && view.Ui?.BoardColumnLimits is { } boardColumnLimits)
+        if (isBoard && view.Ui?.BoardColumnLimits is { } boardColumnLimits && columnByReady)
         {
             // Column limits are saved by their own dialog and require the persisted
             // Column-by selection to have rendered the target columns first.
@@ -855,6 +861,11 @@ public sealed class ViewUiImporter
                 boardColumnLimits,
                 cancellationToken).ConfigureAwait(false);
             _warnings.AddRange(warnings);
+        }
+        else if (isBoard && view.Ui?.BoardColumnLimits is not null && !columnByReady)
+        {
+            _warnings.Add(
+                $"view '{view.Name}': Board column limits were not applied because the target column-by field could not be selected");
         }
 
         if (view.SortByFields.Count > 0)

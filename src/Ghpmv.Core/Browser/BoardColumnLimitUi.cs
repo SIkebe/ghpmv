@@ -75,9 +75,58 @@ internal static class BoardColumnLimitUi
     {
         var warnings = new List<string>();
         var displayedNames = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
-        var desiredByName = desiredLimits
-            .Where(limit => string.Equals(limit.FieldName, field.Name, StringComparison.Ordinal))
-            .ToDictionary(GetValueName, StringComparer.Ordinal);
+        var desiredByName = new Dictionary<string, BoardColumnLimitSnapshot>(StringComparer.Ordinal);
+        foreach (var limit in desiredLimits)
+        {
+            if (limit.Limit <= 0)
+            {
+                warnings.Add(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"view '{view.Name}': Board column limit for {ViewUiImporter.DescribeColumn(limit)} must be positive, found {limit.Limit}"));
+                continue;
+            }
+
+            if (!string.Equals(limit.FieldName, field.Name, StringComparison.Ordinal))
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit for {ViewUiImporter.DescribeColumn(limit)} does not use column-by field '{field.Name}'");
+                continue;
+            }
+
+            var identityCount = (limit.SingleSelectOptionName is null ? 0 : 1)
+                + (limit.IterationTitle is null ? 0 : 1);
+            if (identityCount != 1)
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit for field '{field.Name}' must identify exactly one Single-select option or Iteration");
+                continue;
+            }
+
+            var valueName = GetValueName(limit);
+            var identityMatchesField = field.DataType switch
+            {
+                "SINGLE_SELECT" => limit.SingleSelectOptionName is not null,
+                "ITERATION" => limit.IterationTitle is not null,
+                _ => false,
+            };
+            if (!identityMatchesField || !ValueExists(field, valueName))
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit for {ViewUiImporter.DescribeColumn(limit)} is not a valid value of {field.DataType} field '{field.Name}'");
+                continue;
+            }
+
+            if (!desiredByName.TryAdd(valueName, limit))
+            {
+                warnings.Add(
+                    $"view '{view.Name}': duplicate Board column limit for {ViewUiImporter.DescribeColumn(limit)}");
+            }
+        }
+
+        if (warnings.Count > 0)
+        {
+            return new ReconciliationPlan([], warnings);
+        }
 
         foreach (var desired in desiredByName)
         {

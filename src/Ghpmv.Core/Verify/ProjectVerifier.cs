@@ -1127,19 +1127,37 @@ public sealed class ProjectVerifier
             return false;
         }
 
-        var unmatched = target.ToList();
-        foreach (var sourceItem in source)
+        var sourceMatchedByTarget = Enumerable.Repeat(-1, target.Count).ToArray();
+        for (var sourceIndex = 0; sourceIndex < source.Count; sourceIndex++)
         {
-            var index = unmatched.FindIndex(targetItem => equals(sourceItem, targetItem));
-            if (index < 0)
+            if (!TryMatch(sourceIndex, new bool[target.Count]))
             {
                 return false;
             }
-
-            unmatched.RemoveAt(index);
         }
 
         return true;
+
+        bool TryMatch(int sourceIndex, bool[] visitedTargets)
+        {
+            for (var targetIndex = 0; targetIndex < target.Count; targetIndex++)
+            {
+                if (visitedTargets[targetIndex] || !equals(source[sourceIndex], target[targetIndex]))
+                {
+                    continue;
+                }
+
+                visitedTargets[targetIndex] = true;
+                if (sourceMatchedByTarget[targetIndex] < 0
+                    || TryMatch(sourceMatchedByTarget[targetIndex], visitedTargets))
+                {
+                    sourceMatchedByTarget[targetIndex] = sourceIndex;
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)

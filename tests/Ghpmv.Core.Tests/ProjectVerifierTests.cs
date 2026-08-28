@@ -1063,6 +1063,38 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_views_match_captured_limits_before_legacy_wildcards()
+    {
+        var baseline = BuildSnapshot();
+        var capturedA = baseline.Views[0] with
+        {
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+            },
+        };
+        var capturedB = capturedA with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 2)],
+            },
+        };
+        var legacy = capturedA with { Ui = new ViewUiSnapshot() };
+        var source = baseline with { Views = [legacy, capturedA] };
+        var target = baseline with
+        {
+            Views = [capturedA with { Number = 8 }, capturedB with { Number = 9 }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View");
+    }
+
+    [Fact]
     public void Duplicate_view_names_are_compared_as_setting_multisets()
     {
         var baseline = BuildSnapshot();
