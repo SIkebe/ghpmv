@@ -103,8 +103,12 @@ jobs:
 
           $testLines = if ($failedTests.Count -gt 0) {
             @($failedTests | Sort-Object -Unique | ForEach-Object {
-              $safeName = [System.Net.WebUtility]::HtmlEncode($_).Replace('`', '&#96;')
-              "- ``$safeName``"
+              $singleLineName = [regex]::Replace([string]$_, '[\r\n\u2028\u2029]+', ' ')
+              $safeName = [regex]::Replace(
+                $singleLineName,
+                '[^\p{L}\p{N}\p{Zs}]',
+                { param($match) "&#$([int][char]$match.Value);" })
+              "- <code>$safeName</code>"
             })
           }
           else {
