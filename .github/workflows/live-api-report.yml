@@ -24,13 +24,25 @@ jobs:
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
       REPOSITORY: ${{ github.repository }}
       RUN_ID: ${{ github.event.workflow_run.id }}
+      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       RUN_URL: ${{ github.event.workflow_run.html_url }}
+      SERVER_URL: ${{ github.server_url }}
     steps:
       - name: Find Live GitHub API result
         id: result
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $currentHeadSha = gh api "repos/$env:REPOSITORY/pulls/$env:PR_NUMBER" --jq '.head.sha'
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Could not read the pull request current head SHA.'
+          }
+          if (-not [string]::Equals($currentHeadSha, $env:RUN_HEAD_SHA, [StringComparison]::OrdinalIgnoreCase)) {
+            'result=stale' | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            Write-Output "Ignoring completed run for stale head '$env:RUN_HEAD_SHA'; current head is '$currentHeadSha'."
+            exit 0
+          }
+
           $jobsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/actions/runs/$env:RUN_ID/jobs?per_page=100"
           if ($LASTEXITCODE -ne 0) {
             throw 'Could not read jobs for the completed CI run.'
@@ -61,7 +73,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $marker = '<!-- ghpmv-live-api-failure -->'
+          $marker = "<!-- ghpmv-live-api-result:$env:RUN_HEAD_SHA -->"
+          $shortSha = $env:RUN_HEAD_SHA.Substring(0, [Math]::Min(7, $env:RUN_HEAD_SHA.Length))
           $reportPath = Get-ChildItem -LiteralPath 'tests/Ghpmv.Integration.Tests/TestResults' -Filter 'integration.trx' -File -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
           $failedTests = @()
@@ -121,12 +134,14 @@ jobs:
           }
           $body = (@(
             $marker
-            '### Live GitHub API check failed'
+            "### Live GitHub API check failed for ``$shortSha``"
             ''
             "**Diagnosis:** $diagnosis"
             ''
             '**Failed tests:**'
           ) + $testLines + @(
+            ''
+            "Commit: [$shortSha]($env:SERVER_URL/$env:REPOSITORY/commit/$env:RUN_HEAD_SHA)"
             ''
             "[Open the Actions run]($env:RUN_URL)"
           )) -join "`n"
@@ -142,6 +157,15 @@ jobs:
           $comment = @($comments | Where-Object {
             $_.user.login -eq 'github-actions[bot]' -and $_.body.Contains($marker, [StringComparison]::Ordinal)
           } | Select-Object -Last 1)
+          $currentHeadSha = gh api "repos/$env:REPOSITORY/pulls/$env:PR_NUMBER" --jq '.head.sha'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not posted::Could not revalidate the pull request head.'
+            exit 0
+          }
+          if (-not [string]::Equals($currentHeadSha, $env:RUN_HEAD_SHA, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Output "PR head changed to '$currentHeadSha'; skipping stale failure comment for '$env:RUN_HEAD_SHA'."
+            exit 0
+          }
           $payload = @{ body = $body } | ConvertTo-Json -Compress
           if ($comment.Count -eq 1) {
             $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
@@ -158,7 +182,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $marker = '<!-- ghpmv-live-api-failure -->'
+          $marker = "<!-- ghpmv-live-api-result:$env:RUN_HEAD_SHA -->"
+          $shortSha = $env:RUN_HEAD_SHA.Substring(0, [Math]::Min(7, $env:RUN_HEAD_SHA.Length))
           $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
           if ($LASTEXITCODE -ne 0) {
             Write-Output '::warning title=PR failure comment was not resolved::Could not list existing pull request comments.'
@@ -173,11 +198,21 @@ jobs:
             exit 0
           }
 
+          $currentHeadSha = gh api "repos/$env:REPOSITORY/pulls/$env:PR_NUMBER" --jq '.head.sha'
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '::warning title=PR failure comment was not resolved::Could not revalidate the pull request head.'
+            exit 0
+          }
+          if (-not [string]::Equals($currentHeadSha, $env:RUN_HEAD_SHA, [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Output "PR head changed to '$currentHeadSha'; skipping stale recovery comment for '$env:RUN_HEAD_SHA'."
+            exit 0
+          }
+
           $body = @"
           $marker
-          ### Live GitHub API check recovered
+          ### Live GitHub API check recovered for ``$shortSha``
 
-          The Live GitHub API check passed on the [latest Actions run]($env:RUN_URL).
+          The Live GitHub API check passed for commit [$shortSha]($env:SERVER_URL/$env:REPOSITORY/commit/$env:RUN_HEAD_SHA) on the [Actions run]($env:RUN_URL).
           "@
           $payload = @{ body = $body.Trim() } | ConvertTo-Json -Compress
           $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
