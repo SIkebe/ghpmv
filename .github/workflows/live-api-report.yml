@@ -21,7 +21,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      GH_TOKEN: ${{ github.token }}
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
       REPOSITORY: ${{ github.repository }}
       RUN_ID: ${{ github.event.workflow_run.id }}
@@ -29,6 +28,8 @@ jobs:
     steps:
       - name: Find Live GitHub API result
         id: result
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $jobsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/actions/runs/$env:RUN_ID/jobs?per_page=100"
           if ($LASTEXITCODE -ne 0) {
@@ -52,9 +53,13 @@ jobs:
       - name: Download integration test results
         if: ${{ steps.result.outputs.result == 'failure' }}
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: gh run download "$env:RUN_ID" --repo "$env:REPOSITORY" --name live-api-test-results --dir tests/Ghpmv.Integration.Tests/TestResults
       - name: Report integration failure
         if: ${{ steps.result.outputs.result == 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $marker = '<!-- ghpmv-live-api-failure -->'
           $reportPath = Get-ChildItem -LiteralPath 'tests/Ghpmv.Integration.Tests/TestResults' -Filter 'integration.trx' -File -Recurse -ErrorAction SilentlyContinue |
@@ -150,6 +155,8 @@ jobs:
           }
       - name: Resolve integration failure comment
         if: ${{ steps.result.outputs.result == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $marker = '<!-- ghpmv-live-api-failure -->'
           $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
