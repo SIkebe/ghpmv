@@ -42,9 +42,39 @@ internal static class BoardColumnLimitUi
         CancellationToken cancellationToken)
     {
         var field = ResolveColumnField(view, fields);
-        var warnings = new List<string>();
         var columns = await ReadDisplayedColumnsAsync(page, cancellationToken).ConfigureAwait(false);
-        var displayedNames = columns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        var plan = BuildReconciliationPlan(
+            view,
+            field,
+            desiredLimits,
+            columns.Select(column => column.Name).ToArray());
+        if (plan.Warnings.Count > 0)
+        {
+            return plan.Warnings;
+        }
+
+        foreach (var target in plan.Targets)
+        {
+            var current = await ReadLimitAsync(page, target.ColumnName, cancellationToken).ConfigureAwait(false);
+            if (current == target.Limit)
+            {
+                continue;
+            }
+
+            await WriteLimitAsync(page, target.ColumnName, target.Limit, cancellationToken).ConfigureAwait(false);
+        }
+
+        return plan.Warnings;
+    }
+
+    internal static ReconciliationPlan BuildReconciliationPlan(
+        ViewSnapshot view,
+        FieldSnapshot field,
+        IReadOnlyList<BoardColumnLimitSnapshot> desiredLimits,
+        IReadOnlyList<string> displayedColumnNames)
+    {
+        var warnings = new List<string>();
+        var displayedNames = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
         var desiredByName = desiredLimits
             .Where(limit => string.Equals(limit.FieldName, field.Name, StringComparison.Ordinal))
             .ToDictionary(GetValueName, StringComparer.Ordinal);
@@ -58,26 +88,20 @@ internal static class BoardColumnLimitUi
             }
         }
 
-        foreach (var column in columns)
+        if (warnings.Count > 0)
         {
-            if (!ValueExists(field, column.Name))
-            {
-                continue;
-            }
-
-            var desired = desiredByName.TryGetValue(column.Name, out var configured)
-                ? configured.Limit
-                : (int?)null;
-            var current = await ReadLimitAsync(page, column.Name, cancellationToken).ConfigureAwait(false);
-            if (current == desired)
-            {
-                continue;
-            }
-
-            await WriteLimitAsync(page, column.Name, desired, cancellationToken).ConfigureAwait(false);
+            return new ReconciliationPlan([], warnings);
         }
 
-        return warnings;
+        var targets = displayedColumnNames
+            .Where(columnName => ValueExists(field, columnName))
+            .Select(columnName => new ReconciliationTarget(
+                columnName,
+                desiredByName.TryGetValue(columnName, out var configured)
+                    ? configured.Limit
+                    : null))
+            .ToArray();
+        return new ReconciliationPlan(targets, warnings);
     }
 
     internal static int? ParseLimit(string? value)
@@ -268,4 +292,10 @@ internal static class BoardColumnLimitUi
                 $"Board column limit for field '{limit.FieldName}' has no logical value identity");
 
     private sealed record DisplayedColumn(string Name);
+
+    internal sealed record ReconciliationPlan(
+        IReadOnlyList<ReconciliationTarget> Targets,
+        IReadOnlyList<string> Warnings);
+
+    internal sealed record ReconciliationTarget(string ColumnName, int? Limit);
 }

@@ -359,6 +359,40 @@ public class ViewUiLogicTests
         Assert.Equal(4, warnings.Count);
     }
 
+    [Fact]
+    public void Board_limit_reconciliation_skips_all_writes_when_a_target_column_is_missing()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+            ],
+        };
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = [field.Name],
+        };
+        var desiredLimits = new[]
+        {
+            BoardLimit(field.Name, option: "Alpha", limit: 1),
+        };
+
+        var plan = BoardColumnLimitUi.BuildReconciliationPlan(
+            view,
+            field,
+            desiredLimits,
+            ["Beta"]);
+
+        Assert.Contains(plan.Warnings, warning =>
+            warning.Contains("Single-select column 'Fixture Select' / 'Alpha'", StringComparison.Ordinal)
+            && warning.Contains("was not found", StringComparison.Ordinal));
+        Assert.Empty(plan.Targets);
+    }
+
     [Theory]
     [InlineData("TABLE_LAYOUT")]
     [InlineData("BOARD_LAYOUT")]

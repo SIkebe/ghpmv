@@ -87,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field defaults / sums | typed defaults と5 Viewのsnapshot contract、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header DOM check、drift report、repair report |
+| browser-e2e field defaults / sums / Board limits | typed defaults と6 Viewのsnapshot contract、configured / unlimited Board limits、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header / Board-limit DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
