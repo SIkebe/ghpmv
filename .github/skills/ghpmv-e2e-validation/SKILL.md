@@ -210,6 +210,8 @@ required Number fields は `Fixture Number` と `Fixture Number 2`。source / ta
 
 同じ round-trip でProject-shared Roadmap state `(truncateTitles=true, showDateFields=false)` を両Roadmapからcaptureし、DOM checkpointでtitle truncationとdate非表示を検証する。negative-test phaseはtitle-only `(false,false)` とdate-only `(true,true)` をそれぞれ別checkpointで適用し、exact mismatch、DOM rendering、baseline repairを各段階で確認する。
 
+> **Undocumented UI warning:** `Truncate titles` / `Show date fields` と対応するbrowser storageはGitHubの公開API・互換性契約ではない。GitHubのUI、selector、storage key、保存動作が予告なく変更・削除されるとcapture/import/DOM checkpointが失敗し得る。`browser-e2e`でfixtureを作成する前に、この依存と失敗時はwarningを成功扱いしないことをoperatorへ明示する。
+
 ## Feature checkpoint の実行時間最小化
 
 Issue ごとの機能検証を追加するときも、user-facing scenario selector や独立した full round trip を増やさない。次へ統合する。
@@ -974,6 +976,8 @@ source が data residency の場合は選択した source command に `--api-bas
 出力された source Project number を記録する。
 
 `fixture preparation=create` の成功後、出力された source Project title / number / URL を resource inventory に `created` として追加する。`source empty-repository fallback=selected` なら `<source-org>/<source-repo>` はこの run より前に作成されたため `pre-existing` として追加し、通常経路だけ repository を `created` とする。`browser-e2e` では作成された source fixture が上記 contract を持つことを前提にせず、Step 6 の gate で必ず確認する。
+
+`browser-e2e` の実resource作成前説明には、作成するresource名に加え、Roadmap title/date controlsがundocumented browser UI/browser storage依存であり、GitHub側の変更時は後続automationがfail-closedで停止することを必ず含める。
 
 `browser-e2e` の再試行も同じ combined command と同じ title / repository を使う。CLI は owned fixture の `fixture-ui-complete` marker を確認し、完了済みなら UI setup を自動で skipし、未完了なら再開する。marker-aware retry を迂回するため、通常の再試行で `--fixture-ui --fixture-project <source-project-number>` を実行しない。
 
