@@ -10,6 +10,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: live-api-report-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
 defaults:
   run:
     shell: pwsh
@@ -73,7 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $marker = "<!-- ghpmv-live-api-result:$env:RUN_HEAD_SHA -->"
+          $marker = '<!-- ghpmv-live-api-result -->'
           $shortSha = $env:RUN_HEAD_SHA.Substring(0, [Math]::Min(7, $env:RUN_HEAD_SHA.Length))
           $reportPath = Get-ChildItem -LiteralPath 'tests/Ghpmv.Integration.Tests/TestResults' -Filter 'integration.trx' -File -Recurse -ErrorAction SilentlyContinue |
             Select-Object -First 1 -ExpandProperty FullName
@@ -182,7 +186,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $marker = "<!-- ghpmv-live-api-result:$env:RUN_HEAD_SHA -->"
+          $marker = '<!-- ghpmv-live-api-result -->'
           $shortSha = $env:RUN_HEAD_SHA.Substring(0, [Math]::Min(7, $env:RUN_HEAD_SHA.Length))
           $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
           if ($LASTEXITCODE -ne 0) {
