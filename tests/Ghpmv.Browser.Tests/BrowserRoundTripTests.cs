@@ -209,8 +209,12 @@ public class BrowserRoundTripTests
                     cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
-                await AssertRoadmapDisplayProfileStateAsync(
+                var sourceRoadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap");
+                await AssertRoadmapDisplayFreshSessionAsync(
                     targetStatePath!,
+                    E2eTestEnvironment.Current.Target,
+                    result.ProjectNumber,
+                    result.ViewNumbers[sourceRoadmap.Number],
                     expectedRoadmapDisplay.TruncateTitles.Value,
                     expectedRoadmapDisplay.ShowDateFields.Value,
                     cancellationToken);
@@ -288,7 +292,6 @@ public class BrowserRoundTripTests
                         StringComparer.Ordinal),
                     cancellationToken);
 
-                var sourceRoadmap = Assert.Single(snapshot.Views, view => view.Name == "Fixture Roadmap");
                 await viewImporter.ApplyRoadmapDisplayOptionsAsync(
                     TargetOrg,
                     ProjectOwnerType.Organization,
@@ -718,21 +721,31 @@ public class BrowserRoundTripTests
         }
     }
 
-    private static async Task AssertRoadmapDisplayProfileStateAsync(
+    private static async Task AssertRoadmapDisplayFreshSessionAsync(
         string statePath,
+        E2eEndpointSettings endpoint,
+        int projectNumber,
+        int viewNumber,
         bool truncateTitles,
         bool showDateFields,
         CancellationToken cancellationToken)
     {
-        await using var stream = File.OpenRead(statePath);
-        using var state = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
-        var storage = state.RootElement.GetProperty("origins")
-            .EnumerateArray()
-            .SelectMany(origin => origin.GetProperty("localStorage").EnumerateArray())
-            .ToDictionary(
-                entry => entry.GetProperty("name").GetString()!,
-                entry => entry.GetProperty("value").GetString(),
-                StringComparer.Ordinal);
+        await using var session = CreateSession(statePath, endpoint);
+        var page = await session.GotoAsync(
+            BrowserProjectUrl.Build(
+                session.BaseUrl,
+                TargetOrg,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                $"views/{viewNumber}"),
+            cancellationToken);
+        var storage = await page.EvaluateAsync<Dictionary<string, string?>>(
+            """
+            () => ({
+              "projects.roadmapTruncateTitles": localStorage.getItem("projects.roadmapTruncateTitles"),
+              "projects.roadmapShowDateFields": localStorage.getItem("projects.roadmapShowDateFields")
+            })
+            """);
 
         Assert.Equal(
             truncateTitles.ToString().ToLowerInvariant(),

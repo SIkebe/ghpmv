@@ -205,7 +205,6 @@ jobs:
     if: ${{ needs.changes.outputs.dotnet == 'true' }}
     permissions:
       contents: read
-      pull-requests: write
     uses: ./.github/workflows/live-api.yml
     secrets:
       GHPMV_TEST_TOKEN: ${{ secrets.GHPMV_TEST_TOKEN }}

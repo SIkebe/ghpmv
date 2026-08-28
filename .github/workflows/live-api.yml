@@ -31,7 +31,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      pull-requests: write
+    outputs:
+      credentials-available: ${{ steps.credentials.outputs.available }}
     env:
       GHPMV_TEST_ORG: ${{ vars.GHPMV_TEST_ORG || 'gpm-source' }}
       GHPMV_TEST_PROJECT_NUMBER: ${{ vars.GHPMV_TEST_PROJECT_NUMBER || '89' }}
@@ -106,19 +107,42 @@ jobs:
             $names = ($skipped | ForEach-Object { $_.testName }) -join ', '
             throw "Credentialed integration tests must not skip tests. Skipped: $names"
           }
+      - name: Upload integration test results
+        if: ${{ failure() && steps.credentials.outputs.available == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-api-test-results
+          path: tests/Ghpmv.Integration.Tests/TestResults/**
+          if-no-files-found: warn
+          retention-days: 7
+
+  report:
+    name: Summarize integration result
+    needs: integration
+    if: ${{ always() && needs.integration.outputs.credentials-available == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Download integration test results
+        if: ${{ needs.integration.result == 'failure' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: live-api-test-results
+          path: tests/Ghpmv.Integration.Tests/TestResults
       - name: Report integration failure
-        if: ${{ failure() && steps.credentials.outputs.available == 'true' && steps.integration.outcome == 'failure' }}
+        if: ${{ needs.integration.result == 'failure' }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           $marker = '<!-- ghpmv-live-api-failure -->'
-          $reportPath = 'tests/Ghpmv.Integration.Tests/TestResults/ci/integration.trx'
+          $reportPath = Get-ChildItem -LiteralPath 'tests/Ghpmv.Integration.Tests/TestResults' -Filter 'integration.trx' -File -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
           $failedTests = @()
           $messages = @()
-          if (Test-Path -LiteralPath $reportPath) {
+          if ($null -ne $reportPath) {
             [xml]$results = Get-Content -LiteralPath $reportPath
             $failures = @($results.SelectNodes("//*[local-name()='UnitTestResult' and @outcome='Failed']"))
             foreach ($failure in $failures) {
@@ -167,71 +191,3 @@ jobs:
 
           Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($body.Replace($marker, '').Trim())
           Write-Output "::error title=Live GitHub API check failed::$diagnosis"
-
-          if ([string]::IsNullOrWhiteSpace($env:PR_NUMBER)) {
-            Write-Output 'No pull request context; wrote the diagnosis to the job summary only.'
-            exit 0
-          }
-
-          $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output '::warning title=PR failure comment was not posted::Could not list existing pull request comments.'
-            exit 0
-          }
-          $comments = @($commentsJson | ConvertFrom-Json | ForEach-Object { $_ })
-          $comment = @($comments | Where-Object {
-            $_.user.login -eq 'github-actions[bot]' -and $_.body.Contains($marker, [StringComparison]::Ordinal)
-          } | Select-Object -Last 1)
-          $payload = @{ body = $body } | ConvertTo-Json -Compress
-          if ($comment.Count -eq 1) {
-            $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
-          }
-          else {
-            $payload | gh api --method POST "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments" --input -
-          }
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output '::warning title=PR failure comment was not posted::The pull request comment API request failed.'
-          }
-      - name: Resolve integration failure comment
-        if: ${{ success() && steps.credentials.outputs.available == 'true' && steps.integration.outcome == 'success' && github.event_name == 'pull_request' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          $marker = '<!-- ghpmv-live-api-failure -->'
-          $commentsJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues/$env:PR_NUMBER/comments?per_page=100"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output '::warning title=PR failure comment was not resolved::Could not list existing pull request comments.'
-            exit 0
-          }
-          $comments = @($commentsJson | ConvertFrom-Json | ForEach-Object { $_ })
-          $comment = @($comments | Where-Object {
-            $_.user.login -eq 'github-actions[bot]' -and $_.body.Contains($marker, [StringComparison]::Ordinal)
-          } | Select-Object -Last 1)
-          if ($comment.Count -eq 0) {
-            Write-Output 'No prior Live GitHub API failure comment exists.'
-            exit 0
-          }
-
-          $body = @"
-          $marker
-          ### Live GitHub API check recovered
-
-          The Live GitHub API check passed on the [latest Actions run]($env:RUN_URL).
-          "@
-          $payload = @{ body = $body.Trim() } | ConvertTo-Json -Compress
-          $payload | gh api --method PATCH "repos/$env:REPOSITORY/issues/comments/$($comment[0].id)" --input -
-          if ($LASTEXITCODE -ne 0) {
-            Write-Output '::warning title=PR failure comment was not resolved::The pull request comment API request failed.'
-            exit 0
-          }
-      - name: Upload integration test results
-        if: ${{ failure() && steps.credentials.outputs.available == 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: live-api-test-results
-          path: tests/Ghpmv.Integration.Tests/TestResults/**
-          if-no-files-found: warn
-          retention-days: 7
