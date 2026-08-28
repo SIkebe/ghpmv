@@ -287,17 +287,22 @@ dotnet run --project src/Ghpmv.Cli -c Release --no-build -- login --profile targ
 
 ## 5. Source fixture の作成
 
-### 5.1 API で作れる部分を C# で作成
+### 5.1 API / browser fixture を combined setup で作成
 
 ```powershell
 dotnet run --project src/Ghpmv.Cli -- setup `
   --fixture `
+  --fixture-ui `
   --fixture-org $env:GHPMV_SOURCE_ORG `
   --fixture-title gpm-fixture `
   --fixture-repo $env:GHPMV_FIXTURE_REPO `
   --fixture-team <dedicated-source-team-slug> `
-  --token $env:GHPMV_SOURCE_TOKEN
+  --fixture-require-new `
+  --token $env:GHPMV_SOURCE_TOKEN `
+  --browser-profile source
 ```
+
+この combined command は repository / fields / items / Status Updates に加え、Roadmap rendering 検証に必要な長い dated item、Views、Workflows、browser-only settings を同じ owned operation で作成します。`--fixture-require-new` により同名 Project / repository が存在する場合は書き込み前に停止します。
 
 出力された Project URL と project number を控えます。
 
@@ -306,38 +311,13 @@ Source project URL: https://github.com/orgs/<source-org>/projects/<source-projec
 Source project number: <source-project-number>
 ```
 
-### 5.2 View / Workflow fixture を GraphQL API + C# / Playwright で作成する
+### 5.2 View / Workflow fixture の適用と再開
 
-`ghpmv setup --fixture` は repository / fields / items / Status Updates までを作ります。`--fixture-require-new` を指定した新規 E2E fixture では、Project の Date / Iteration 値を実行週の月曜日を基準に配置し、Roadmap の初期表示範囲内で確認できるようにします。基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。続けて `ghpmv setup --fixture-ui` を実行すると、Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap、非自明な tab order、Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。Roadmap の shared display option などbrowser storageに保持される設定は、書き込み後に同じbrowser profileへ保存され、後続のfresh contextでも再利用されます。
+5.1 の combined command は Views の基本設定を GraphQL API で作成・更新し、group/sort/slice/roadmap、非自明な tab order、Workflows を C# の `ViewUiImporter` / `WorkflowUiImporter` が Playwright で補完します。Project の Date / Iteration 値は実行週の月曜日を基準に配置され、基準日は operation log に保存されるため、日をまたいだ再実行でも変わりません。Roadmap の shared display option などbrowser storageに保持される設定は、書き込み後に同じbrowser profileへ保存され、後続のfresh contextでも再利用されます。
 
-```powershell
-dotnet run --project src/Ghpmv.Cli -- setup `
-  --fixture-ui `
-  --fixture-org $env:GHPMV_SOURCE_ORG `
-  --fixture-project <source-project-number> `
-  --fixture-repo $env:GHPMV_FIXTURE_REPO `
-  --token $env:GHPMV_SOURCE_TOKEN `
-  --browser-profile source
-```
+5.1 の command が途中で失敗した場合は、同じ title / repository / browser profileを指定した同じ combined commandを再実行します。この操作が所有する Project は、前回の UI 適用が未完了なら再開し、完了済みならskipします。marker-aware retryを迂回して`--fixture-ui --fixture-project`へ切り替えないでください。
 
-API-backed fixture 作成と UI-only fixture 作成を 1 回で実行する場合は、`--fixture` と `--fixture-ui` を併用できます。この場合、`--fixture-project` は不要です。
-
-```powershell
-dotnet run --project src/Ghpmv.Cli -- setup `
-  --fixture `
-  --fixture-ui `
-  --fixture-org $env:GHPMV_SOURCE_ORG `
-  --fixture-title gpm-fixture `
-  --fixture-repo $env:GHPMV_FIXTURE_REPO `
-  --token $env:GHPMV_SOURCE_TOKEN `
-  --browser-profile source
-```
-
-`--fixture --fixture-ui` の再実行では、別の操作で作成された同名 Project は Workflows の重複作成を避けるため UI 適用を自動で skip します。この操作が所有する Project は、前回の UI 適用が未完了なら再開し、完了済みなら skip します。既存 Project に fixture を強制的に再適用する場合だけ、`--fixture` を外して `--fixture-ui --fixture-project <source-project-number>` を明示してください。
-
-> **再実行時の注意:** `setup --fixture-ui` の View import は既存 View を名前で再利用するため、`Fixture Board` / `Fixture Roadmap` は重複しません。Workflows は built-in entries を再設定できますが、複製した Auto-add workflow は重複し得るため、完全にクリーンな検証には新しい fixture Project を使用してください。
->
-> `--fixture-ui --fixture-project` を単独で使う既存 Project は、Roadmap rendering 検証用の長い dated item を含む必要があります。含まれない場合は書き込み前に停止するため、`setup --fixture --fixture-ui` で browser fixture を作成してください。
+> **既存 Project への明示適用:** `--fixture-ui --fixture-project` を単独で使えるのは、Roadmap rendering 検証用の長い dated itemとDate / Iteration値を既に含むProjectだけです。通常のE2Eでは使用せず、新しいcombined fixtureを作成してください。
 
 このコマンドは、既存 Project に対して標準テスト用の以下を作成します。
 
