@@ -73,7 +73,7 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Iteration Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
   - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
@@ -139,3 +139,14 @@ Important limitations:
 8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
 10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)
+
+## Board column limit UI contract (2026-08-28)
+
+GitHub公式手順では、Board列名の横にあるcontext menu(`aria-label="Column context menu"`のiconを含むbutton)からmenuitem `Set column limit`を開く。`Column limit` inputへ正整数を入力してdialog内の`Save`を押すと直ちに永続化され、View-levelの`Save view`は不要。上限削除はinputを空にして同じ`Save`を押す。
+
+- 上限ありの列はheaderに`<current count> / <limit>`を表示し、current countがlimitを超えるとhighlightされる。上限はsoft limitであり、item追加やautomationを禁止しない。
+- 上限なしはinputが空で、snapshotではentryを作らない。Board capture成功時に全列が上限なしなら`boardColumnLimits=[]`、UIを読めなかった場合は`null`として区別する。
+- 列identityは`verticalGroupByFields`のfield名とSingle-select option名またはIteration title。source option/iteration node IDは保存しない。
+- selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、counter DOMは公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
+
+公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#setting-a-limit-on-the-number-of-items-in-a-column

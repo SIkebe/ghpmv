@@ -903,6 +903,7 @@ public sealed class ProjectVerifier
                 CompareViewApi(name, s[0], t[0], differences);
                 if (s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
                 {
+                    WarnIfBoardLimitsNotCaptured(name, sourceUi, targetUi, differences, notVerified);
                     CompareViewUi(name, sourceUi, targetUi, differences);
                 }
                 else
@@ -942,8 +943,62 @@ public sealed class ProjectVerifier
                     AddError(differences, ViewCategory,
                         $"views named '{name}': combined API and UI settings do not match");
                 }
+
+                if (HasUncapturedTargetBoardLimits(s, t))
+                {
+                    notVerified.Add(ViewCategory);
+                    Add(differences, VerifySeverity.Warning, ViewCategory,
+                        $"views named '{name}': Board column limits were captured in the source but could not all be read from the target");
+                }
+            }
+
+        }
+    }
+
+    private static bool HasUncapturedTargetBoardLimits(
+        IReadOnlyList<ViewSnapshot> source,
+        IReadOnlyList<ViewSnapshot> target)
+    {
+        var availableTargets = target.ToList();
+        foreach (var sourceView in source.Where(view => view.Ui?.BoardColumnLimits is not null))
+        {
+            var capturedIndex = availableTargets.FindIndex(targetView =>
+                targetView.Ui?.BoardColumnLimits is not null
+                && ViewApiEquals(sourceView, targetView)
+                && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetView.Ui));
+            if (capturedIndex >= 0)
+            {
+                availableTargets.RemoveAt(capturedIndex);
+                continue;
+            }
+
+            if (availableTargets.Any(targetView =>
+                    targetView.Ui is not null
+                    && ViewApiEquals(sourceView, targetView)
+                    && ViewUiEqualsWithoutBoardLimits(sourceView.Ui!, targetView.Ui)))
+            {
+                return true;
             }
         }
+
+        return false;
+    }
+
+    private static void WarnIfBoardLimitsNotCaptured(
+        string name,
+        ViewUiSnapshot source,
+        ViewUiSnapshot target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source.BoardColumnLimits is null || target.BoardColumnLimits is not null)
+        {
+            return;
+        }
+
+        notVerified.Add(ViewCategory);
+        Add(differences, VerifySeverity.Warning, ViewCategory,
+            $"view '{name}': Board column limits were captured in the source but could not be read from the target");
     }
 
     private static void CompareViewOrder(
@@ -1022,9 +1077,32 @@ public sealed class ProjectVerifier
                 && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
 
     private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
+        => ViewUiEqualsWithoutBoardLimits(source, target)
+            && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits);
+
+    private static bool ViewUiEqualsWithoutBoardLimits(ViewUiSnapshot source, ViewUiSnapshot target)
         => string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
             && UiListEquals(source.FieldSum, target.FieldSum)
             && RoadmapEquals(source.Roadmap, target.Roadmap);
+
+    private static bool BoardColumnLimitsEqual(
+        IReadOnlyList<BoardColumnLimitSnapshot>? source,
+        IReadOnlyList<BoardColumnLimitSnapshot>? target)
+    {
+        if (source is null || target is null)
+        {
+            return true;
+        }
+
+        return MultisetEquals(source, target, (sourceLimit, targetLimit) =>
+            SameBoardColumn(sourceLimit, targetLimit)
+            && sourceLimit.Limit == targetLimit.Limit);
+    }
+
+    private static bool SameBoardColumn(BoardColumnLimitSnapshot source, BoardColumnLimitSnapshot target)
+        => string.Equals(source.FieldName, target.FieldName, StringComparison.Ordinal)
+            && string.Equals(source.SingleSelectOptionName, target.SingleSelectOptionName, StringComparison.Ordinal)
+            && string.Equals(source.IterationTitle, target.IterationTitle, StringComparison.Ordinal);
 
     private static bool RoadmapEquals(RoadmapSettingsSnapshot? source, RoadmapSettingsSnapshot? target)
         => source is null && target is null
@@ -1110,6 +1188,8 @@ public sealed class ProjectVerifier
                 $"view '{name}': field sum mismatch (source [{JoinUi(source.FieldSum)}], target [{JoinUi(target.FieldSum)}])");
         }
 
+        CompareBoardColumnLimits(name, source.BoardColumnLimits, target.BoardColumnLimits, differences);
+
         if ((source.Roadmap is null) != (target.Roadmap is null))
         {
             AddError(differences, ViewCategory,
@@ -1140,6 +1220,47 @@ public sealed class ProjectVerifier
                 targetRoadmap.ShowDateFields);
         }
     }
+
+    private static void CompareBoardColumnLimits(
+        string name,
+        IReadOnlyList<BoardColumnLimitSnapshot>? source,
+        IReadOnlyList<BoardColumnLimitSnapshot>? target,
+        List<VerifyDifference> differences)
+    {
+        if (source is null || target is null)
+        {
+            return;
+        }
+
+        foreach (var sourceLimit in source)
+        {
+            var targetLimit = target.FirstOrDefault(candidate => SameBoardColumn(sourceLimit, candidate));
+            if (targetLimit is null)
+            {
+                AddError(differences, ViewCategory,
+                    $"view '{name}': Board limit mismatch for {DescribeBoardColumn(sourceLimit)} (source {sourceLimit.Limit}, target unlimited)");
+            }
+            else if (sourceLimit.Limit != targetLimit.Limit)
+            {
+                AddError(differences, ViewCategory,
+                    $"view '{name}': Board limit mismatch for {DescribeBoardColumn(sourceLimit)} (source {sourceLimit.Limit}, target {targetLimit.Limit})");
+            }
+        }
+
+        foreach (var targetLimit in target.Where(targetLimit =>
+                     !source.Any(sourceLimit => SameBoardColumn(sourceLimit, targetLimit))))
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': Board limit mismatch for {DescribeBoardColumn(targetLimit)} (source unlimited, target {targetLimit.Limit})");
+        }
+    }
+
+    private static string DescribeBoardColumn(BoardColumnLimitSnapshot limit)
+        => limit.SingleSelectOptionName is { } optionName
+            ? $"Single-select column '{limit.FieldName}' / '{optionName}'"
+            : limit.IterationTitle is { } iterationTitle
+                ? $"Iteration column '{limit.FieldName}' / '{iterationTitle}'"
+                : $"unidentified column for field '{limit.FieldName}'";
 
     private static void CompareUiBoolean(
         List<VerifyDifference> differences,

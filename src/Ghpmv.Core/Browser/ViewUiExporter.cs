@@ -73,7 +73,14 @@ public sealed class ViewUiExporter
             ViewUiSnapshot? ui = null;
             try
             {
-                ui = await ReadViewUiAsync(page, ownerLogin, ownerType, projectNumber, view, cancellationToken).ConfigureAwait(false);
+                ui = await ReadViewUiAsync(
+                    page,
+                    ownerLogin,
+                    ownerType,
+                    projectNumber,
+                    view,
+                    snapshot.Fields,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
@@ -106,6 +113,7 @@ public sealed class ViewUiExporter
         ProjectOwnerType ownerType,
         int projectNumber,
         ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
         CancellationToken cancellationToken)
     {
         var url = BrowserProjectUrl.Build(
@@ -155,11 +163,37 @@ public sealed class ViewUiExporter
         }
 
         await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+        IReadOnlyList<BoardColumnLimitSnapshot>? boardColumnLimits = null;
+        if (string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal))
+        {
+            if (BoardColumnLimitUi.CanCapture(view, fields, out var reason))
+            {
+                try
+                {
+                    boardColumnLimits = await BoardColumnLimitUi.ReadAsync(
+                        page,
+                        view,
+                        fields,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+                {
+                    _warnings.Add(
+                        $"view '{view.Name}': Board column limits were not captured — {exception.Message}");
+                }
+            }
+            else
+            {
+                _warnings.Add(
+                    $"view '{view.Name}': Board column limits were not captured — {reason}");
+            }
+        }
 
         return new ViewUiSnapshot
         {
             SliceBy = sliceBy,
             FieldSum = fieldSum,
+            BoardColumnLimits = boardColumnLimits,
             Roadmap = roadmap,
             ScrapedAt = DateTimeOffset.UtcNow,
         };

@@ -126,7 +126,7 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 
 Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
-Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
+Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Iteration Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
 
 ---
 
@@ -323,11 +323,12 @@ Source project number: <source-project-number>
 
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
-  - `Fixture Board`: Board、Column by、Swimlanes、Field sum
+  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma=unlimited`)
+  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`)
   - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、shared `Truncate titles`=on、`Show date fields`=off。fixture は truncation 確認用の長い draft title を含む
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
   - `Fixture Roadmap Dates Hidden`: grouped Roadmap、`Truncate titles`=on、`Show date fields`=off
-  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden`
+  - tab order: `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Iteration Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden`
 - Workflows
   - item state 系 built-in workflows
   - `Auto-add to project`
@@ -344,7 +345,7 @@ Source project number: <source-project-number>
 
 Views:
 
-- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` の順に並べる
+- タブを `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Iteration Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` の順に並べる
 - `View 1` (Table)
   - filter=`status:Todo`
   - visible fields を標準 fixture に合わせる
@@ -356,6 +357,10 @@ Views:
   - Column by=`Fixture Select`
   - Swimlanes=`Status`
   - Field sum=`Fixture Number`
+  - Column limits: `Alpha=1`, `Beta=2`, `Gamma=unlimited`
+- `Fixture Iteration Board` (Board)
+  - Column by=`Fixture Sprint`
+  - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
 - `Fixture Roadmap` (Roadmap)
   - group by Status
   - Field sum=`Fixture Number 2`
@@ -489,7 +494,8 @@ dotnet run --project src/Ghpmv.Cli -- export `
 - 各 View の `tabPosition` が 0 から始まる source UI 順で保存され、view `number` 順とは独立している。
 - `snapshot.json` の View UI 設定が 5.2 の標準 fixture と一致する。
   - `View 1`: `fieldSum=["Count","Fixture Number","Fixture Number 2"]`
-  - `Fixture Board`: `fieldSum=["Fixture Number"]`
+  - `Fixture Board`: `fieldSum=["Fixture Number"]`, `boardColumnLimits=[Fixture Select/Alpha=1, Fixture Select/Beta=2]`
+  - `Fixture Iteration Board`: `fieldSum=[]`, `boardColumnLimits=[Fixture Sprint/Sprint 0=1, Fixture Sprint/Sprint 1=3]`
   - `Fixture Roadmap`: `fieldSum=["Fixture Number 2"]`
   - `Fixture Empty Sums`: `fieldSum=[]`（submenu を取得できた空選択。control/submenu を取得できない場合は View UI 未取得 warning）
   - `Fixture Roadmap Dates Hidden`: `fieldSum=["Fixture Number 2"]`, `truncateTitles=true`, `showDateFields=false`
@@ -499,9 +505,10 @@ dotnet run --project src/Ghpmv.Cli -- export `
 ```powershell
 $snapshot = Get-Content "$env:GHPMV_SNAPSHOT_DIR/snapshot.json" -Raw | ConvertFrom-Json
 $snapshot.views |
-  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Roadmap', 'Fixture Empty Sums', 'Fixture Roadmap Dates Hidden') |
+  Where-Object name -in @('View 1', 'Fixture Board', 'Fixture Iteration Board', 'Fixture Roadmap', 'Fixture Empty Sums', 'Fixture Roadmap Dates Hidden') |
   Select-Object name, groupByFields,
     @{ Name = 'fieldSum'; Expression = { @($_.ui.fieldSum) -join ', ' } },
+    @{ Name = 'boardColumnLimits'; Expression = { @($_.ui.boardColumnLimits | ForEach-Object { "$($_.fieldName)/$($_.singleSelectOptionName)$($_.iterationTitle)=$($_.limit)" }) -join ', ' } },
     @{ Name = 'truncateTitles'; Expression = { $_.ui.roadmap.truncateTitles } },
     @{ Name = 'showDateFields'; Expression = { $_.ui.roadmap.showDateFields } }
 ```
@@ -631,7 +638,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile target
 ```
 
-`Rendered Field sums verified` が3 Viewに出力され、最後に `Fixture field-sum rendering verified: project=#<target-project-number> views=3` と exit code 0 になることを確認します。
+`Rendered Field sums verified`、`Rendered Board limits verified` が対象Viewに出力され、最後に `Fixture field-sum and Board-limit rendering verified: project=#<target-project-number>` と exit code 0 になることを確認します。両Boardで数値上限、unlimited列、limit=1を超えるcountを機械確認します。
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-roadmap-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baseline `(true,false)` から titleだけを `(false,false)` へ変更します。
 5. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `truncate titles mismatch` だけを確認します。続けて `--fixture-roadmap-title-display-render-check` を実行し、full title / hidden datesをDOMで確認します。
@@ -696,12 +703,15 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 - [ ] Table view の filter / visible fields / sort / group by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
+- [ ] Single-select / Iteration Boardの複数列上限とunlimited列が一致し、limit=1の列はitem count超過表示になる。
+- [ ] targetで`Fixture Board`のAlpha上限を変更しBeta上限をclearすると、verifyが両logical columnを区別して検出する。
+- [ ] 同じsnapshot/targetへ再importすると上限が復元され、Item categoryには移動・field value変更がない。
 - [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
 - [ ] Roadmap の長い title と date-field 表示が source/target で一致し、reload 後も維持される。
 - [ ] `setup --fixture-roadmap-display-drift` がtitleだけを `(false,false)` へ変更し、title mismatchとfull-title/hidden-date DOMを確認後、再 importで復元される。
 - [ ] `setup --fixture-roadmap-date-display-drift` がdateだけを `(true,true)` へ変更し、date mismatchとtruncated-title/visible-date DOMを確認後、再 importで復元される。
 - [ ] View 名が一致。
-- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` で一致。
+- [ ] View tab order が `Fixture Roadmap` → `View 1` → `Fixture Board` → `Fixture Iteration Board` → `Fixture Empty Sums` → `Fixture Roadmap Dates Hidden` で一致。
 - [ ] 通常幅とタブが画面幅を超える狭い幅の両方で source/target 順が一致。
 - [ ] import を再実行しても既に正しい tab order は変化しない。
 

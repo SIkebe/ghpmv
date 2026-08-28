@@ -23,6 +23,7 @@ GraphQL と Playwright を組み合わせた View・Workflow 移行の詳細設�
 | 表示フィールドと列順 | **GraphQL** `ProjectV2View.configuration.visibleFields` | **GraphQL** `ProjectV2ViewConfigurationInput.visibleFieldIds` | target field ID へ名前で remap |
 | group-by(Table)/ swimlane(Board) | GraphQL `groupByFields` | **UI** | |
 | Board の列フィールド | GraphQL `verticalGroupByFields` | **UI**("Column by") | |
+| **Board 列ごとのカード上限** | ❌ API に無い → **UI で読む** | **UI**(各列の context menu → "Set column limit") | nullable complete-set。field名 + Single-select option名 / Iteration titleで識別し、null=未取得、空集合=取得済み上限なし |
 | sort(複数キー+方向) | GraphQL `sortByFields`(`ProjectV2SortByField.direction`) | **UI** | |
 | **Slice by** | ❌ API に無い → **UI で読む** | **UI** | |
 | **Field sum** | ❌ API に無い → **UI で読む** | **UI** | Board と grouped Table / Roadmap。Count、複数 Number field、空集合を complete-set 同期 |

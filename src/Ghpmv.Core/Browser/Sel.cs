@@ -20,6 +20,9 @@ internal static class Sel
     // Filter-bar "View" button. D0: once a setting is changed the accessible name
     // becomes "Unsaved changes View", so an exact "View" match only works before edits.
     private static readonly Regex ViewMenuButtonName = new("^(Unsaved changes )?View$");
+    private static readonly Regex BoardColumnLimitControlName = new(
+        "column limit",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>Filter-bar "View" button that opens the view configuration menu.</summary>
     public static ILocator ViewMenuButton(IPage page)
@@ -70,6 +73,53 @@ internal static class Sel
     /// <summary>Status exposed while the current View has client-side changes that are not saved.</summary>
     public static ILocator UnsavedChangesStatus(IPage page)
         => page.GetByRole(AriaRole.Status, new() { Name = "Unsaved changes", Exact = true }).Last;
+
+    /// <summary>Actions buttons for the currently displayed Board columns.</summary>
+    public static ILocator BoardColumnActionsButtons(IPage page)
+        => page.Locator("button:has([aria-label='Column context menu'])");
+
+    /// <summary>The actions button for one displayed Board column.</summary>
+    public static ILocator BoardColumnActionsButton(IPage page, string columnName)
+        => page.GetByRole(AriaRole.Heading, new() { Name = columnName, Exact = true })
+            .First
+            .Locator(
+                "xpath=ancestor::*[.//button[.//*[@aria-label='Column context menu']]][1]")
+            .Locator("button:has([aria-label='Column context menu'])")
+            .First;
+
+    /// <summary>"Set column limit" in an open Board column menu.</summary>
+    public static ILocator BoardColumnLimitMenuItem(IPage page)
+        => page.GetByRole(AriaRole.Menuitem, new() { Name = "Set column limit", Exact = true }).Last;
+
+    /// <summary>Numeric input used to set, change, or clear a Board column limit.</summary>
+    public static ILocator BoardColumnLimitInput(IPage page)
+        => page.GetByRole(AriaRole.Spinbutton, new() { NameRegex = BoardColumnLimitControlName })
+            .Or(page.GetByRole(AriaRole.Textbox, new() { NameRegex = BoardColumnLimitControlName }))
+            .First;
+
+    /// <summary>The closest column-limit overlay containing the numeric input and Save button.</summary>
+    public static ILocator BoardColumnLimitOverlay(ILocator input)
+        => input.Locator(
+            "xpath=ancestor::*[.//button[normalize-space()='Save']][1]");
+
+    /// <summary>Save button within the Board column-limit overlay.</summary>
+    public static ILocator BoardColumnLimitSaveButton(ILocator overlay)
+        => overlay.GetByRole(AriaRole.Button, new() { Name = "Save", Exact = true });
+
+    /// <summary>Rendered Board column containing the supplied actions button.</summary>
+    public static ILocator BoardColumn(ILocator actionsButton)
+        => actionsButton.Locator(
+            "xpath=ancestor::*[.//*[@role='heading'] and .//button[.//*[@aria-label='Column context menu']]][1]");
+
+    /// <summary>The option or iteration title heading for a displayed Board column.</summary>
+    public static ILocator BoardColumnHeading(ILocator actionsButton)
+        => BoardColumn(actionsButton).GetByRole(AriaRole.Heading).First;
+
+    /// <summary>Rendered "current cards / limit" counter in a limited Board column.</summary>
+    public static ILocator BoardColumnLimitCounter(ILocator column)
+        => column.GetByText(new Regex(
+            @"^\s*\d+\s*/\s*\d+\s*$",
+            RegexOptions.CultureInvariant)).First;
 
     /// <summary>Visible grouped Table/Roadmap header contents containing count and aggregate labels.</summary>
     public static ILocator GroupHeaderContents(IPage page)
