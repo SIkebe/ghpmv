@@ -585,21 +585,21 @@ public sealed class ViewUiImporter
                 var source = Sel.DraggableViewTab(page, move.ViewNumber);
                 var anchor = Sel.DraggableViewTab(page, move.AnchorViewNumber);
                 await source.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-                await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-                var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
-                    ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
                 var sourceBox = await source.BoundingBoxAsync().ConfigureAwait(false)
                     ?? throw new InvalidOperationException($"view tab '{names[move.ViewNumber]}' has no visible bounding box");
                 var sourceX = sourceBox.X + sourceBox.Width / 2;
                 var sourceY = sourceBox.Y + sourceBox.Height / 2;
-                var targetX = anchorBox.X + (move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2));
-                var targetY = anchorBox.Y + anchorBox.Height / 2;
                 await page.Mouse.MoveAsync(sourceX, sourceY).ConfigureAwait(false);
                 await page.Mouse.DownAsync().ConfigureAwait(false);
                 try
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
                     await page.Mouse.MoveAsync(sourceX + 8, sourceY, new() { Steps = 4 }).ConfigureAwait(false);
+                    await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
+                    var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
+                    var targetX = anchorBox.X + (move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2));
+                    var targetY = anchorBox.Y + anchorBox.Height / 2;
                     await page.Mouse.MoveAsync(targetX, targetY, new() { Steps = 12 }).ConfigureAwait(false);
                     await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
                 }
