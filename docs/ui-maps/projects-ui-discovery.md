@@ -73,12 +73,13 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
 ## フィクスチャー最終状態(gpm-source/projects/3)
 
 - Views:
-  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
+  - tab order=Fixture Roadmap → View 1 → Fixture Board → Fixture Iteration Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden
   - 1=View 1 (TABLE): filter=`status:Todo`, Group by=Status, Sort by=Fixture Number (asc), Slice by=Fixture Select, Field sum=[Count, Fixture Number, Fixture Number 2], visibleFields=既定 5 + Fixture Text + Fixture Date(Fixture Number はソート由来の仮想列のため visibleFields に入らない — 下記 E2E 知見 8)
   - 2=Fixture Board (BOARD): Column by=Fixture Select, Swimlanes=Status(GraphQL groupByFields に反映), Field sum=`Fixture Number` (Count は uncheck 済み)
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
   - 5=Fixture Roadmap Dates Hidden (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Truncate titles=on, Show date fields=off
+  - 6=Fixture Iteration Board (BOARD): Column by=Fixture Sprint, Sprint 0=1, Sprint 1=3, Sprint 2/3=unlimited
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
@@ -136,6 +137,17 @@ Important limitations:
 5. **Roadmap の親 menu には表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Markers / Field sum の子 menu。子 menu の checkbox 操作は最後に開いた menu へ scope し、親 menu の表示設定を誤操作しない。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
 6. **未保存 workflow のページには enable toggle が存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID だが、この ID は GraphQL workflow number とは独立している。export は GraphQL の enabled 値を使い、詳細ページはサイドバーの name 一致 link で開く。toggle の accessible name も workflow 名とは限らないため、import は main detail pane 内の stateful control (`aria-pressed` / `aria-checked` / checkbox) へ fallback する
 7. **未保存 disabled workflow は Edit → "Save and turn on workflow"(設定変更なしでも押せる)→ トグル off で「保存済み disabled」にできる**。未保存状態には toggle がないため、設定値が既に一致する enabled workflow も toggle を探さずこの保存経路で有効化する。保存済み disabled workflow は GraphQL の `workflows` に enabled=false で現れ、閲覧モードで設定値も読める(export 可能)。import は未保存の場合にこの save-once 経路を通す(WorkflowUiImporter.ApplyBuiltInAsync / ApplyDisabledAsync)
-8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
+8. **ソートキーのフィールドは仮想列として表示できる**: hidden fieldをsortに指定するとき、importはFieldsオーバーレイで一時的にshowしてsortを適用し、sourceの`visibleFields`に含まれなければ再びhideする。仮想列をhideしてもsortは維持され、GraphQL `visibleFields`にも永続化されない。元からvisibleなsort fieldはhideしない
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
 10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)
+
+## Board column limit UI contract (2026-08-28)
+
+GitHub公式手順では、Board列名の横にあるcontext menuから列上限を設定する。2026-08-31の実DOMではbuttonのaccessible nameは外部tooltipを参照する`Actions for column: <column>`、menuitemは`Set limit`。`Column limit` inputへ正整数を入力してdialog内の`Save`を押すと直ちに永続化され、View-levelの`Save view`は不要。上限削除はinputを空にして同じ`Save`を押す。
+
+- 上限はsoft limitであり、item追加やautomationを禁止しない。2026-08-31のswimlane付きBoardではheaderに`<current count> / <limit>`テキストが描画されないため、render checkはdialogから上限値をread-backし、同じ`data-board-column`を持つcell内の`data-board-card-id`を数えてlimit超過を確認する。
+- 上限なしはinputが空で、snapshotではentryを作らない。Board capture成功時に全列が上限なしなら`boardColumnLimits=[]`、UIを読めなかった場合は`null`として区別する。
+- 列identityは`verticalGroupByFields`のfield名とSingle-select option名またはIteration title。source option/iteration node IDは保存しない。
+- selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、`data-board-column`/`data-board-card-id`は公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
+
+公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#setting-a-limit-on-the-number-of-items-in-a-column

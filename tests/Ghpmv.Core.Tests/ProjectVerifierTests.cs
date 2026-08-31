@@ -115,6 +115,19 @@ public class ProjectVerifierTests
     private static IterationSnapshot Iteration(string id, string title, string startDate, int duration = 14)
         => new() { Id = id, Title = title, StartDate = startDate, Duration = duration };
 
+    private static BoardColumnLimitSnapshot Limit(
+        string fieldName,
+        int limit,
+        string? option = null,
+        string? iteration = null)
+        => new()
+        {
+            FieldName = fieldName,
+            SingleSelectOptionName = option,
+            IterationTitle = iteration,
+            Limit = limit,
+        };
+
     private static ItemSnapshot DraftItem(int position, string title, string? body, string? status, bool archived = false) => new()
     {
         Type = "DRAFT_ISSUE",
@@ -869,6 +882,216 @@ public class ProjectVerifierTests
         Assert.Contains(report.Categories, category =>
             category.Category == "View" && category.Status == VerifyStatus.NotVerified);
         Assert.False(report.IsMatch);
+    }
+
+    [Fact]
+    public void Board_column_limits_compare_by_logical_identity_and_report_each_drift()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits =
+                [
+                    Limit("Status", option: "Todo", limit: 1),
+                    Limit("Status", option: "In Progress", limit: 2),
+                ],
+            },
+        };
+        var source = baseline with { Views = [sourceBoard] };
+        var target = baseline with
+        {
+            Views =
+            [
+                sourceBoard with
+                {
+                    Number = 9,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits =
+                        [
+                            Limit("Status", option: "Todo", limit: 3),
+                            Limit("Status", option: "Done", limit: 4),
+                        ],
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+        var differences = report.Differences
+            .Where(difference => difference.Category == "View"
+                && difference.Message.Contains("Board limit mismatch", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'Todo' (source 1, target 3)", StringComparison.Ordinal));
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'In Progress' (source 2, target unlimited)", StringComparison.Ordinal));
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'Done' (source unlimited, target 4)", StringComparison.Ordinal));
+        Assert.Equal(3, differences.Count);
+    }
+
+    [Fact]
+    public void Legacy_uncaptured_Board_limits_do_not_compare_target_state()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                    },
+                },
+            ],
+        };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, target).Differences, difference =>
+            difference.Category == "View");
+    }
+
+    [Fact]
+    public void Captured_Board_limits_are_not_verified_when_target_capture_is_unavailable()
+    {
+        var baseline = BuildSnapshot();
+        var source = baseline with
+        {
+            Views =
+            [
+                baseline.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                    },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views = [source.Views[0] with { Ui = new ViewUiSnapshot() }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column limits", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Duplicate_views_with_matching_captured_and_legacy_limit_states_are_verified()
+    {
+        var baseline = BuildSnapshot();
+        var captured = baseline.Views[0] with
+        {
+            Number = 1,
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+            },
+        };
+        var legacy = captured with
+        {
+            Number = 2,
+            Filter = "status:Done",
+            Ui = new ViewUiSnapshot(),
+        };
+        var source = baseline with { Views = [captured, legacy] };
+        var target = baseline with
+        {
+            Views =
+            [
+                legacy with { Number = 8 },
+                captured with { Number = 9 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View");
+    }
+
+    [Fact]
+    public void Duplicate_views_report_uncaptured_limits_when_other_captured_limits_differ()
+    {
+        var baseline = BuildSnapshot();
+        var captured = baseline.Views[0] with
+        {
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+            },
+        };
+        var legacy = captured with { Ui = new ViewUiSnapshot() };
+        var source = baseline with { Views = [captured, legacy] };
+        var target = baseline with
+        {
+            Views =
+            [
+                captured with
+                {
+                    Number = 8,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [Limit("Status", option: "Todo", limit: 2)],
+                    },
+                },
+                legacy with { Number = 9 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column limits", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Duplicate_views_match_captured_limits_before_legacy_wildcards()
+    {
+        var baseline = BuildSnapshot();
+        var capturedA = baseline.Views[0] with
+        {
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+            },
+        };
+        var capturedB = capturedA with
+        {
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 2)],
+            },
+        };
+        var legacy = capturedA with { Ui = new ViewUiSnapshot() };
+        var source = baseline with { Views = [legacy, capturedA] };
+        var target = baseline with
+        {
+            Views = [capturedA with { Number = 8 }, capturedB with { Number = 9 }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View");
     }
 
     [Fact]

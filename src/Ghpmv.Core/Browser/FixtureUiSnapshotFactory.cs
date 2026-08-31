@@ -38,18 +38,37 @@ public static class FixtureUiSnapshotFactory
     }
 
     /// <summary>
-    /// Creates the standard fixture UI snapshot with the deliberate field-sum drift
-    /// used by the browser E2E negative test.
+    /// Creates the standard fixture UI snapshot with deliberate field-sum and Board
+    /// column-limit drift used by the browser E2E negative test.
     /// </summary>
     public static ProjectSnapshot CreateFieldSumDrift(string repositoryName = "fixture-repo")
     {
         var snapshot = Create(repositoryName);
         return snapshot with
         {
-            Views = snapshot.Views.Select(view =>
-                string.Equals(view.Name, "View 1", StringComparison.Ordinal)
-                    ? view with { Ui = view.Ui! with { FieldSum = ["Count", "Fixture Number"] } }
-                    : view).ToList(),
+            Views = snapshot.Views.Select(view => view.Name switch
+            {
+                "View 1" => view with
+                {
+                    Ui = view.Ui! with { FieldSum = ["Count", "Fixture Number"] },
+                },
+                "Fixture Board" => view with
+                {
+                    Ui = view.Ui! with
+                    {
+                        BoardColumnLimits =
+                        [
+                            new BoardColumnLimitSnapshot
+                            {
+                                FieldName = "Fixture Select",
+                                SingleSelectOptionName = "Alpha",
+                                Limit = 5,
+                            },
+                        ],
+                    },
+                },
+                _ => view,
+            }).ToList(),
         };
     }
 
@@ -154,7 +173,50 @@ public static class FixtureUiSnapshotFactory
             ],
             DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Beta" },
         },
-        new FieldSnapshot { Name = "Fixture Sprint", DataType = "ITERATION" },
+        new FieldSnapshot
+        {
+            Name = "Fixture Sprint",
+            DataType = "ITERATION",
+            IterationConfiguration = new IterationConfigurationSnapshot
+            {
+                Duration = 14,
+                StartDay = 1,
+                CompletedIterations =
+                [
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-0",
+                        Title = "Sprint 0",
+                        StartDate = "2026-01-05",
+                        Duration = 14,
+                    },
+                ],
+                Iterations =
+                [
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-1",
+                        Title = "Sprint 1",
+                        StartDate = "2026-01-19",
+                        Duration = 14,
+                    },
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-2",
+                        Title = "Sprint 2",
+                        StartDate = "2026-02-02",
+                        Duration = 14,
+                    },
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-3",
+                        Title = "Sprint 3",
+                        StartDate = "2026-02-16",
+                        Duration = 14,
+                    },
+                ],
+            },
+        },
         new FieldSnapshot
         {
             Name = "Fixture Teams",
@@ -200,6 +262,21 @@ public static class FixtureUiSnapshotFactory
             Ui = new ViewUiSnapshot
             {
                 FieldSum = ["Fixture Number"],
+                BoardColumnLimits =
+                [
+                    new BoardColumnLimitSnapshot
+                    {
+                        FieldName = "Fixture Select",
+                        SingleSelectOptionName = "Alpha",
+                        Limit = 1,
+                    },
+                    new BoardColumnLimitSnapshot
+                    {
+                        FieldName = "Fixture Select",
+                        SingleSelectOptionName = "Beta",
+                        Limit = 2,
+                    },
+                ],
             },
         },
         new ViewSnapshot
@@ -230,7 +307,7 @@ public static class FixtureUiSnapshotFactory
         new ViewSnapshot
         {
             Number = 4,
-            TabPosition = 3,
+            TabPosition = 4,
             Name = "Fixture Empty Sums",
             Layout = "TABLE_LAYOUT",
             Filter = null,
@@ -246,7 +323,7 @@ public static class FixtureUiSnapshotFactory
         new ViewSnapshot
         {
             Number = 5,
-            TabPosition = 4,
+            TabPosition = 5,
             Name = "Fixture Roadmap Dates Hidden",
             Layout = "ROADMAP_LAYOUT",
             Filter = null,
@@ -266,6 +343,37 @@ public static class FixtureUiSnapshotFactory
                     TruncateTitles = true,
                     ShowDateFields = false,
                 },
+            },
+        },
+        new ViewSnapshot
+        {
+            Number = 6,
+            TabPosition = 3,
+            Name = "Fixture Iteration Board",
+            Layout = "BOARD_LAYOUT",
+            Filter = null,
+            GroupByFields = [],
+            SortByFields = [],
+            VerticalGroupByFields = ["Fixture Sprint"],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = [],
+                BoardColumnLimits =
+                [
+                    new BoardColumnLimitSnapshot
+                    {
+                        FieldName = "Fixture Sprint",
+                        IterationTitle = "Sprint 0",
+                        Limit = 1,
+                    },
+                    new BoardColumnLimitSnapshot
+                    {
+                        FieldName = "Fixture Sprint",
+                        IterationTitle = "Sprint 1",
+                        Limit = 3,
+                    },
+                ],
             },
         },
     ];

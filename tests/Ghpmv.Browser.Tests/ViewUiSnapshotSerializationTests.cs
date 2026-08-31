@@ -4,7 +4,7 @@ namespace Ghpmv.Browser.Tests;
 
 /// <summary>
 /// Serialization round-trip for the UI-only view settings added in M6
-/// (<see cref="ViewUiSnapshot"/> incl. slicing, field sums, and roadmap settings).
+/// (<see cref="ViewUiSnapshot"/> incl. slicing, field sums, Board limits, and roadmap settings).
 /// No Playwright required.
 /// </summary>
 public class ViewUiSnapshotSerializationTests
@@ -73,6 +73,48 @@ public class ViewUiSnapshotSerializationTests
                         FieldSum = [],
                     },
                 },
+                new ViewSnapshot
+                {
+                    Number = 6,
+                    Name = "Limited Board",
+                    Layout = "BOARD_LAYOUT",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = ["Fixture Select"],
+                    VisibleFields = [],
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits =
+                        [
+                            new BoardColumnLimitSnapshot
+                            {
+                                FieldName = "Fixture Select",
+                                SingleSelectOptionName = "Alpha",
+                                Limit = 1,
+                            },
+                            new BoardColumnLimitSnapshot
+                            {
+                                FieldName = "Fixture Sprint",
+                                IterationTitle = "Sprint 1",
+                                Limit = 3,
+                            },
+                        ],
+                    },
+                },
+                new ViewSnapshot
+                {
+                    Number = 7,
+                    Name = "Unlimited Board",
+                    Layout = "BOARD_LAYOUT",
+                    GroupByFields = [],
+                    SortByFields = [],
+                    VerticalGroupByFields = ["Fixture Select"],
+                    VisibleFields = [],
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [],
+                    },
+                },
             ],
             Workflows = [],
             Items = [],
@@ -85,7 +127,7 @@ public class ViewUiSnapshotSerializationTests
             await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
             var loaded = await SnapshotFile.LoadAsync(directory, cancellationToken);
 
-            Assert.Equal(3, loaded.Views.Count);
+            Assert.Equal(5, loaded.Views.Count);
 
             var roadmap = loaded.Views[0];
             Assert.NotNull(roadmap.Ui);
@@ -102,8 +144,79 @@ public class ViewUiSnapshotSerializationTests
 
             Assert.Null(loaded.Views[1].Ui);
             Assert.Empty(loaded.Views[2].Ui!.FieldSum!);
+            Assert.Collection(
+                loaded.Views[3].Ui!.BoardColumnLimits!,
+                limit =>
+                {
+                    Assert.Equal("Fixture Select", limit.FieldName);
+                    Assert.Equal("Alpha", limit.SingleSelectOptionName);
+                    Assert.Null(limit.IterationTitle);
+                    Assert.Equal(1, limit.Limit);
+                },
+                limit =>
+                {
+                    Assert.Equal("Fixture Sprint", limit.FieldName);
+                    Assert.Null(limit.SingleSelectOptionName);
+                    Assert.Equal("Sprint 1", limit.IterationTitle);
+                    Assert.Equal(3, limit.Limit);
+                });
+            Assert.Empty(loaded.Views[4].Ui!.BoardColumnLimits!);
         }
 
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Legacy_ui_settings_without_board_limits_load_as_uncaptured()
+    {
+        const string json =
+            """
+            {
+              "schemaVersion": 2,
+              "project": {
+                "title": "Legacy",
+                "public": false,
+                "closed": false,
+                "template": false
+              },
+              "fields": [],
+              "views": [
+                {
+                  "number": 1,
+                  "name": "Board",
+                  "layout": "BOARD_LAYOUT",
+                  "groupByFields": [],
+                  "sortByFields": [],
+                  "verticalGroupByFields": ["Status"],
+                  "visibleFields": [],
+                  "ui": {
+                    "fieldSum": []
+                  }
+                }
+              ],
+              "workflows": [],
+              "items": [],
+              "statusUpdates": [],
+              "linkedRepositories": [],
+              "linkedTeams": []
+            }
+            """;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-browser-tests-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, SnapshotFile.FileName),
+                json,
+                TestContext.Current.CancellationToken);
+
+            var loaded = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
+
+            Assert.Null(Assert.Single(loaded.Views).Ui!.BoardColumnLimits);
+        }
         finally
         {
             Directory.Delete(directory, recursive: true);

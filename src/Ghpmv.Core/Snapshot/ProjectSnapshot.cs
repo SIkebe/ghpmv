@@ -258,9 +258,31 @@ public sealed record ViewUiSnapshot
     /// <summary>Grouped Table, Board, or Roadmap "Field sum" entries (e.g. "Count", number field names).</summary>
     public IReadOnlyList<string>? FieldSum { get; init; }
 
+    /// <summary>
+    /// Explicit per-column soft limits for a Board view. Null means the setting was not
+    /// captured; an empty collection means it was captured and no columns have a limit.
+    /// </summary>
+    public IReadOnlyList<BoardColumnLimitSnapshot>? BoardColumnLimits { get; init; }
+
     public RoadmapSettingsSnapshot? Roadmap { get; init; }
 
     public DateTimeOffset? ScrapedAt { get; init; }
+}
+
+/// <summary>A Board column limit identified without persisting a GitHub node ID.</summary>
+public sealed record BoardColumnLimitSnapshot
+{
+    /// <summary>The Board's vertical group-by field name.</summary>
+    public required string FieldName { get; init; }
+
+    /// <summary>The column option name when <see cref="FieldName"/> is a Single-select field.</summary>
+    public string? SingleSelectOptionName { get; init; }
+
+    /// <summary>The column title when <see cref="FieldName"/> is an Iteration field.</summary>
+    public string? IterationTitle { get; init; }
+
+    /// <summary>The positive soft card limit configured for this column.</summary>
+    public required int Limit { get; init; }
 }
 
 /// <summary>Roadmap-only UI settings (populated in M6 via browser automation).</summary>

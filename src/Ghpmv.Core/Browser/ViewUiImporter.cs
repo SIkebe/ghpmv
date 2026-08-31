@@ -48,6 +48,9 @@ public sealed class ViewUiImporter
 
         var warnings = new List<string>();
         var fieldNames = new HashSet<string>(snapshot.Fields.Select(f => f.Name), StringComparer.Ordinal);
+        var fieldsByName = snapshot.Fields
+            .GroupBy(field => field.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
         foreach (var view in snapshot.Views)
         {
             foreach (var field in view.GroupByFields)
@@ -85,6 +88,8 @@ public sealed class ViewUiImporter
                 }
             }
 
+            CollectBoardColumnLimitWarnings(view, fieldsByName, warnings);
+
             if (view.Ui?.Roadmap is { } roadmap)
             {
                 if (roadmap.StartField is { } startField && !RoadmapFieldExists(fieldNames, startField))
@@ -100,6 +105,117 @@ public sealed class ViewUiImporter
         }
 
         return warnings;
+    }
+
+    private static void CollectBoardColumnLimitWarnings(
+        ViewSnapshot view,
+        Dictionary<string, List<FieldSnapshot>> fieldsByName,
+        List<string> warnings)
+    {
+        if (view.Ui?.BoardColumnLimits is not { } limits)
+        {
+            return;
+        }
+
+        if (!string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal))
+        {
+            warnings.Add($"view '{view.Name}': Board column limits were captured for non-Board layout '{view.Layout}'");
+            return;
+        }
+
+        if (view.VerticalGroupByFields.Count != 1)
+        {
+            warnings.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"view '{view.Name}': Board column limits require exactly one column-by field, found {view.VerticalGroupByFields.Count}"));
+            return;
+        }
+
+        var columnFieldName = view.VerticalGroupByFields[0];
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var limit in limits)
+        {
+            var identityCount = (limit.SingleSelectOptionName is null ? 0 : 1)
+                + (limit.IterationTitle is null ? 0 : 1);
+            if (identityCount != 1)
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit for field '{limit.FieldName}' must identify exactly one Single-select option or Iteration");
+                continue;
+            }
+
+            if (limit.Limit <= 0)
+            {
+                warnings.Add(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"view '{view.Name}': Board column limit for {DescribeColumn(limit)} must be positive, found {limit.Limit}"));
+            }
+
+            if (!string.Equals(limit.FieldName, columnFieldName, StringComparison.Ordinal))
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit for {DescribeColumn(limit)} does not use column-by field '{columnFieldName}'");
+                continue;
+            }
+
+            if (!fieldsByName.TryGetValue(limit.FieldName, out var matchingFields)
+                || matchingFields.Count != 1)
+            {
+                warnings.Add(
+                    $"view '{view.Name}': Board column limit field '{limit.FieldName}' does not uniquely exist in the snapshot");
+                continue;
+            }
+
+            var field = matchingFields[0];
+            string identity;
+            if (limit.SingleSelectOptionName is { } optionName)
+            {
+                identity = $"single-select:{limit.FieldName}:{optionName}";
+                if (!string.Equals(field.DataType, "SINGLE_SELECT", StringComparison.Ordinal))
+                {
+                    warnings.Add(
+                        $"view '{view.Name}': Board column limit for {DescribeColumn(limit)} references field type '{field.DataType}', not SINGLE_SELECT");
+                }
+                else if (field.Options is not null
+                    && !field.Options.Any(option => string.Equals(option.Name, optionName, StringComparison.Ordinal)))
+                {
+                    warnings.Add(
+                        $"view '{view.Name}': Board column limit option '{optionName}' does not exist in field '{limit.FieldName}'");
+                }
+            }
+            else
+            {
+                var iterationTitle = limit.IterationTitle!;
+                identity = $"iteration:{limit.FieldName}:{iterationTitle}";
+                if (!string.Equals(field.DataType, "ITERATION", StringComparison.Ordinal))
+                {
+                    warnings.Add(
+                        $"view '{view.Name}': Board column limit for {DescribeColumn(limit)} references field type '{field.DataType}', not ITERATION");
+                }
+                else if (field.IterationConfiguration is { } configuration
+                    && !configuration.Iterations.Concat(configuration.CompletedIterations)
+                        .Any(iteration => string.Equals(iteration.Title, iterationTitle, StringComparison.Ordinal)))
+                {
+                    warnings.Add(
+                        $"view '{view.Name}': Board column limit iteration '{iterationTitle}' does not exist in field '{limit.FieldName}'");
+                }
+            }
+
+            if (!identities.Add(identity))
+            {
+                warnings.Add($"view '{view.Name}': duplicate Board column limit for {DescribeColumn(limit)}");
+            }
+        }
+    }
+
+    internal static string DescribeColumn(BoardColumnLimitSnapshot limit)
+    {
+        ArgumentNullException.ThrowIfNull(limit);
+        return limit.SingleSelectOptionName is { } optionName
+            ? $"Single-select column '{limit.FieldName}' / '{optionName}'"
+            : limit.IterationTitle is { } iterationTitle
+                ? $"Iteration column '{limit.FieldName}' / '{iterationTitle}'"
+                : $"unidentified column for field '{limit.FieldName}'";
     }
 
     /// <summary>
@@ -145,7 +261,11 @@ public sealed class ViewUiImporter
                     projectNumber,
                     string.Create(CultureInfo.InvariantCulture, $"views/{targetNumber}"));
                 await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-                await ApplyAndVerifyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+                await ApplyAndVerifyBrowserOnlySettingsAsync(
+                    page,
+                    view,
+                    snapshot.Fields,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
@@ -221,6 +341,57 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view '{viewName}': field-sum drift could not be applied — {exception.Message}");
+        }
+    }
+
+    /// <summary>Applies and verifies the complete Board column-limit set for one target View.</summary>
+    public async Task ApplyBoardColumnLimitsAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(fields);
+        var desired = view.Ui?.BoardColumnLimits
+            ?? throw new ArgumentException("The View has no captured Board column-limit state.", nameof(view));
+
+        OnProgress?.Invoke($"Applying Board column-limit drift for view '{view.Name}'...");
+        try
+        {
+            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
+                page,
+                view,
+                fields,
+                desired,
+                cancellationToken).ConfigureAwait(false));
+            var persisted = await BoardColumnLimitUi.ReadAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
+            foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
+            {
+                _warnings.Add($"view '{view.Name}': {difference} did not persist");
+            }
+
+            await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            _warnings.Add($"view '{view.Name}': Board column-limit drift could not be applied — {exception.Message}");
         }
     }
 
@@ -414,17 +585,29 @@ public sealed class ViewUiImporter
                 var source = Sel.DraggableViewTab(page, move.ViewNumber);
                 var anchor = Sel.DraggableViewTab(page, move.AnchorViewNumber);
                 await source.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-                await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
-                var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
-                    ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
-                await source.DragToAsync(anchor, new()
+                var sourceBox = await source.BoundingBoxAsync().ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"view tab '{names[move.ViewNumber]}' has no visible bounding box");
+                var sourceX = sourceBox.X + sourceBox.Width / 2;
+                var sourceY = sourceBox.Y + sourceBox.Height / 2;
+                await page.Mouse.MoveAsync(sourceX, sourceY).ConfigureAwait(false);
+                await page.Mouse.DownAsync().ConfigureAwait(false);
+                try
                 {
-                    TargetPosition = new()
-                    {
-                        X = move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2),
-                        Y = anchorBox.Height / 2,
-                    },
-                }).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
+                    await page.Mouse.MoveAsync(sourceX + 8, sourceY, new() { Steps = 4 }).ConfigureAwait(false);
+                    await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
+                    var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
+                        ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
+                    var targetX = anchorBox.X + (move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2));
+                    var targetY = anchorBox.Y + anchorBox.Height / 2;
+                    await page.Mouse.MoveAsync(targetX, targetY, new() { Steps = 12 }).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await page.Mouse.UpAsync().ConfigureAwait(false);
+                }
+
                 await PauseAsync(token).ConfigureAwait(false);
             },
             token => ReadImportedTabOrderAsync(
@@ -630,6 +813,7 @@ public sealed class ViewUiImporter
     private async Task ApplyBrowserOnlySettingsAsync(
         IPage page,
         ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
         CancellationToken cancellationToken)
     {
         // GraphQL-derived settings. Boards expose their horizontal grouping as the
@@ -656,13 +840,19 @@ public sealed class ViewUiImporter
         // grouping change has been persisted and the View has reloaded.
         await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
 
+        var columnByReady = true;
         if (isBoard && view.VerticalGroupByFields.Count > 0)
         {
-            await TrySetSingleAsync(page, "Column by", view.VerticalGroupByFields[0], view.Name, cancellationToken).ConfigureAwait(false);
+            columnByReady = await TrySetSingleAsync(
+                page,
+                "Column by",
+                view.VerticalGroupByFields[0],
+                view.Name,
+                cancellationToken).ConfigureAwait(false);
         }
         else if (isBoard)
         {
-            await TrySetSingleAsync(
+            columnByReady = await TrySetSingleAsync(
                 page,
                 "Column by",
                 ["None", "No field"],
@@ -671,17 +861,44 @@ public sealed class ViewUiImporter
                 cancellationToken).ConfigureAwait(false);
         }
 
+        if (isBoard && view.Ui?.BoardColumnLimits is { } boardColumnLimits && columnByReady)
+        {
+            // Column limits are saved by their own dialog and require the persisted
+            // Column-by selection to have rendered the target columns first.
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            var warnings = await BoardColumnLimitUi.ApplyAsync(
+                page,
+                view,
+                fields,
+                boardColumnLimits,
+                cancellationToken).ConfigureAwait(false);
+            _warnings.AddRange(warnings);
+        }
+        else if (isBoard && view.Ui?.BoardColumnLimits is not null && !columnByReady)
+        {
+            _warnings.Add(
+                $"view '{view.Name}': Board column limits were not applied because the target column-by field could not be selected");
+        }
+
         if (view.SortByFields.Count > 0)
         {
             var sort = view.SortByFields[0];
             if (!await IsSortAlreadyAppliedAsync(page, sort, cancellationToken).ConfigureAwait(false))
             {
-                await TryEnsureSortFieldVisibleAsync(
+                var sortFieldWasTemporarilyShown = await TryEnsureSortFieldVisibleAsync(
                     page,
                     sort.Field,
                     view.Name,
                     cancellationToken).ConfigureAwait(false);
                 await TrySetSortAsync(page, sort, view.Name, cancellationToken).ConfigureAwait(false);
+                if (ShouldRestoreSortFieldVisibility(view, sort.Field, sortFieldWasTemporarilyShown))
+                {
+                    await TryHideSortFieldAsync(
+                        page,
+                        sort.Field,
+                        view.Name,
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         else
@@ -774,16 +991,21 @@ public sealed class ViewUiImporter
     private async Task ApplyAndVerifyBrowserOnlySettingsAsync(
         IPage page,
         ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<string> differences = [];
         for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
         {
             var warningStart = _warnings.Count;
-            await ApplyBrowserOnlySettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            await ApplyBrowserOnlySettingsAsync(page, view, fields, cancellationToken).ConfigureAwait(false);
             await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
 
-            var persisted = await ReadPersistedSettingsAsync(page, view, cancellationToken).ConfigureAwait(false);
+            var persisted = await ReadPersistedSettingsAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
             differences = CollectPersistenceDifferences(view, persisted);
             if (differences.Count == 0)
             {
@@ -889,9 +1111,11 @@ public sealed class ViewUiImporter
     private static async Task<PersistedViewSettings> ReadPersistedSettingsAsync(
         IPage page,
         ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
         CancellationToken cancellationToken)
     {
         var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+        PersistedViewSettings settings;
         try
         {
             var groupingLabel = string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
@@ -931,7 +1155,7 @@ public sealed class ViewUiImporter
                 }
             }
 
-            return new PersistedViewSettings(
+            settings = new PersistedViewSettings(
                 groupBy,
                 columnBy,
                 sliceBy,
@@ -944,6 +1168,20 @@ public sealed class ViewUiImporter
         {
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
+
+        if (view.Ui?.BoardColumnLimits is not null)
+        {
+            settings = settings with
+            {
+                BoardColumnLimits = await BoardColumnLimitUi.ReadAsync(
+                    page,
+                    view,
+                    fields,
+                    cancellationToken).ConfigureAwait(false),
+            };
+        }
+
+        return settings;
     }
 
     private static async Task<IReadOnlyList<string>?> ReadPersistedFieldSumAsync(
@@ -1094,6 +1332,20 @@ public sealed class ViewUiImporter
             }
         }
 
+        if (expected.Ui?.BoardColumnLimits is { } expectedLimits)
+        {
+            if (actual.BoardColumnLimits is null)
+            {
+                differences.Add("Board column limits are unavailable");
+            }
+            else
+            {
+                differences.AddRange(CollectBoardColumnLimitDifferences(
+                    expectedLimits,
+                    actual.BoardColumnLimits));
+            }
+        }
+
         if (expected.Ui?.Roadmap is { } roadmap)
         {
             if (roadmap.TruncateTitles is { } expectedTruncateTitles
@@ -1132,6 +1384,41 @@ public sealed class ViewUiImporter
 
     private static string FormatBoolean(bool? value) => value?.ToString().ToLowerInvariant() ?? "unavailable";
 
+    private static bool SameBoardColumn(BoardColumnLimitSnapshot first, BoardColumnLimitSnapshot second)
+        => string.Equals(first.FieldName, second.FieldName, StringComparison.Ordinal)
+            && string.Equals(first.SingleSelectOptionName, second.SingleSelectOptionName, StringComparison.Ordinal)
+            && string.Equals(first.IterationTitle, second.IterationTitle, StringComparison.Ordinal);
+
+    private static List<string> CollectBoardColumnLimitDifferences(
+        IReadOnlyList<BoardColumnLimitSnapshot> expected,
+        IReadOnlyList<BoardColumnLimitSnapshot> actual)
+    {
+        var differences = new List<string>();
+        foreach (var expectedLimit in expected)
+        {
+            var actualLimit = actual.FirstOrDefault(candidate => SameBoardColumn(expectedLimit, candidate));
+            if (actualLimit is null)
+            {
+                differences.Add(
+                    $"Board limit for {DescribeColumn(expectedLimit)} expected '{expectedLimit.Limit}', actual 'unlimited'");
+            }
+            else if (actualLimit.Limit != expectedLimit.Limit)
+            {
+                differences.Add(
+                    $"Board limit for {DescribeColumn(expectedLimit)} expected '{expectedLimit.Limit}', actual '{actualLimit.Limit}'");
+            }
+        }
+
+        foreach (var actualLimit in actual.Where(actualLimit =>
+                     !expected.Any(expectedLimit => SameBoardColumn(expectedLimit, actualLimit))))
+        {
+            differences.Add(
+                $"Board limit for {DescribeColumn(actualLimit)} expected 'unlimited', actual '{actualLimit.Limit}'");
+        }
+
+        return differences;
+    }
+
     internal sealed record PersistedViewSettings(
         string? GroupBy,
         string? ColumnBy,
@@ -1139,7 +1426,8 @@ public sealed class ViewUiImporter
         bool FieldSumAvailable,
         IReadOnlyList<string> FieldSum,
         bool? TruncateTitles = null,
-        bool? ShowDateFields = null);
+        bool? ShowDateFields = null,
+        IReadOnlyList<BoardColumnLimitSnapshot>? BoardColumnLimits = null);
 
     private async Task TrySetMenuCheckboxAsync(
         IPage page,
@@ -1329,7 +1617,18 @@ public sealed class ViewUiImporter
         }
     }
 
-    private async Task TryEnsureSortFieldVisibleAsync(
+    internal static bool ShouldRestoreSortFieldVisibility(
+        ViewSnapshot view,
+        string sortField,
+        bool sortFieldWasTemporarilyShown)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sortField);
+        return sortFieldWasTemporarilyShown
+            && !view.VisibleFields.Contains(sortField, StringComparer.Ordinal);
+    }
+
+    private async Task<bool> TryEnsureSortFieldVisibleAsync(
         IPage page,
         string field,
         string viewName,
@@ -1342,15 +1641,60 @@ public sealed class ViewUiImporter
             if (await item.CountAsync().ConfigureAwait(false) == 0)
             {
                 await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return false;
+            }
+
+            await item.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var option = await FindOptionAsync(page, field).ConfigureAwait(false);
+            var changed = false;
+            if (option is not null
+                && !string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
+                && !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                await option.ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                changed = true;
+            }
+
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return changed;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    private async Task TryHideSortFieldAsync(
+        IPage page,
+        string field,
+        string viewName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+            var item = Sel.ConfigurationMenuItem(menu, "Fields");
+            if (await item.CountAsync().ConfigureAwait(false) == 0)
+            {
+                _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden because Fields is unavailable");
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             var option = await FindOptionAsync(page, field).ConfigureAwait(false);
-            if (option is not null
-                && !string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
-                && !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            if (option is null
+                || string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
+                || !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden");
+            }
+            else
             {
                 await option.ClickAsync().ConfigureAwait(false);
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
@@ -1360,7 +1704,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
+            _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }

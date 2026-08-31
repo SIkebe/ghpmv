@@ -291,6 +291,16 @@ public class BrowserRoundTripTests
                         view => result.ViewNumbers[view.Number],
                         StringComparer.Ordinal),
                     cancellationToken);
+                await new BoardColumnLimitObserver(targetSession).ValidateFixtureAsync(
+                    snapshot,
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    snapshot.Views.ToDictionary(
+                        view => view.Name,
+                        view => result.ViewNumbers[view.Number],
+                        StringComparer.Ordinal),
+                    cancellationToken);
 
                 await viewImporter.ApplyRoadmapDisplayOptionsAsync(
                     TargetOrg,
@@ -378,6 +388,17 @@ public class BrowserRoundTripTests
                     sourceTable.Name,
                     ["Fixture Number"],
                     cancellationToken);
+                var driftedBoard = Assert.Single(
+                    FixtureUiSnapshotFactory.CreateFieldSumDrift().Views,
+                    view => view.Name == "Fixture Board");
+                await viewImporter.ApplyBoardColumnLimitsAsync(
+                    TargetOrg,
+                    ProjectOwnerType.Organization,
+                    result.ProjectNumber,
+                    result.ViewNumbers[driftedBoard.Number],
+                    driftedBoard,
+                    snapshot.Fields,
+                    cancellationToken);
                 Assert.Empty(viewImporter.Warnings);
 
                 var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
@@ -407,6 +428,10 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("field sum mismatch", StringComparison.Ordinal));
+                Assert.Equal(2, driftReport.Differences.Count(difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("Board limit mismatch", StringComparison.Ordinal)));
                 Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
@@ -565,6 +590,14 @@ public class BrowserRoundTripTests
         var sourceBoard = Assert.Single(source.Views, view => view.Name == "Fixture Board");
         Assert.Equal("Fixture Select", Assert.Single(sourceBoard.VerticalGroupByFields));
         Assert.Equal(["Fixture Number"], sourceBoard.Ui!.FieldSum);
+        Assert.Equal(
+            [("Alpha", 1), ("Beta", 2)],
+            sourceBoard.Ui.BoardColumnLimits!.Select(limit => (limit.SingleSelectOptionName, limit.Limit)));
+        var sourceIterationBoard = Assert.Single(source.Views, view => view.Name == "Fixture Iteration Board");
+        Assert.Equal("Fixture Sprint", Assert.Single(sourceIterationBoard.VerticalGroupByFields));
+        Assert.Equal(
+            [("Sprint 0", 1), ("Sprint 1", 3)],
+            sourceIterationBoard.Ui!.BoardColumnLimits!.Select(limit => (limit.IterationTitle, limit.Limit)));
 
         var sourceRoadmap = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap");
         Assert.Equal(["Status"], sourceRoadmap.GroupByFields);
@@ -670,6 +703,9 @@ public class BrowserRoundTripTests
             Assert.NotNull(actual.Ui);
             Assert.Equal(expected.Ui!.SliceBy, actual.Ui!.SliceBy);
             Assert.Equal(expected.Ui.FieldSum ?? [], actual.Ui.FieldSum ?? []);
+            Assert.Equal(
+                expected.Ui.BoardColumnLimits ?? [],
+                actual.Ui.BoardColumnLimits ?? []);
             Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
             if (expected.Ui.Roadmap is { } roadmap)
             {

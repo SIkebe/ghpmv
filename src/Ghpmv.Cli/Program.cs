@@ -1143,7 +1143,7 @@ var fixtureUiOption = new Option<bool>("--fixture-ui")
 };
 var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 {
-    Description = "Apply the standard View 1 field-sum drift to an existing fixture Project using browser automation.",
+    Description = "Apply the standard field-sum and Board column-limit drift to an existing fixture Project using browser automation.",
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
@@ -1448,7 +1448,13 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 new { login = org, number = projectNumber },
                 cancellationToken);
             var expectedNames = new HashSet<string>(
-                ["View 1", "Fixture Roadmap", "Fixture Roadmap Dates Hidden"],
+                [
+                    "View 1",
+                    "Fixture Board",
+                    "Fixture Iteration Board",
+                    "Fixture Roadmap",
+                    "Fixture Roadmap Dates Hidden",
+                ],
                 StringComparer.Ordinal);
             var viewNumbers = projectData
                 .GetProperty("organization")
@@ -1494,8 +1500,18 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 projectNumber,
                 viewNumbers,
                 cancellationToken);
+            await new BoardColumnLimitObserver(browserSession)
+            {
+                OnProgress = Console.Error.WriteLine,
+            }.ValidateFixtureAsync(
+                expected,
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                viewNumbers,
+                cancellationToken);
             Console.Error.WriteLine(
-                $"Fixture field-sum rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
+                $"Fixture field-sum and Board-limit rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
             return 0;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
@@ -1646,6 +1662,8 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 parseResult.GetValue(fixtureRepoOption) ?? "fixture-repo");
             var view = snapshot.Views.Single(candidate =>
                 string.Equals(candidate.Name, "View 1", StringComparison.Ordinal));
+            var board = snapshot.Views.Single(candidate =>
+                string.Equals(candidate.Name, "Fixture Board", StringComparison.Ordinal));
             var projectData = await client.QueryAsync(
                 """
                 query($login: String!, $number: Int!) {
@@ -1686,6 +1704,32 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 view.Name,
                 view.Ui!.FieldSum!,
                 cancellationToken);
+            var targetBoardViews = projectData
+                .GetProperty("organization")
+                .GetProperty("projectV2")
+                .GetProperty("views")
+                .GetProperty("nodes")
+                .EnumerateArray()
+                .Where(node => string.Equals(
+                    node.GetProperty("name").GetString(),
+                    board.Name,
+                    StringComparison.Ordinal))
+                .ToArray();
+            if (targetBoardViews.Length != 1)
+            {
+                Console.Error.WriteLine(
+                    $"error: expected exactly one target View named '{board.Name}', found {targetBoardViews.Length}.");
+                return 1;
+            }
+
+            await viewImporter.ApplyBoardColumnLimitsAsync(
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                targetBoardViews[0].GetProperty("number").GetInt32(),
+                board,
+                snapshot.Fields,
+                cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
                 Console.Error.WriteLine($"warning: {warning}");
@@ -1693,7 +1737,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             Console.Error.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"Fixture field-sum drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
+                $"Fixture field-sum and Board-limit drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
             return viewImporter.Warnings.Count == 0 ? 0 : 1;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
