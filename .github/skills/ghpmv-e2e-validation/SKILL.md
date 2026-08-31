@@ -1144,6 +1144,40 @@ foreach ($expected in $expectedBoardLimits) {
         return
     }
 }
+$selectFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Select' -and $_.dataType -eq 'SINGLE_SELECT' })
+if ($selectFields.Count -ne 1 -or @($selectFields[0].options | Where-Object name -eq 'Gamma').Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Fixture Select must contain the unlimited logical column 'Gamma'."
+    return
+}
+$iterationFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Sprint' -and $_.dataType -eq 'ITERATION' })
+if ($iterationFields.Count -ne 1) {
+    Stop-FieldSumSnapshotCheck "Expected exactly one ITERATION field 'Fixture Sprint'."
+    return
+}
+$fixtureIterations = @($iterationFields[0].iterationConfiguration.iterations) +
+    @($iterationFields[0].iterationConfiguration.completedIterations)
+foreach ($title in @('Sprint 2', 'Sprint 3')) {
+    if (@($fixtureIterations | Where-Object title -eq $title).Count -ne 1) {
+        Stop-FieldSumSnapshotCheck "Fixture Sprint must contain the unlimited logical column '$title'."
+        return
+    }
+}
+$expectedOverLimitColumns = @(
+    [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Alpha'; MinimumItems = 2 },
+    [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 0'; MinimumItems = 2 }
+)
+foreach ($expected in $expectedOverLimitColumns) {
+    $matchingItems = @($snapshot.items | Where-Object {
+        $item = $_
+        @($item.fieldValues | Where-Object {
+            $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+        }).Count -eq 1
+    })
+    if ($matchingItems.Count -lt $expected.MinimumItems) {
+        Stop-FieldSumSnapshotCheck "Board column '$($expected.Field)/$($expected.Value)' must contain at least $($expected.MinimumItems) items to exceed its limit."
+        return
+    }
+}
 Write-Output 'GHPMV_BOARD_LIMIT_SNAPSHOT_MATCH'
 $roadmap = @($snapshot.views | Where-Object name -eq 'Fixture Roadmap')
 if ($roadmap.Count -ne 1 -or

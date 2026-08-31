@@ -703,7 +703,7 @@ warning / error が出た場合は、次の観点で切り分けます。
 
 - [ ] Table view の filter / visible fields / sort / group by / field sum は browser-assisted `verify` で `View: Match`。
 - [ ] Board view の Column by / Swimlanes / Slice by / field sum は browser-assisted `verify` で `View: Match`。
-- [ ] Single-select / Iteration Boardの複数列上限とunlimited列が一致し、limit=1の列はitem count超過表示になる。
+- [ ] Single-select / Iteration Boardの複数列上限とunlimited列が一致し、render checkがlimit=1の列に複数の`data-board-card-id`を数えて上限超過状態を検証する。
 - [ ] targetで`Fixture Board`のAlpha上限を変更しBeta上限をclearすると、verifyが両logical columnを区別して検出する。
 - [ ] 同じsnapshot/targetへ再importすると上限が復元され、Item categoryには移動・field value変更がない。
 - [ ] Roadmap view の group by / field sum / date fields / zoom / markers / Truncate titles / Show date fields は browser-assisted `verify` で `View: Match`。
