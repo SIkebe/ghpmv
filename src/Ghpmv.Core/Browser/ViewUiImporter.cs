@@ -885,12 +885,20 @@ public sealed class ViewUiImporter
             var sort = view.SortByFields[0];
             if (!await IsSortAlreadyAppliedAsync(page, sort, cancellationToken).ConfigureAwait(false))
             {
-                await TryEnsureSortFieldVisibleAsync(
+                var sortFieldWasTemporarilyShown = await TryEnsureSortFieldVisibleAsync(
                     page,
                     sort.Field,
                     view.Name,
                     cancellationToken).ConfigureAwait(false);
                 await TrySetSortAsync(page, sort, view.Name, cancellationToken).ConfigureAwait(false);
+                if (ShouldRestoreSortFieldVisibility(view, sort.Field, sortFieldWasTemporarilyShown))
+                {
+                    await TryHideSortFieldAsync(
+                        page,
+                        sort.Field,
+                        view.Name,
+                        cancellationToken).ConfigureAwait(false);
+                }
             }
         }
         else
@@ -1609,7 +1617,18 @@ public sealed class ViewUiImporter
         }
     }
 
-    private async Task TryEnsureSortFieldVisibleAsync(
+    internal static bool ShouldRestoreSortFieldVisibility(
+        ViewSnapshot view,
+        string sortField,
+        bool sortFieldWasTemporarilyShown)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sortField);
+        return sortFieldWasTemporarilyShown
+            && !view.VisibleFields.Contains(sortField, StringComparer.Ordinal);
+    }
+
+    private async Task<bool> TryEnsureSortFieldVisibleAsync(
         IPage page,
         string field,
         string viewName,
@@ -1622,15 +1641,60 @@ public sealed class ViewUiImporter
             if (await item.CountAsync().ConfigureAwait(false) == 0)
             {
                 await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return false;
+            }
+
+            await item.First.ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var option = await FindOptionAsync(page, field).ConfigureAwait(false);
+            var changed = false;
+            if (option is not null
+                && !string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
+                && !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                await option.ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                changed = true;
+            }
+
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return changed;
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+        {
+            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    private async Task TryHideSortFieldAsync(
+        IPage page,
+        string field,
+        string viewName,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var menu = await OpenViewMenuAsync(page, cancellationToken).ConfigureAwait(false);
+            var item = Sel.ConfigurationMenuItem(menu, "Fields");
+            if (await item.CountAsync().ConfigureAwait(false) == 0)
+            {
+                _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden because Fields is unavailable");
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
             await item.First.ClickAsync().ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             var option = await FindOptionAsync(page, field).ConfigureAwait(false);
-            if (option is not null
-                && !string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
-                && !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            if (option is null
+                || string.Equals(await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false), "true", StringComparison.Ordinal)
+                || !string.Equals(await option.GetAttributeAsync("aria-checked").ConfigureAwait(false), "true", StringComparison.Ordinal))
+            {
+                _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden");
+            }
+            else
             {
                 await option.ClickAsync().ConfigureAwait(false);
                 await PauseAsync(cancellationToken).ConfigureAwait(false);
@@ -1640,7 +1704,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
+            _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden — {exception.Message}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }

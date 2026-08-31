@@ -941,6 +941,16 @@ public class ViewUiLogicTests
         => Assert.Empty(ViewUiImporter.BuildTabMovePlan([1, 2, 3], [1, 2, 3]));
 
     [Fact]
+    public void Sort_field_visibility_is_restored_only_when_import_temporarily_showed_a_hidden_field()
+    {
+        var view = FixtureUiSnapshotFactory.Create("fixture-repo").Views.Single(view => view.Name == "View 1");
+
+        Assert.True(ViewUiImporter.ShouldRestoreSortFieldVisibility(view, "Fixture Number", true));
+        Assert.False(ViewUiImporter.ShouldRestoreSortFieldVisibility(view, "Fixture Number", false));
+        Assert.False(ViewUiImporter.ShouldRestoreSortFieldVisibility(view, "Title", true));
+    }
+
+    [Fact]
     public void Tab_move_plan_uses_one_drag_for_a_rotation()
     {
         var moves = ViewUiImporter.BuildTabMovePlan([4, 1, 2, 3], [1, 2, 3, 4]);
