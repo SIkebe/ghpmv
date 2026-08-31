@@ -118,17 +118,6 @@ public class ViewUiLogicTests
         Assert.Equal(["Count"], view.Ui.FieldSum);
     }
 
-    [Theory]
-    [InlineData("2 / 1", 2, 1)]
-    [InlineData(" 12/3 ", 12, 3)]
-    public void Parse_Board_column_counter_reads_count_and_limit(
-        string text,
-        int expectedCount,
-        int expectedLimit)
-        => Assert.Equal(
-            (expectedCount, expectedLimit),
-            BoardColumnLimitObserver.ParseCounter(text));
-
     [Fact]
     public void Board_column_observer_compares_logical_identities_without_node_ids()
     {
@@ -391,6 +380,61 @@ public class ViewUiLogicTests
             warning.Contains("Single-select column 'Fixture Select' / 'Alpha'", StringComparison.Ordinal)
             && warning.Contains("was not found", StringComparison.Ordinal));
         Assert.Empty(plan.Targets);
+    }
+
+    [Fact]
+    public void Board_limit_reconciliation_skips_all_writes_when_an_unlimited_target_column_is_hidden()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+            ],
+        };
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = [field.Name],
+        };
+
+        var plan = BoardColumnLimitUi.BuildReconciliationPlan(
+            view,
+            field,
+            [BoardLimit(field.Name, option: "Alpha", limit: 1)],
+            ["Alpha"]);
+
+        Assert.Contains(plan.Warnings, warning =>
+            warning.Contains("column 'Fixture Select' / 'Beta'", StringComparison.Ordinal)
+            && warning.Contains("hidden or missing", StringComparison.Ordinal));
+        Assert.Empty(plan.Targets);
+    }
+
+    [Fact]
+    public void Board_limit_capture_requires_every_logical_column_to_be_displayed()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Sprint",
+            DataType = "ITERATION",
+            IterationConfiguration = new IterationConfigurationSnapshot
+            {
+                Duration = 14,
+                StartDay = 1,
+                Iterations =
+                [
+                    new IterationSnapshot { Id = "sprint-0", Title = "Sprint 0", StartDate = "2026-08-31", Duration = 14 },
+                    new IterationSnapshot { Id = "sprint-1", Title = "Sprint 1", StartDate = "2026-09-14", Duration = 14 },
+                ],
+                CompletedIterations = [],
+            },
+        };
+
+        var missing = BoardColumnLimitUi.FindMissingLogicalColumns(field, ["Sprint 0"]);
+
+        Assert.Equal(["Sprint 1"], missing);
     }
 
     [Fact]

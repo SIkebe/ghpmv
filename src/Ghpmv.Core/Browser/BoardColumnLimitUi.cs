@@ -20,6 +20,15 @@ internal static class BoardColumnLimitUi
             throw new InvalidOperationException($"view '{view.Name}': no displayed Board columns were found");
         }
 
+        var missingColumns = FindMissingLogicalColumns(
+            field,
+            columns.Select(column => column.Name).ToArray());
+        if (missingColumns.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': Board column limit capture is unavailable because logical columns are hidden or missing: [{string.Join(", ", missingColumns)}]");
+        }
+
         foreach (var column in columns)
         {
             var currentLimit = await ReadLimitAsync(page, column.Name, cancellationToken).ConfigureAwait(false);
@@ -74,7 +83,6 @@ internal static class BoardColumnLimitUi
         IReadOnlyList<string> displayedColumnNames)
     {
         var warnings = new List<string>();
-        var displayedNames = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
         var desiredByName = new Dictionary<string, BoardColumnLimitSnapshot>(StringComparer.Ordinal);
         foreach (var limit in desiredLimits)
         {
@@ -128,12 +136,17 @@ internal static class BoardColumnLimitUi
             return new ReconciliationPlan([], warnings);
         }
 
-        foreach (var desired in desiredByName)
+        foreach (var missingColumn in FindMissingLogicalColumns(field, displayedColumnNames))
         {
-            if (!displayedNames.Contains(desired.Key))
+            if (desiredByName.TryGetValue(missingColumn, out var desired))
             {
                 warnings.Add(
-                    $"view '{view.Name}': target {ViewUiImporter.DescribeColumn(desired.Value)} was not found; its limit was not applied");
+                    $"view '{view.Name}': target {ViewUiImporter.DescribeColumn(desired)} was not found; no Board limits were changed");
+            }
+            else
+            {
+                warnings.Add(
+                    $"view '{view.Name}': target {field.DataType} column '{field.Name}' / '{missingColumn}' was hidden or missing; no Board limits were changed");
             }
         }
 
@@ -151,6 +164,18 @@ internal static class BoardColumnLimitUi
                     : null))
             .ToArray();
         return new ReconciliationPlan(targets, warnings);
+    }
+
+    internal static IReadOnlyList<string> FindMissingLogicalColumns(
+        FieldSnapshot field,
+        IReadOnlyList<string> displayedColumnNames)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(displayedColumnNames);
+        var displayed = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
+        return GetValueNames(field)
+            .Where(value => !displayed.Contains(value))
+            .ToArray();
     }
 
     internal static int? ParseLimit(string? value)
@@ -324,14 +349,17 @@ internal static class BoardColumnLimitUi
     }
 
     private static bool ValueExists(FieldSnapshot field, string value)
+        => GetValueNames(field).Contains(value, StringComparer.Ordinal);
+
+    private static IEnumerable<string> GetValueNames(FieldSnapshot field)
         => field.DataType switch
         {
-            "SINGLE_SELECT" => field.Options?.Any(option =>
-                string.Equals(option.Name, value, StringComparison.Ordinal)) is true,
+            "SINGLE_SELECT" => field.Options?.Select(option => option.Name) ?? [],
             "ITERATION" => field.IterationConfiguration is { } configuration
-                && configuration.Iterations.Concat(configuration.CompletedIterations)
-                    .Any(iteration => string.Equals(iteration.Title, value, StringComparison.Ordinal)),
-            _ => false,
+                ? configuration.Iterations.Concat(configuration.CompletedIterations)
+                    .Select(iteration => iteration.Title)
+                : [],
+            _ => [],
         };
 
     private static string GetValueName(BoardColumnLimitSnapshot limit)

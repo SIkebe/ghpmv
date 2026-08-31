@@ -114,11 +114,6 @@ internal static class Sel
     public static ILocator BoardColumnHeading(ILocator actionsButton)
         => BoardColumn(actionsButton).GetByRole(AriaRole.Heading).First;
 
-    /// <summary>Rendered "current cards / limit" counter in a limited Board column.</summary>
-    public static ILocator BoardColumnLimitCounter(ILocator column)
-        => column.GetByText(new Regex(
-            @"^\s*\d+\s*/\s*\d+\s*$")).First;
-
     /// <summary>Rendered cards in every Board cell for the named logical column.</summary>
     public static ILocator BoardColumnCards(IPage page, string columnName)
     {

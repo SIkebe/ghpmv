@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
@@ -7,7 +6,7 @@ using Microsoft.Playwright;
 namespace Ghpmv.Core.Browser;
 
 /// <summary>Validates configured, unlimited, and exceeded limits in the standard Board fixture.</summary>
-public sealed partial class BoardColumnLimitObserver
+public sealed class BoardColumnLimitObserver
 {
     private readonly BrowserSession _session;
 
@@ -110,19 +109,6 @@ public sealed partial class BoardColumnLimitObserver
         }
     }
 
-    internal static (int Count, int Limit) ParseCounter(string text)
-    {
-        var match = Counter().Match(text);
-        if (!match.Success
-            || !int.TryParse(match.Groups["count"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var count)
-            || !int.TryParse(match.Groups["limit"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var limit))
-        {
-            throw new InvalidOperationException($"Invalid Board column limit counter '{text}'");
-        }
-
-        return (count, limit);
-    }
-
     private static bool SameColumn(BoardColumnLimitSnapshot first, BoardColumnLimitSnapshot second)
         => string.Equals(first.FieldName, second.FieldName, StringComparison.Ordinal)
             && string.Equals(first.SingleSelectOptionName, second.SingleSelectOptionName, StringComparison.Ordinal)
@@ -145,8 +131,4 @@ public sealed partial class BoardColumnLimitObserver
                 $"field '{field.Name}' has unsupported Board column type '{field.DataType}'"),
         };
 
-    [GeneratedRegex(
-        @"^\s*(?<count>\d+)\s*/\s*(?<limit>\d+)\s*$",
-        RegexOptions.CultureInvariant)]
-    private static partial Regex Counter();
 }
