@@ -137,7 +137,7 @@ Important limitations:
 5. **Roadmap の親 menu には表示オプションが混在**: Truncate titles / Show date fields(表示設定)+ Markers / Field sum の子 menu。子 menu の checkbox 操作は最後に開いた menu へ scope し、親 menu の表示設定を誤操作しない。menuitem テキスト "Markers: <値>" にはマーカーだけが出る
 6. **未保存 workflow のページには enable toggle が存在しない**(URL は GUID)。保存済み workflow の URL は数値 ID だが、この ID は GraphQL workflow number とは独立している。export は GraphQL の enabled 値を使い、詳細ページはサイドバーの name 一致 link で開く。toggle の accessible name も workflow 名とは限らないため、import は main detail pane 内の stateful control (`aria-pressed` / `aria-checked` / checkbox) へ fallback する
 7. **未保存 disabled workflow は Edit → "Save and turn on workflow"(設定変更なしでも押せる)→ トグル off で「保存済み disabled」にできる**。未保存状態には toggle がないため、設定値が既に一致する enabled workflow も toggle を探さずこの保存経路で有効化する。保存済み disabled workflow は GraphQL の `workflows` に enabled=false で現れ、閲覧モードで設定値も読める(export 可能)。import は未保存の場合にこの save-once 経路を通す(WorkflowUiImporter.ApplyBuiltInAsync / ApplyDisabledAsync)
-8. **ソートキーのフィールドは仮想列として表示される**: Fields オーバーレイで aria-checked=true になるが GraphQL `visibleFields` には永続化されない(uncheck→再 check でも変わらない)。import 側は desired 集合にソート列を含めて誤 uncheck を防止する
+8. **ソートキーのフィールドは仮想列として表示できる**: hidden fieldをsortに指定するとき、importはFieldsオーバーレイで一時的にshowしてsortを適用し、sourceの`visibleFields`に含まれなければ再びhideする。仮想列をhideしてもsortは維持され、GraphQL `visibleFields`にも永続化されない。元からvisibleなsort fieldはhideしない
 9. **Duplicate 直後の workflow は編集モードで開く**("Edit" ボタンが無い)→ import は Save ボタンの有無で編集モードを判定してから Edit をクリックする
 10. **Playwright 1.61 の wait タイムアウトは `System.TimeoutException`**(`Microsoft.Playwright.TimeoutException` は存在せず、`PlaywrightException` の派生でもない)→ ブラウザーモジュールの catch は `exception is PlaywrightException or TimeoutException` で両方受ける(リトライ・warning 化がタイムアウトでも機能するように修正済み)
 
