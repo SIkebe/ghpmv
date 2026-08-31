@@ -273,14 +273,17 @@ internal static class BoardColumnLimitUi
         CancellationToken cancellationToken)
     {
         await Sel.BoardColumnActionsButton(page, columnName).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         var item = Sel.BoardColumnLimitMenuItem(page);
         await item.WaitForAsync().ConfigureAwait(false);
         await item.ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         var input = Sel.BoardColumnLimitInput(page);
         await input.WaitForAsync().ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         var value = await input.InputValueAsync().ConfigureAwait(false);
         await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             return ParseLimit(value);
@@ -300,17 +303,24 @@ internal static class BoardColumnLimitUi
         CancellationToken cancellationToken)
     {
         await Sel.BoardColumnActionsButton(page, columnName).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         var item = Sel.BoardColumnLimitMenuItem(page);
         await item.WaitForAsync().ConfigureAwait(false);
         await item.ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         var input = Sel.BoardColumnLimitInput(page);
         await input.WaitForAsync().ConfigureAwait(false);
         var overlay = Sel.BoardColumnLimitOverlay(input);
         await input.FillAsync(limit?.ToString(CultureInfo.InvariantCulture) ?? string.Empty).ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         await Sel.BoardColumnLimitSaveButton(overlay).ClickAsync().ConfigureAwait(false);
         await input.WaitForAsync(new() { State = WaitForSelectorState.Hidden }).ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
     }
+
+    // 300ms between consecutive UI operations (BROWSER_AUTOMATION_PLAN §1.4).
+    private static Task PauseAsync(CancellationToken cancellationToken) => Task.Delay(300, cancellationToken);
 
     private static FieldSnapshot ResolveColumnField(ViewSnapshot view, IReadOnlyList<FieldSnapshot> fields)
     {
