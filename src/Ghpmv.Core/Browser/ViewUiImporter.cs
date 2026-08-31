@@ -588,14 +588,26 @@ public sealed class ViewUiImporter
                 await anchor.ScrollIntoViewIfNeededAsync().ConfigureAwait(false);
                 var anchorBox = await anchor.BoundingBoxAsync().ConfigureAwait(false)
                     ?? throw new InvalidOperationException($"view tab '{names[move.AnchorViewNumber]}' has no visible bounding box");
-                await source.DragToAsync(anchor, new()
+                var sourceBox = await source.BoundingBoxAsync().ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"view tab '{names[move.ViewNumber]}' has no visible bounding box");
+                var sourceX = sourceBox.X + sourceBox.Width / 2;
+                var sourceY = sourceBox.Y + sourceBox.Height / 2;
+                var targetX = anchorBox.X + (move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2));
+                var targetY = anchorBox.Y + anchorBox.Height / 2;
+                await page.Mouse.MoveAsync(sourceX, sourceY).ConfigureAwait(false);
+                await page.Mouse.DownAsync().ConfigureAwait(false);
+                try
                 {
-                    TargetPosition = new()
-                    {
-                        X = move.PlaceBefore ? 2 : Math.Max(2, anchorBox.Width - 2),
-                        Y = anchorBox.Height / 2,
-                    },
-                }).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
+                    await page.Mouse.MoveAsync(sourceX + 8, sourceY, new() { Steps = 4 }).ConfigureAwait(false);
+                    await page.Mouse.MoveAsync(targetX, targetY, new() { Steps = 12 }).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), token).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await page.Mouse.UpAsync().ConfigureAwait(false);
+                }
+
                 await PauseAsync(token).ConfigureAwait(false);
             },
             token => ReadImportedTabOrderAsync(

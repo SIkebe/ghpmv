@@ -83,19 +83,11 @@ public sealed partial class BoardColumnLimitObserver
             foreach (var limit in board.Ui.BoardColumnLimits!.Where(limit => limit.Limit == 1))
             {
                 var columnName = limit.SingleSelectOptionName ?? limit.IterationTitle!;
-                var actions = Sel.BoardColumnActionsButton(page, columnName);
-                var counter = Sel.BoardColumnLimitCounter(Sel.BoardColumn(actions));
-                await counter.WaitForAsync(new()
-                {
-                    State = WaitForSelectorState.Visible,
-                    Timeout = 15_000,
-                }).ConfigureAwait(false);
-                var counterText = await counter.InnerTextAsync().ConfigureAwait(false);
-                var (count, renderedLimit) = ParseCounter(counterText);
-                if (renderedLimit != limit.Limit || count <= renderedLimit)
+                var count = await Sel.BoardColumnCards(page, columnName).CountAsync().ConfigureAwait(false);
+                if (count <= limit.Limit)
                 {
                     throw new InvalidOperationException(
-                        $"view '{board.Name}': column '{columnName}' did not render an exceeded limit (counter '{counterText}')");
+                        $"view '{board.Name}': column '{columnName}' did not render more cards ({count}) than its limit ({limit.Limit})");
                 }
             }
 

@@ -143,11 +143,11 @@ Important limitations:
 
 ## Board column limit UI contract (2026-08-28)
 
-GitHub公式手順では、Board列名の横にあるcontext menu(`aria-label="Column context menu"`のiconを含むbutton)からmenuitem `Set column limit`を開く。`Column limit` inputへ正整数を入力してdialog内の`Save`を押すと直ちに永続化され、View-levelの`Save view`は不要。上限削除はinputを空にして同じ`Save`を押す。
+GitHub公式手順では、Board列名の横にあるcontext menuから列上限を設定する。2026-08-31の実DOMではbuttonのaccessible nameは外部tooltipを参照する`Actions for column: <column>`、menuitemは`Set limit`。`Column limit` inputへ正整数を入力してdialog内の`Save`を押すと直ちに永続化され、View-levelの`Save view`は不要。上限削除はinputを空にして同じ`Save`を押す。
 
-- 上限ありの列はheaderに`<current count> / <limit>`を表示し、current countがlimitを超えるとhighlightされる。上限はsoft limitであり、item追加やautomationを禁止しない。
+- 上限はsoft limitであり、item追加やautomationを禁止しない。2026-08-31のswimlane付きBoardではheaderに`<current count> / <limit>`テキストが描画されないため、render checkはdialogから上限値をread-backし、同じ`data-board-column`を持つcell内の`data-board-card-id`を数えてlimit超過を確認する。
 - 上限なしはinputが空で、snapshotではentryを作らない。Board capture成功時に全列が上限なしなら`boardColumnLimits=[]`、UIを読めなかった場合は`null`として区別する。
 - 列identityは`verticalGroupByFields`のfield名とSingle-select option名またはIteration title。source option/iteration node IDは保存しない。
-- selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、counter DOMは公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
+- selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、`data-board-column`/`data-board-card-id`は公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
 
 公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#setting-a-limit-on-the-number-of-items-in-a-column
