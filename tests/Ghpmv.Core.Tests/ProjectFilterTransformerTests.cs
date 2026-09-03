@@ -155,6 +155,19 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void BuildProjectFieldQualifiers_excludes_identity_bearing_built_in_fields()
+    {
+        var result = ProjectFilterTransformer.BuildProjectFieldQualifiers(
+        [
+            new FieldSnapshot { Name = "Safe Field", DataType = "TEXT" },
+            new FieldSnapshot { Name = "Reviewers", DataType = "REVIEWERS" },
+            new FieldSnapshot { Name = "Parent issue", DataType = "PARENT_ISSUE" },
+        ]);
+
+        Assert.Equal(["safe-field"], result);
+    }
+
+    [Fact]
     public void Transform_requires_mapping_for_repo_and_org_values_that_resemble_user_shortcuts()
     {
         var result = ProjectFilterTransformer.Transform("repo:none org:@me");
