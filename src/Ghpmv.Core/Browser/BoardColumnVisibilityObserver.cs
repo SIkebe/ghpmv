@@ -57,7 +57,7 @@ public sealed class BoardColumnVisibilityObserver
             }
 
             OnProgress?.Invoke(
-                $"Rendered Board column visibility verified for view '{board.Name}': visible={actual.Count}");
+                $"Rendered Board visibility verified for view '{board.Name}': visible={actual.Count}");
         }
     }
 }
