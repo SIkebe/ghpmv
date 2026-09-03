@@ -407,21 +407,42 @@ public sealed class ViewUiImporter
                 view,
                 fields,
                 cancellationToken).ConfigureAwait(false);
-            _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
-                page,
-                view,
-                fields,
-                desired,
-                cancellationToken).ConfigureAwait(false));
-            var persisted = await BoardColumnLimitUi.ReadCompleteAsync(
-                page,
-                view,
-                fields,
-                currentVisibility,
-                cancellationToken).ConfigureAwait(false);
-            foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
+            try
             {
-                _warnings.Add($"view '{view.Name}': {difference} did not persist");
+                var revealWarnings = await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    BoardColumnVisibilityUi.GetAllColumns(view, fields),
+                    cancellationToken).ConfigureAwait(false);
+                _warnings.AddRange(revealWarnings);
+                if (revealWarnings.Count == 0)
+                {
+                    _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
+                        page,
+                        view,
+                        fields,
+                        desired,
+                        cancellationToken).ConfigureAwait(false));
+                    var persisted = await BoardColumnLimitUi.ReadAsync(
+                        page,
+                        view,
+                        fields,
+                        cancellationToken).ConfigureAwait(false);
+                    foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
+                    {
+                        _warnings.Add($"view '{view.Name}': {difference} did not persist");
+                    }
+                }
+            }
+            finally
+            {
+                _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    currentVisibility,
+                    cancellationToken).ConfigureAwait(false));
             }
 
             await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
