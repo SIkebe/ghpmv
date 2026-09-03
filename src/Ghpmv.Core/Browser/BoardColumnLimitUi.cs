@@ -20,15 +20,6 @@ internal static class BoardColumnLimitUi
             throw new InvalidOperationException($"view '{view.Name}': no displayed Board columns were found");
         }
 
-        var missingColumns = FindMissingLogicalColumns(
-            field,
-            columns.Select(column => column.Name).ToArray());
-        if (missingColumns.Count > 0)
-        {
-            throw new InvalidOperationException(
-                $"view '{view.Name}': Board column limit capture is unavailable because logical columns are hidden or missing: [{string.Join(", ", missingColumns)}]");
-        }
-
         foreach (var column in columns)
         {
             var currentLimit = await ReadLimitAsync(page, column.Name, cancellationToken).ConfigureAwait(false);
@@ -136,18 +127,11 @@ internal static class BoardColumnLimitUi
             return new ReconciliationPlan([], warnings);
         }
 
-        foreach (var missingColumn in FindMissingLogicalColumns(field, displayedColumnNames))
+        var displayed = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
+        foreach (var missingColumn in desiredByName.Keys.Where(name => !displayed.Contains(name)))
         {
-            if (desiredByName.TryGetValue(missingColumn, out var desired))
-            {
-                warnings.Add(
-                    $"view '{view.Name}': target {ViewUiImporter.DescribeColumn(desired)} was not found; no Board limits were changed");
-            }
-            else
-            {
-                warnings.Add(
-                    $"view '{view.Name}': target {field.DataType} column '{field.Name}' / '{missingColumn}' was hidden or missing; no Board limits were changed");
-            }
+            warnings.Add(
+                $"view '{view.Name}': target {ViewUiImporter.DescribeColumn(desiredByName[missingColumn])} was not found; no Board limits were changed");
         }
 
         if (warnings.Count > 0)
@@ -164,18 +148,6 @@ internal static class BoardColumnLimitUi
                     : null))
             .ToArray();
         return new ReconciliationPlan(targets, warnings);
-    }
-
-    internal static IReadOnlyList<string> FindMissingLogicalColumns(
-        FieldSnapshot field,
-        IReadOnlyList<string> displayedColumnNames)
-    {
-        ArgumentNullException.ThrowIfNull(field);
-        ArgumentNullException.ThrowIfNull(displayedColumnNames);
-        var displayed = displayedColumnNames.ToHashSet(StringComparer.Ordinal);
-        return GetValueNames(field)
-            .Where(value => !displayed.Contains(value))
-            .ToArray();
     }
 
     internal static int? ParseLimit(string? value)

@@ -36,6 +36,9 @@ internal sealed class ProjectViewImporter
     public IReadOnlyDictionary<string, string> OrganizationMapping { get; init; } =
         ReadOnlyDictionary<string, string>.Empty;
 
+    public IReadOnlySet<string> ProjectFieldQualifiers { get; init; } =
+        ReadOnlySet<string>.Empty;
+
     public bool BrowserEnrichmentPlanned { get; init; }
 
     public Action<string>? OnProgress { get; set; }
@@ -306,7 +309,8 @@ internal sealed class ProjectViewImporter
             filter,
             UserMapping,
             RepositoryMapping,
-            OrganizationMapping);
+            OrganizationMapping,
+            ProjectFieldQualifiers);
         foreach (var identifier in result.Unresolved)
         {
             Warn($"view '{viewName}': unmapped {identifier.Qualifier} filter value '{identifier.Value}' was left unchanged");

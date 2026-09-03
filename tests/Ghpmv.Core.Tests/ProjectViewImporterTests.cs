@@ -356,6 +356,46 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Custom_field_filter_qualifier_is_imported_without_an_unsupported_warning()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-custom-filter-").FullName;
+        try
+        {
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                BrowserEnrichmentPlanned = true,
+                ProjectFieldQualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "fixture-select",
+                },
+            };
+
+            await importer.ImportAsync(
+                [View(1, "Board", "BOARD_LAYOUT", filter: "-fixture-select:Gamma", visibleFields: [])],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(importer.Warnings, warning =>
+                warning.Contains("unsupported filter qualifier", StringComparison.Ordinal));
+            var update = Assert.Single(handler.RequestBodies, body =>
+                body.Contains("updateProjectV2View", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(update);
+            Assert.Equal(
+                "-fixture-select:Gamma",
+                document.RootElement.GetProperty("variables").GetProperty("filter").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 

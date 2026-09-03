@@ -8,7 +8,7 @@ namespace Ghpmv.Core.Browser;
 /// <summary>
 /// UI export of view settings that GraphQL does not expose (B2). For each view the
 /// "View" configuration menu is opened and the current values of Markers / Dates /
-/// Zoom level / Slice by / Field sum / Roadmap display options are read. Results are stored in <see cref="ViewSnapshot.Ui"/>;
+/// Zoom level / Slice by / Field sum / Board columns / Roadmap display options are read. Results are stored in <see cref="ViewSnapshot.Ui"/>;
 /// views whose UI settings cannot be read keep <c>Ui = null</c> and add a warning.
 /// </summary>
 public sealed class ViewUiExporter
@@ -164,12 +164,18 @@ public sealed class ViewUiExporter
 
         await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
         IReadOnlyList<BoardColumnLimitSnapshot>? boardColumnLimits = null;
+        IReadOnlyList<BoardColumnSnapshot>? visibleColumns = null;
         if (string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal))
         {
             if (BoardColumnLimitUi.CanCapture(view, fields, out var reason))
             {
                 try
                 {
+                    visibleColumns = await BoardColumnVisibilityUi.ReadAsync(
+                        page,
+                        view,
+                        fields,
+                        cancellationToken).ConfigureAwait(false);
                     boardColumnLimits = await BoardColumnLimitUi.ReadAsync(
                         page,
                         view,
@@ -179,13 +185,13 @@ public sealed class ViewUiExporter
                 catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
                 {
                     _warnings.Add(
-                        $"view '{view.Name}': Board column limits were not captured — {exception.Message}");
+                        $"view '{view.Name}': Board column visibility or limits were not captured — {exception.Message}");
                 }
             }
             else
             {
                 _warnings.Add(
-                    $"view '{view.Name}': Board column limits were not captured — {reason}");
+                    $"view '{view.Name}': Board column visibility and limits were not captured — {reason}");
             }
         }
 
@@ -194,6 +200,7 @@ public sealed class ViewUiExporter
             SliceBy = sliceBy,
             FieldSum = fieldSum,
             BoardColumnLimits = boardColumnLimits,
+            VisibleColumns = visibleColumns,
             Roadmap = roadmap,
             ScrapedAt = DateTimeOffset.UtcNow,
         };

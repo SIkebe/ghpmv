@@ -599,7 +599,7 @@ public sealed class ProjectImporter
         _warnings.Clear();
         var maps = new FieldMaps();
         await FetchFieldListAsync(project.Id, maps, cancellationToken).ConfigureAwait(false);
-        var viewImporter = CreateViewImporter();
+        var viewImporter = CreateViewImporter(snapshot.Fields);
         var viewNumbers = await viewImporter.ImportAsync(
             snapshot.Views,
             project.Id,
@@ -1035,7 +1035,7 @@ public sealed class ProjectImporter
         var viewWarningCount = 0;
         if (snapshot.Views.Count > 0)
         {
-            var viewImporter = CreateViewImporter();
+            var viewImporter = CreateViewImporter(snapshot.Fields);
             viewNumbers = await viewImporter.ImportAsync(
                 snapshot.Views,
                 project.Id,
@@ -1064,7 +1064,7 @@ public sealed class ProjectImporter
         return maps.ToResult(project, outcome, viewNumbers, viewWarningCount);
     }
 
-    private ProjectViewImporter CreateViewImporter() => new(
+    private ProjectViewImporter CreateViewImporter(IReadOnlyList<FieldSnapshot> fields) => new(
         _client,
         _operationLog ?? throw new InvalidOperationException("The project operation log was not initialized."),
         SaveOperationLogAsync)
@@ -1072,6 +1072,7 @@ public sealed class ProjectImporter
         RepositoryMapping = RepositoryMapping,
         UserMapping = UserMapping,
         OrganizationMapping = OrganizationMapping,
+        ProjectFieldQualifiers = ProjectFilterTransformer.BuildProjectFieldQualifiers(fields),
         BrowserEnrichmentPlanned = BrowserViewEnrichmentPlanned,
         OnProgress = OnProgress,
     };
