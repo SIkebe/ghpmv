@@ -1427,6 +1427,35 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Board_column_limit_preparation_reveals_every_logical_column()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+        };
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                    new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+                    new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN" },
+                ],
+            },
+        };
+
+        var columns = BoardColumnVisibilityUi.GetAllColumns(view, fields);
+
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            columns.Select(column => column.SingleSelectOptionName));
+    }
+
+    [Fact]
     public void Board_column_visibility_reconciliation_warns_for_missing_or_renamed_value()
     {
         var view = View("Board", "BOARD_LAYOUT") with

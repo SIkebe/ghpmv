@@ -57,59 +57,65 @@ internal static class BoardColumnVisibilityUi
         var overlay = Sel.OpenMenu(page);
         await overlay.WaitForAsync().ConfigureAwait(false);
 
-        var available = new HashSet<string>(StringComparer.Ordinal);
-        var options = Sel.CheckboxOptions(overlay);
-        var count = await options.CountAsync().ConfigureAwait(false);
-        for (var index = 0; index < count; index++)
+        try
         {
-            var option = options.Nth(index);
-            var name = ViewUiExporter.NormalizeUiText(await option.InnerTextAsync().ConfigureAwait(false));
-            if (name is null || !ValueExists(field, name))
+            var available = new HashSet<string>(StringComparer.Ordinal);
+            var options = Sel.CheckboxOptions(overlay);
+            var count = await options.CountAsync().ConfigureAwait(false);
+            for (var index = 0; index < count; index++)
             {
-                continue;
+                var option = options.Nth(index);
+                var name = ViewUiExporter.NormalizeUiText(await option.InnerTextAsync().ConfigureAwait(false));
+                if (name is null || !ValueExists(field, name))
+                {
+                    continue;
+                }
+
+                available.Add(name);
             }
 
-            available.Add(name);
-        }
+            foreach (var change in BuildApplyOrder(available.ToList(), plan.VisibleNames))
+            {
+                await ApplyVisibilityAsync(change.Name, change.ShouldBeVisible).ConfigureAwait(false);
+            }
 
-        foreach (var change in BuildApplyOrder(available.ToList(), plan.VisibleNames))
-        {
-            await ApplyVisibilityAsync(change.Name, change.ShouldBeVisible).ConfigureAwait(false);
-        }
-
-        async Task ApplyVisibilityAsync(string name, bool shouldBeVisible)
-        {
-            var option = await FindOptionAsync(options, name).ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
-            var isVisible = string.Equals(
-                await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
-                "true",
-                StringComparison.Ordinal);
-            var isDisabled = string.Equals(
-                await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
-                "true",
-                StringComparison.Ordinal);
-            if (isDisabled && shouldBeVisible != isVisible)
+            foreach (var missing in plan.VisibleNames.Where(name => !available.Contains(name)))
             {
                 plan.Warnings.Add(
-                    $"view '{view.Name}': Board column '{field.Name}' / '{name}' is disabled on the target and its visibility could not be changed");
+                    $"view '{view.Name}': visible Board column '{field.Name}' / '{missing}' is not available on the target; no other column was selected");
             }
-            else if (shouldBeVisible != isVisible)
+
+            return plan.Warnings;
+
+            async Task ApplyVisibilityAsync(string name, bool shouldBeVisible)
             {
-                await option.ClickAsync().ConfigureAwait(false);
-                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                var option = await FindOptionAsync(options, name).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException(
+                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
+                var isVisible = string.Equals(
+                    await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                    "true",
+                    StringComparison.Ordinal);
+                var isDisabled = string.Equals(
+                    await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
+                    "true",
+                    StringComparison.Ordinal);
+                if (isDisabled && shouldBeVisible != isVisible)
+                {
+                    plan.Warnings.Add(
+                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' is disabled on the target and its visibility could not be changed");
+                }
+                else if (shouldBeVisible != isVisible)
+                {
+                    await option.ClickAsync().ConfigureAwait(false);
+                    await PauseAsync(cancellationToken).ConfigureAwait(false);
+                }
             }
         }
-
-        foreach (var missing in plan.VisibleNames.Where(name => !available.Contains(name)))
+        finally
         {
-            plan.Warnings.Add(
-                $"view '{view.Name}': visible Board column '{field.Name}' / '{missing}' is not available on the target; no other column was selected");
+            await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
         }
-
-        await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
-        return plan.Warnings;
     }
 
     private static async Task<ILocator?> FindOptionAsync(ILocator options, string name)
@@ -183,6 +189,16 @@ internal static class BoardColumnVisibilityUi
                 .Where(name => !visibleNames.Contains(name))
                 .Select(name => new VisibilityChange(name, ShouldBeVisible: false)))
             .ToList();
+
+    internal static IReadOnlyList<BoardColumnSnapshot> GetAllColumns(
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields)
+    {
+        var field = ResolveColumnField(view, fields);
+        return GetValueNames(field)
+            .Select(value => CreateSnapshot(field, value))
+            .ToArray();
+    }
 
     internal static bool SameColumn(BoardColumnSnapshot first, BoardColumnSnapshot second)
         => string.Equals(first.FieldName, second.FieldName, StringComparison.Ordinal)

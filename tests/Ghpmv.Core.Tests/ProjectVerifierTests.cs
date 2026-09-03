@@ -882,6 +882,54 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_view_names_do_not_pair_uncaptured_visibility_with_different_ui_settings()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Views[0] with
+        {
+            Number = 7,
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Count"],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var second = first with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Fixture Number"],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var source = baseline with { Views = [first, second] };
+        var target = baseline with
+        {
+            Views =
+            [
+                first with { Number = 21 },
+                second with
+                {
+                    Number = 22,
+                    Ui = new ViewUiSnapshot
+                    {
+                        FieldSum = ["Different"],
+                        VisibleColumns = null,
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility was captured", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();

@@ -1968,6 +1968,16 @@ $boardLimitDifferences = @($driftReport.differences | Where-Object { $_.category
 $boardVisibilityDifferences = @($driftReport.differences | Where-Object {
     $_.category -eq 'View' -and $_.message -match "view 'Fixture (?:Iteration )?Board': Board column visibility mismatch"
 })
+$expectedBoardVisibilityMessages = @(
+    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Beta' (source visible, target hidden)",
+    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Gamma' (source hidden, target visible)",
+    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 1' (source visible, target hidden)",
+    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 2' (source hidden, target visible)"
+)
+$missingBoardVisibilityMessages = @($expectedBoardVisibilityMessages | Where-Object {
+    $expectedMessage = $_
+    @($boardVisibilityDifferences | Where-Object message -eq $expectedMessage).Count -ne 1
+})
 $roadmapTitleDifferences = @($driftReport.differences | Where-Object {
     $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': truncate titles mismatch"
 })
@@ -1986,6 +1996,7 @@ if ($driftFieldCategories.Count -ne 1 -or
     $fieldSumDifferences.Count -ne 1 -or
     $boardLimitDifferences.Count -ne 2 -or
     $boardVisibilityDifferences.Count -ne 4 -or
+    $missingBoardVisibilityMessages.Count -ne 0 -or
     $roadmapTitleDifferences.Count -ne 0 -or
     $roadmapDateDifferences.Count -ne 2 -or
     $nonInfoDifferences.Count -ne 13 -or

@@ -1006,7 +1006,10 @@ public sealed class ProjectVerifier
             var capturedIndex = availableTargets.FindIndex(targetView =>
                 targetView.Ui?.VisibleColumns is not null
                 && ViewApiEquals(sourceView, targetView)
-                && ViewUiEquals(sourceView.Ui!, targetView.Ui!));
+                && ViewUiEqualsWithoutBoardVisibility(sourceView.Ui!, targetView.Ui)
+                && BoardColumnVisibilityUi.SetEquals(
+                    sourceView.Ui!.VisibleColumns,
+                    targetView.Ui.VisibleColumns));
             if (capturedIndex >= 0)
             {
                 availableTargets.RemoveAt(capturedIndex);
@@ -1014,8 +1017,9 @@ public sealed class ProjectVerifier
             }
 
             if (availableTargets.Any(targetView =>
-                targetView.Ui is { VisibleColumns: null }
-                && ViewApiEquals(sourceView, targetView)))
+                targetView.Ui is { VisibleColumns: null } targetUi
+                && ViewApiEquals(sourceView, targetView)
+                && ViewUiEqualsWithoutBoardVisibility(sourceView.Ui!, targetUi)))
             {
                 return true;
             }
@@ -1142,6 +1146,12 @@ public sealed class ProjectVerifier
         => string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
             && UiListEquals(source.FieldSum, target.FieldSum)
             && RoadmapEquals(source.Roadmap, target.Roadmap);
+
+    private static bool ViewUiEqualsWithoutBoardVisibility(ViewUiSnapshot source, ViewUiSnapshot target)
+        => ViewUiEqualsWithoutBoardLimits(source, target)
+            && (source.BoardColumnLimits is null
+                || target.BoardColumnLimits is not null
+                && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits));
 
     private static bool BoardColumnLimitsEqual(
         IReadOnlyList<BoardColumnLimitSnapshot>? source,

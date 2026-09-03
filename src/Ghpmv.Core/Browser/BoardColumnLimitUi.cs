@@ -19,8 +19,15 @@ internal static class BoardColumnLimitUi
         {
             throw new InvalidOperationException($"view '{view.Name}': no displayed Board columns were found");
         }
+        var expectedNames = GetValueNames(field).ToHashSet(StringComparer.Ordinal);
+        var displayedNames = columns.Select(column => column.Name).ToHashSet(StringComparer.Ordinal);
+        if (!expectedNames.IsSubsetOf(displayedNames))
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': not all logical Board columns were displayed for complete limit capture");
+        }
 
-        foreach (var column in columns)
+        foreach (var column in columns.Where(column => expectedNames.Contains(column.Name)))
         {
             var currentLimit = await ReadLimitAsync(page, column.Name, cancellationToken).ConfigureAwait(false);
             if (currentLimit is null)
