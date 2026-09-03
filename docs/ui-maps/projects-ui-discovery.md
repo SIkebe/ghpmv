@@ -151,3 +151,17 @@ GitHub公式手順では、Board列名の横にあるcontext menuから列上限
 - selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、`data-board-column`/`data-board-card-id`は公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
 
 公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#setting-a-limit-on-the-number-of-items-in-a-column
+
+## Board column visibility UI contract (2026-08-31)
+
+Board右端の`button "Add a new column to the board"`から列pickerを開き、Single-select optionまたはIteration titleごとのcheckable entryを切り替える。公開GraphQL/REST APIには値単位のvisibilityがないため、browser-assisted export/import/verifyだけがこの状態を扱う。
+
+- snapshotのidentityはcolumn field名とSingle-select option名またはIteration titleで、node IDを保存しない。
+- `visibleColumns=null`は未取得、`visibleColumns=[]`は取得済みの明示的な空集合として区別する。
+- exportは表示中の`button "Actions for column: <column>"`から完全なvisible setを取得する。
+- importは`Column by`と対象option/iterationの作成後、column limit適用後にpickerのcomplete setを同期する。
+- targetに同名値がなければ別値を推測せず、field名と期待値を含むwarningを出す。
+- verifyは順序を比較せず、source-visible/target-hiddenとsource-hidden/target-visibleを値単位で報告する。
+- selectorは`Sel.AddBoardColumnButton`、`Sel.CheckboxOptions`、`Sel.BoardColumnActionsButtons`へ集約する。
+
+公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#showing-and-hiding-columns-in-board-layout

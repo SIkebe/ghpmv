@@ -99,6 +99,19 @@ public class ViewUiSnapshotSerializationTests
                                 Limit = 3,
                             },
                         ],
+                        VisibleColumns =
+                        [
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Select",
+                                SingleSelectOptionName = "Alpha",
+                            },
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Sprint",
+                                IterationTitle = "Sprint 1",
+                            },
+                        ],
                     },
                 },
                 new ViewSnapshot
@@ -113,6 +126,7 @@ public class ViewUiSnapshotSerializationTests
                     Ui = new ViewUiSnapshot
                     {
                         BoardColumnLimits = [],
+                        VisibleColumns = [],
                     },
                 },
             ],
@@ -161,6 +175,21 @@ public class ViewUiSnapshotSerializationTests
                     Assert.Equal(3, limit.Limit);
                 });
             Assert.Empty(loaded.Views[4].Ui!.BoardColumnLimits!);
+            Assert.Collection(
+                loaded.Views[3].Ui!.VisibleColumns!,
+                column =>
+                {
+                    Assert.Equal("Fixture Select", column.FieldName);
+                    Assert.Equal("Alpha", column.SingleSelectOptionName);
+                    Assert.Null(column.IterationTitle);
+                },
+                column =>
+                {
+                    Assert.Equal("Fixture Sprint", column.FieldName);
+                    Assert.Null(column.SingleSelectOptionName);
+                    Assert.Equal("Sprint 1", column.IterationTitle);
+                });
+            Assert.Empty(loaded.Views[4].Ui!.VisibleColumns!);
         }
 
         finally
@@ -216,6 +245,7 @@ public class ViewUiSnapshotSerializationTests
             var loaded = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
 
             Assert.Null(Assert.Single(loaded.Views).Ui!.BoardColumnLimits);
+            Assert.Null(Assert.Single(loaded.Views).Ui!.VisibleColumns);
         }
         finally
         {

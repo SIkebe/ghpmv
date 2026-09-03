@@ -264,9 +264,28 @@ public sealed record ViewUiSnapshot
     /// </summary>
     public IReadOnlyList<BoardColumnLimitSnapshot>? BoardColumnLimits { get; init; }
 
+    /// <summary>
+    /// Visible logical columns for a Board view. Null means the setting was not captured;
+    /// an empty collection means it was captured and no field-backed columns are visible.
+    /// </summary>
+    public IReadOnlyList<BoardColumnSnapshot>? VisibleColumns { get; init; }
+
     public RoadmapSettingsSnapshot? Roadmap { get; init; }
 
     public DateTimeOffset? ScrapedAt { get; init; }
+}
+
+/// <summary>A Board column identified without persisting a GitHub node ID.</summary>
+public sealed record BoardColumnSnapshot
+{
+    /// <summary>The Board's vertical group-by field name.</summary>
+    public required string FieldName { get; init; }
+
+    /// <summary>The column option name when <see cref="FieldName"/> is a Single-select field.</summary>
+    public string? SingleSelectOptionName { get; init; }
+
+    /// <summary>The column title when <see cref="FieldName"/> is an Iteration field.</summary>
+    public string? IterationTitle { get; init; }
 }
 
 /// <summary>A Board column limit identified without persisting a GitHub node ID.</summary>

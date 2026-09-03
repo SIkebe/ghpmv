@@ -91,13 +91,15 @@ public class CliImportTests
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-verify-categories-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(VerifySnapshot(), directory, cancellationToken);
 
-        using var server = new GraphQlStubServer(VerifyProjectResponse);
+        using var server = new GraphQlStubServer(VerifyProjectResponse, VerifyFieldsResponse);
         try
         {
             var result = await RunVerifyCliAsync(directory, server, "--categories", "view");
 
             Assert.Equal(0, result.ExitCode);
-            Assert.Single(server.RequestBodies);
+            Assert.Equal(2, server.RequestBodies.Count);
+            Assert.Contains(server.RequestBodies, body =>
+                body.Contains("fields(first:", StringComparison.Ordinal));
             Assert.Contains("selected verification categories match", result.Output, StringComparison.Ordinal);
             Assert.Contains("View: Match", result.Output, StringComparison.Ordinal);
             Assert.DoesNotContain("Project:", result.Output, StringComparison.Ordinal);

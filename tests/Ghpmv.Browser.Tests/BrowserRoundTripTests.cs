@@ -301,6 +301,16 @@ public class BrowserRoundTripTests
                         view => result.ViewNumbers[view.Number],
                         StringComparer.Ordinal),
                     cancellationToken);
+                await new BoardColumnVisibilityObserver(targetSession).ValidateFixtureAsync(
+                        snapshot,
+                        TargetOrg,
+                        ProjectOwnerType.Organization,
+                        result.ProjectNumber,
+                        snapshot.Views.ToDictionary(
+                            view => view.Name,
+                            view => result.ViewNumbers[view.Number],
+                            StringComparer.Ordinal),
+                        cancellationToken);
 
                 await viewImporter.ApplyRoadmapDisplayOptionsAsync(
                     TargetOrg,
@@ -399,6 +409,19 @@ public class BrowserRoundTripTests
                     driftedBoard,
                     snapshot.Fields,
                     cancellationToken);
+                foreach (var visibilityDrift in FixtureUiSnapshotFactory.CreateFieldSumDrift().Views
+                             .Where(view => view.Ui?.VisibleColumns is not null
+                                 && view.Layout == "BOARD_LAYOUT"))
+                {
+                    await viewImporter.ApplyBoardColumnVisibilityAsync(
+                        TargetOrg,
+                        ProjectOwnerType.Organization,
+                        result.ProjectNumber,
+                        result.ViewNumbers[visibilityDrift.Number],
+                        visibilityDrift,
+                        snapshot.Fields,
+                        cancellationToken);
+                }
                 Assert.Empty(viewImporter.Warnings);
 
                 var targetWorkflow = Assert.Single(target.Workflows, workflow => workflow.Name == "Auto-add secondary");
@@ -432,6 +455,10 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("Board limit mismatch", StringComparison.Ordinal)));
+                Assert.Equal(4, driftReport.Differences.Count(difference =>
+                    difference.Severity == VerifySeverity.Error
+                    && difference.Category == VerifyCategories.View
+                    && difference.Message.Contains("Board column visibility mismatch", StringComparison.Ordinal)));
                 Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
@@ -593,11 +620,17 @@ public class BrowserRoundTripTests
         Assert.Equal(
             [("Alpha", 1), ("Beta", 2)],
             sourceBoard.Ui.BoardColumnLimits!.Select(limit => (limit.SingleSelectOptionName, limit.Limit)));
+        Assert.Equal(
+            ["Alpha", "Beta"],
+            sourceBoard.Ui.VisibleColumns!.Select(column => column.SingleSelectOptionName));
         var sourceIterationBoard = Assert.Single(source.Views, view => view.Name == "Fixture Iteration Board");
         Assert.Equal("Fixture Sprint", Assert.Single(sourceIterationBoard.VerticalGroupByFields));
         Assert.Equal(
             [("Sprint 0", 1), ("Sprint 1", 3)],
             sourceIterationBoard.Ui!.BoardColumnLimits!.Select(limit => (limit.IterationTitle, limit.Limit)));
+        Assert.Equal(
+            ["Sprint 0", "Sprint 1", "Sprint 3"],
+            sourceIterationBoard.Ui.VisibleColumns!.Select(column => column.IterationTitle));
 
         var sourceRoadmap = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap");
         Assert.Equal(["Status"], sourceRoadmap.GroupByFields);
@@ -706,6 +739,9 @@ public class BrowserRoundTripTests
             Assert.Equal(
                 expected.Ui.BoardColumnLimits ?? [],
                 actual.Ui.BoardColumnLimits ?? []);
+            Assert.True(BoardColumnVisibilityUi.SetEquals(
+                expected.Ui.VisibleColumns,
+                actual.Ui.VisibleColumns));
             Assert.Equal(expected.Ui.Roadmap is null, actual.Ui.Roadmap is null);
             if (expected.Ui.Roadmap is { } roadmap)
             {

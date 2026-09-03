@@ -117,6 +117,44 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void AnalyzeSnapshot_recognizes_qualifiers_derived_from_project_fields()
+    {
+        var snapshot = Snapshot(
+            "-fixture-select:Gamma -fixture-sprint:\"Sprint 2\"",
+            "is:issue") with
+        {
+            Fields =
+            [
+                new FieldSnapshot { Name = "Fixture Select", DataType = "SINGLE_SELECT" },
+                new FieldSnapshot { Name = "Fixture Sprint", DataType = "ITERATION" },
+            ],
+        };
+
+        var result = Assert.Single(ProjectFilterTransformer.AnalyzeSnapshot(snapshot), transform =>
+            transform.Location == "view 'View'");
+
+        Assert.Empty(result.Result.Unsupported);
+        Assert.Equal(
+            [
+                new FilterIdentifier("fixture-select", "Gamma"),
+                new FilterIdentifier("fixture-sprint", "Sprint 2"),
+            ],
+            result.Result.Unchanged);
+    }
+
+    [Fact]
+    public void BuildProjectFieldQualifiers_does_not_guess_names_with_unsupported_punctuation()
+    {
+        var result = ProjectFilterTransformer.BuildProjectFieldQualifiers(
+        [
+            new FieldSnapshot { Name = "Safe Field", DataType = "TEXT" },
+            new FieldSnapshot { Name = "Ambiguous/Field", DataType = "TEXT" },
+        ]);
+
+        Assert.Equal(["safe-field"], result);
+    }
+
+    [Fact]
     public void Transform_requires_mapping_for_repo_and_org_values_that_resemble_user_shortcuts()
     {
         var result = ProjectFilterTransformer.Transform("repo:none org:@me");

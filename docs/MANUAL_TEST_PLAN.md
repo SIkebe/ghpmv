@@ -66,7 +66,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Project-to-Team links | `ghpmv verify` + Team Projects / Manage access UI | `organization/slug` で識別。explicit collaborator とは別カテゴリ。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
-| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、tab order。saved-tab orderのread/verifyにはbrowser automationが必要。 |
+| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、Board列visibility、tab order。saved-tab orderとBoard列visibilityのread/write/verifyにはbrowser automationが必要。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
 
 ### 2.2 対象外または warning 許容
@@ -323,8 +323,8 @@ Source project number: <source-project-number>
 
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
-  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma=unlimited`)
-  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`)
+  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、visible columns=`Alpha`,`Beta`、hidden populated/empty column=`Gamma`、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma=unlimited`)
+  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、visible columns=`Sprint 0`,`Sprint 1`,`Sprint 3`、hidden populated column=`Sprint 2`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`)。GitHub UIがIteration Boardを最低3列へ自動補充するため、空の`Sprint 3`を表示集合に含める
   - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、shared `Truncate titles`=on、`Show date fields`=off。fixture は truncation 確認用の長い draft title を含む
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
   - `Fixture Roadmap Dates Hidden`: grouped Roadmap、`Truncate titles`=on、`Show date fields`=off
@@ -357,9 +357,11 @@ Views:
   - Column by=`Fixture Select`
   - Swimlanes=`Status`
   - Field sum=`Fixture Number`
+  - Columns: `Alpha`, `Beta`を表示し、`Gamma`を非表示
   - Column limits: `Alpha=1`, `Beta=2`, `Gamma=unlimited`
 - `Fixture Iteration Board` (Board)
   - Column by=`Fixture Sprint`
+  - Columns: `Sprint 0`, `Sprint 1`, `Sprint 3`を表示し、`Sprint 2`を非表示
   - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
 - `Fixture Roadmap` (Roadmap)
   - group by Status
@@ -769,6 +771,8 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
 | N-11 | target UI で View tab を逆順にして browser-assisted verify | `View` categoryとJSON reportに`view tab order mismatch`が出る。続けてbrowser-assisted importを再実行すると順序が修復される。 |
 | N-12 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
+| N-13 | Single-select Boardでhiddenな`Gamma`を表示し、visibleな`Beta`を非表示にしてbrowser-assisted verify | `View` categoryに`Fixture Select / Beta`のsource visible/target hiddenと`Fixture Select / Gamma`のsource hidden/target visibleが別々に出る。 |
+| N-14 | Iteration Boardでhiddenな`Sprint 2`を表示し、visibleな`Sprint 1`を非表示にしてbrowser-assisted verify | `View` categoryに`Fixture Sprint / Sprint 1`と`Fixture Sprint / Sprint 2`の正確なvisibility差分が出る。続けて同じsnapshotをbrowser-assisted importし、両Boardをreloadして元の表示集合と`Match`を確認する。 |
 
 ---
 
@@ -814,6 +818,11 @@ Field sum initial verify:
 Field sum rendered-header check:
 Field sum drift verify:
 Field sum rerun verify:
+
+Board column visibility source sets:
+Board column visibility target UI:
+Board column visibility drift verify:
+Board column visibility rerun verify:
 
 Warnings:
 -

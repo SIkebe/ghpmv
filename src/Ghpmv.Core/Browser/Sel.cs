@@ -24,6 +24,9 @@ internal static class Sel
         "column limit",
         RegexOptions.IgnoreCase);
     private static readonly Regex BoardColumnActionsButtonName = new("^Actions for column: ");
+    private static readonly Regex AddBoardColumnButtonName = new(
+        "^(Add a new column to the board|Add column)$",
+        RegexOptions.IgnoreCase);
 
     /// <summary>Filter-bar "View" button that opens the view configuration menu.</summary>
     public static ILocator ViewMenuButton(IPage page)
@@ -84,6 +87,10 @@ internal static class Sel
         => page.GetByRole(
             AriaRole.Button,
             new() { Name = $"Actions for column: {columnName}", Exact = true }).First;
+
+    /// <summary>Control that opens the Board column visibility picker.</summary>
+    public static ILocator AddBoardColumnButton(IPage page)
+        => page.GetByRole(AriaRole.Button, new() { NameRegex = AddBoardColumnButtonName }).First;
 
     /// <summary>"Set limit" in an open Board column menu.</summary>
     public static ILocator BoardColumnLimitMenuItem(IPage page)

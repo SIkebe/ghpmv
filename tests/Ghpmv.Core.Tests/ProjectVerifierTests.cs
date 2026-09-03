@@ -128,6 +128,17 @@ public class ProjectVerifierTests
             Limit = limit,
         };
 
+    private static BoardColumnSnapshot VisibleColumn(
+        string fieldName,
+        string? option = null,
+        string? iteration = null)
+        => new()
+        {
+            FieldName = fieldName,
+            SingleSelectOptionName = option,
+            IterationTitle = iteration,
+        };
+
     private static ItemSnapshot DraftItem(int position, string title, string? body, string? status, bool archived = false) => new()
     {
         Type = "DRAFT_ISSUE",
@@ -957,6 +968,109 @@ public class ProjectVerifierTests
 
         Assert.DoesNotContain(ProjectVerifier.Compare(source, target).Differences, difference =>
             difference.Category == "View");
+    }
+
+    [Fact]
+    public void Board_column_visibility_reports_each_logical_value_drift()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                VisibleColumns =
+                [
+                    VisibleColumn("Status", option: "Todo"),
+                    VisibleColumn("Status", option: "In Progress"),
+                ],
+            },
+        };
+        var source = baseline with { Views = [sourceBoard] };
+        var target = baseline with
+        {
+            Views =
+            [
+                sourceBoard with
+                {
+                    Number = 9,
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns =
+                        [
+                            VisibleColumn("Status", option: "Todo"),
+                            VisibleColumn("Status", option: "Done"),
+                        ],
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+        var differences = report.Differences
+            .Where(difference => difference.Category == "View"
+                && difference.Message.Contains("Board column visibility mismatch", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'In Progress' (source visible, target hidden)", StringComparison.Ordinal));
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'Done' (source hidden, target visible)", StringComparison.Ordinal));
+        Assert.Equal(2, differences.Count);
+    }
+
+    [Fact]
+    public void Legacy_uncaptured_Board_visibility_does_not_compare_target_state()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+            ],
+        };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, target).Differences, difference =>
+            difference.Category == "View");
+    }
+
+    [Fact]
+    public void Captured_Board_visibility_is_not_verified_when_target_capture_is_unavailable()
+    {
+        var baseline = BuildSnapshot();
+        var source = baseline with
+        {
+            Views =
+            [
+                baseline.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views = [source.Views[0] with { Ui = new ViewUiSnapshot() }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility", StringComparison.Ordinal));
     }
 
     [Fact]
