@@ -207,6 +207,7 @@ public static class FixtureUiSnapshotFactory
                 new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED", Description = "First" },
                 new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE", Description = "Second" },
                 new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN", Description = "Third" },
+                new SingleSelectOptionSnapshot { Id = "delta", Name = "Delta", Color = "GRAY", Description = "Empty hidden column" },
             ],
             DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Beta" },
         },
@@ -249,6 +250,13 @@ public static class FixtureUiSnapshotFactory
                         Id = "sprint-3",
                         Title = "Sprint 3",
                         StartDate = "2026-02-16",
+                        Duration = 14,
+                    },
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-4",
+                        Title = "Sprint 4",
+                        StartDate = "2026-03-02",
                         Duration = 14,
                     },
                 ],

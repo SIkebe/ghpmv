@@ -176,6 +176,15 @@ public sealed class ViewUiExporter
                         view,
                         fields,
                         cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+                {
+                    _warnings.Add(
+                        $"view '{view.Name}': Board column visibility was not captured — {exception.Message}");
+                }
+
+                try
+                {
                     boardColumnLimits = await BoardColumnLimitUi.ReadAsync(
                         page,
                         view,
@@ -185,7 +194,7 @@ public sealed class ViewUiExporter
                 catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
                 {
                     _warnings.Add(
-                        $"view '{view.Name}': Board column visibility or limits were not captured — {exception.Message}");
+                        $"view '{view.Name}': Board column limits were not captured — {exception.Message}");
                 }
             }
             else

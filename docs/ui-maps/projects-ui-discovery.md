@@ -79,7 +79,7 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
   - 5=Fixture Roadmap Dates Hidden (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Truncate titles=on, Show date fields=off
-  - 6=Fixture Iteration Board (BOARD): Column by=Fixture Sprint, Sprint 0=1, Sprint 1=3, Sprint 2/3=unlimited
+  - 6=Fixture Iteration Board (BOARD): Column by=Fixture Sprint, Sprint 0=1, Sprint 1=3, Sprint 2/3/4=unlimited
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)

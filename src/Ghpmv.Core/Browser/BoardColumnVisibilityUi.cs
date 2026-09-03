@@ -72,12 +72,16 @@ internal static class BoardColumnVisibilityUi
             available.Add(name);
         }
 
-        foreach (var name in available)
+        foreach (var change in BuildApplyOrder(available.ToList(), plan.VisibleNames))
+        {
+            await ApplyVisibilityAsync(change.Name, change.ShouldBeVisible).ConfigureAwait(false);
+        }
+
+        async Task ApplyVisibilityAsync(string name, bool shouldBeVisible)
         {
             var option = await FindOptionAsync(options, name).ConfigureAwait(false)
                 ?? throw new InvalidOperationException(
                     $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
-            var shouldBeVisible = plan.VisibleNames.Contains(name);
             var isVisible = string.Equals(
                 await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
                 "true",
@@ -169,6 +173,17 @@ internal static class BoardColumnVisibilityUi
             && expectedKeys.SetEquals(actualKeys);
     }
 
+    internal static IReadOnlyList<VisibilityChange> BuildApplyOrder(
+        IReadOnlyList<string> availableNames,
+        IReadOnlySet<string> visibleNames)
+        => availableNames
+            .Where(visibleNames.Contains)
+            .Select(name => new VisibilityChange(name, ShouldBeVisible: true))
+            .Concat(availableNames
+                .Where(name => !visibleNames.Contains(name))
+                .Select(name => new VisibilityChange(name, ShouldBeVisible: false)))
+            .ToList();
+
     internal static bool SameColumn(BoardColumnSnapshot first, BoardColumnSnapshot second)
         => string.Equals(first.FieldName, second.FieldName, StringComparison.Ordinal)
             && string.Equals(first.SingleSelectOptionName, second.SingleSelectOptionName, StringComparison.Ordinal)
@@ -244,4 +259,6 @@ internal static class BoardColumnVisibilityUi
     internal sealed record ReconciliationPlan(
         HashSet<string> VisibleNames,
         List<string> Warnings);
+
+    internal sealed record VisibilityChange(string Name, bool ShouldBeVisible);
 }

@@ -188,7 +188,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 | browser-e2e field-sum contract | 下記の View / field 名と期待値 |
 | browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
-| browser-e2e Board-limit contract | `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma=unlimited`; `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited` |
+| browser-e2e Board-limit contract | `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`; `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited` |
 | browser-e2e Board-limit status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | browser-e2e field-default contract | `Fixture Text=既定値 🌏`, `Fixture Number=-7`, `Fixture Number 2=0`, `Fixture Select=Beta` |
 | browser-e2e field-default status | `fixture-pending`, `snapshot-match`, `target-field-match`, `new-draft-observed`, `drift-detected`, `repair-match` |
@@ -209,7 +209,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
 
-同じ round-tripでBoard列上限と列visibilityも常に検証する。Single-selectとIterationのlogical identity、複数の異なる数値、unlimited列、limit=1を超えるitem count、populated hidden列を標準fixtureへ含める。Step 6は両nullable collectionを検査し、初回verifyとrender checkはtargetの数値/unlimited/over-limit状態とvisible/hidden setを確認する。既存field-sum drift commandでAlphaを1→5へ変更しBetaをclearすると同時に、Single-selectはBeta→Gamma、IterationはSprint 1→Sprint 2へvisibilityをdriftさせ、既存の一回のrepair importで戻す。item移動やcolumn value変更は行わない。
+同じ round-tripでBoard列上限と列visibilityも常に検証する。Single-selectとIterationのlogical identity、複数の異なる数値、unlimited列、limit=1を超えるitem count、populated hidden列、distinctなempty hidden列を標準fixtureへ含める。Step 6は両nullable collectionを検査し、初回verifyとrender checkはtargetの数値/unlimited/over-limit状態とvisible/hidden setを確認する。既存field-sum drift commandでAlphaを1→5へ変更しBetaをclearすると同時に、Single-selectはBeta→Gamma、IterationはSprint 1→Sprint 2へvisibilityをdriftさせ、既存の一回のrepair importで戻す。item移動やcolumn value変更は行わない。
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
@@ -1176,8 +1176,8 @@ foreach ($expected in $expectedBoardColumns) {
 }
 Write-Output 'GHPMV_BOARD_VISIBILITY_SNAPSHOT_MATCH'
 $selectFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Select' -and $_.dataType -eq 'SINGLE_SELECT' })
-if ($selectFields.Count -ne 1 -or @($selectFields[0].options | Where-Object name -eq 'Gamma').Count -ne 1) {
-    Stop-FieldSumSnapshotCheck "Fixture Select must contain the unlimited logical column 'Gamma'."
+if ($selectFields.Count -ne 1 -or @($selectFields[0].options | Where-Object { $_.name -in @('Gamma', 'Delta') }).Count -ne 2) {
+    Stop-FieldSumSnapshotCheck "Fixture Select must contain the unlimited logical columns 'Gamma' and 'Delta'."
     return
 }
 $iterationFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Sprint' -and $_.dataType -eq 'ITERATION' })
@@ -1187,7 +1187,7 @@ if ($iterationFields.Count -ne 1) {
 }
 $fixtureIterations = @($iterationFields[0].iterationConfiguration.iterations) +
     @($iterationFields[0].iterationConfiguration.completedIterations)
-foreach ($title in @('Sprint 2', 'Sprint 3')) {
+foreach ($title in @('Sprint 2', 'Sprint 3', 'Sprint 4')) {
     if (@($fixtureIterations | Where-Object title -eq $title).Count -ne 1) {
         Stop-FieldSumSnapshotCheck "Fixture Sprint must contain the unlimited logical column '$title'."
         return
@@ -1206,6 +1206,22 @@ foreach ($expected in $expectedOverLimitColumns) {
     })
     if ($matchingItems.Count -lt $expected.MinimumItems) {
         Stop-FieldSumSnapshotCheck "Board column '$($expected.Field)/$($expected.Value)' must contain at least $($expected.MinimumItems) items to exceed its limit."
+        return
+    }
+}
+$expectedEmptyColumns = @(
+    [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Delta' },
+    [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 4' }
+)
+foreach ($expected in $expectedEmptyColumns) {
+    $matchingItems = @($snapshot.items | Where-Object {
+        $item = $_
+        @($item.fieldValues | Where-Object {
+            $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+        }).Count -eq 1
+    })
+    if ($matchingItems.Count -ne 0) {
+        Stop-FieldSumSnapshotCheck "Hidden Board column '$($expected.Field)/$($expected.Value)' must remain empty."
         return
     }
 }
@@ -1662,10 +1678,10 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 - `View 1`: layout、Group by=`Status`、Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
 - `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
-- `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma=unlimited`
-- `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
-- `Fixture Board`: visible=`Fixture Select/Alpha`,`Beta`; hidden populated/empty=`Gamma`
-- `Fixture Iteration Board`: visible=`Fixture Sprint/Sprint 0`,`Sprint 1`,`Sprint 3`; hidden populated=`Sprint 2`
+- `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`
+- `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`
+- `Fixture Board`: visible=`Fixture Select/Alpha`,`Beta`; hidden populated=`Gamma`; hidden empty=`Delta`
+- `Fixture Iteration Board`: visible=`Fixture Sprint/Sprint 0`,`Sprint 1`,`Sprint 3`; hidden populated=`Sprint 2`; hidden empty=`Sprint 4`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
 - `Fixture Roadmap Dates Hidden`: layout、Group by=`Status`、Field sum=`Fixture Number 2`、Show date fields=false
 
@@ -1689,7 +1705,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は grouped Viewと2つのBoardをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示、Boardの数値/unlimited/over-limit状態をDOMで検査する。`Rendered Field sums verified`、両Boardの`Rendered Board limits verified`、`Fixture field-sum and Board-limit rendering verified`、command exit code 0を確認した場合だけ Field sum / Board-limit / Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は grouped Viewと2つのBoardをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示、Boardの数値/unlimited/over-limit状態とvisible/hidden列をDOMで検査する。`Rendered Field sums verified`、両Boardの`Rendered Board limits verified`と`Rendered Board visibility verified`、`Fixture field-sum, Board-limit, and Board-visibility rendering verified`、command exit code 0を確認した場合だけ Field sum / Board-limit / Board visibility / Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
 
 ### Deliberate drift と repair
 
