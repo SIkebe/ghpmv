@@ -216,14 +216,16 @@ public static class ProjectFilterTransformer
     }
 
     /// <summary>
-    /// Builds the filter qualifier names GitHub derives from simple Project field names.
-    /// Field names containing other punctuation remain unsupported rather than being guessed.
+    /// Builds the filter qualifier names GitHub derives from simple value-only custom field names.
+    /// Built-in identity fields require mapping support and names containing other punctuation
+    /// remain unsupported rather than being guessed.
     /// </summary>
     public static IReadOnlySet<string> BuildProjectFieldQualifiers(IEnumerable<FieldSnapshot> fields)
     {
         ArgumentNullException.ThrowIfNull(fields);
         var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var field in fields)
+        foreach (var field in fields.Where(field =>
+            field.DataType is "TEXT" or "NUMBER" or "DATE" or "SINGLE_SELECT" or "ITERATION"))
         {
             var builder = new StringBuilder(field.Name.Length);
             var pendingSeparator = false;

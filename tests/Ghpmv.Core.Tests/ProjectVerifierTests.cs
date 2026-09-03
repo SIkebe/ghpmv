@@ -976,6 +976,56 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_view_names_match_uncaptured_limits_by_visibility()
+    {
+        var baseline = BuildSnapshot();
+        var todo = baseline.Views[0] with
+        {
+            Number = 7,
+            Name = "Duplicate",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var done = todo with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                VisibleColumns = [VisibleColumn("Status", option: "Done")],
+            },
+        };
+        var source = baseline with { Views = [todo, done] };
+        var target = baseline with
+        {
+            Views =
+            [
+                todo with
+                {
+                    Number = 21,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = null,
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+                done with { Number = 22 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column limits were captured", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();

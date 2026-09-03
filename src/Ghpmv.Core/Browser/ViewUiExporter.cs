@@ -194,8 +194,19 @@ public sealed class ViewUiExporter
                 }
                 else
                 {
-                    _warnings.Add(
-                        $"view '{view.Name}': Board column limits were not captured because complete column visibility could not be read");
+                    try
+                    {
+                        boardColumnLimits = await BoardColumnLimitUi.ReadAsync(
+                            page,
+                            view,
+                            fields,
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+                    {
+                        _warnings.Add(
+                            $"view '{view.Name}': Board column limits were not captured — {exception.Message}");
+                    }
                 }
             }
             else

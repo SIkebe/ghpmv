@@ -1138,17 +1138,21 @@ public sealed class ProjectVerifier
                 && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
 
     private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
-        => ViewUiEqualsWithoutBoardLimits(source, target)
+        => ViewUiEqualsWithoutBoardState(source, target)
             && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits)
             && BoardColumnVisibilityUi.SetEquals(source.VisibleColumns, target.VisibleColumns);
 
     private static bool ViewUiEqualsWithoutBoardLimits(ViewUiSnapshot source, ViewUiSnapshot target)
+        => ViewUiEqualsWithoutBoardState(source, target)
+            && BoardColumnVisibilityUi.SetEquals(source.VisibleColumns, target.VisibleColumns);
+
+    private static bool ViewUiEqualsWithoutBoardState(ViewUiSnapshot source, ViewUiSnapshot target)
         => string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
             && UiListEquals(source.FieldSum, target.FieldSum)
             && RoadmapEquals(source.Roadmap, target.Roadmap);
 
     private static bool ViewUiEqualsWithoutBoardVisibility(ViewUiSnapshot source, ViewUiSnapshot target)
-        => ViewUiEqualsWithoutBoardLimits(source, target)
+        => ViewUiEqualsWithoutBoardState(source, target)
             && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits);
 
     private static bool BoardColumnLimitsEqual(
