@@ -225,7 +225,7 @@ public static class ProjectFilterTransformer
         ArgumentNullException.ThrowIfNull(fields);
         var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var field in fields.Where(field =>
-            field.DataType is "TEXT" or "NUMBER" or "DATE" or "SINGLE_SELECT" or "ITERATION"))
+            field.DataType is "TEXT" or "NUMBER" or "DATE" or "SINGLE_SELECT" or "ITERATION" or "MULTI_SELECT"))
         {
             var builder = new StringBuilder(field.Name.Length);
             var pendingSeparator = false;

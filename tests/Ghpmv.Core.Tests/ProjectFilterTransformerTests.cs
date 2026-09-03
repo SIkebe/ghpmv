@@ -160,11 +160,12 @@ public class ProjectFilterTransformerTests
         var result = ProjectFilterTransformer.BuildProjectFieldQualifiers(
         [
             new FieldSnapshot { Name = "Safe Field", DataType = "TEXT" },
+            new FieldSnapshot { Name = "Fixture Areas", DataType = "MULTI_SELECT" },
             new FieldSnapshot { Name = "Reviewers", DataType = "REVIEWERS" },
             new FieldSnapshot { Name = "Parent issue", DataType = "PARENT_ISSUE" },
         ]);
 
-        Assert.Equal(["safe-field"], result);
+        Assert.Equal(["safe-field", "fixture-areas"], result);
     }
 
     [Fact]
