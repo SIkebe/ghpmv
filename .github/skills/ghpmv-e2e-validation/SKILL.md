@@ -87,7 +87,7 @@ browser login command も同様に agent が終了まで監視する。ユーザ
 | PAT permission preflight | HTTP status と endpoint ごとの response |
 | fixture 作成 | exit code、作成された repository / Project、Project number |
 | export | exit code、`snapshot.json`、mapping CSV、warning |
-| browser-e2e field defaults / sums / Board limits | typed defaults と6 Viewのsnapshot contract、configured / unlimited Board limits、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header / Board-limit DOM check、drift report、repair report |
+| browser-e2e field defaults / sums / Board limits / Board visibility | typed defaults と6 Viewのsnapshot contract、configured / unlimited Board limits、Single-select/Iteration Boardのvisible/hidden logical columns、target `Field: Match` / `View: Match`、new-draft functional check、rendered-header / Board-limit / visibility DOM check、drift report、repair report |
 | GEI | migration status、target repository、Issue / PR number |
 | import | `result`、target Project number、`import-log.json` |
 | verify | overall / category result、`verify-report.json` |
@@ -188,7 +188,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 | host topology | `github.com-to-github.com`, `github.com-to-ghec-dr` など |
 | browser-e2e field-sum contract | 下記の View / field 名と期待値 |
 | browser-e2e field-sum status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
-| browser-e2e Board-limit contract | `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma=unlimited`; `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited` |
+| browser-e2e Board-limit contract | `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`; `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited` |
 | browser-e2e Board-limit status | `fixture-pending`, `snapshot-match`, `target-view-match`, `target-render-observed`, `drift-detected`, `repair-match` |
 | browser-e2e field-default contract | `Fixture Text=既定値 🌏`, `Fixture Number=-7`, `Fixture Number 2=0`, `Fixture Select=Beta` |
 | browser-e2e field-default status | `fixture-pending`, `snapshot-match`, `target-field-match`, `new-draft-observed`, `drift-detected`, `repair-match` |
@@ -209,7 +209,7 @@ agent が terminal に command を直接入力できず、ユーザー自身が 
 
 required Number fields は `Fixture Number` と `Fixture Number 2`。source / target の実 resource 名を E2E settings schema に追加する必要はない。browser state、PAT、cookie は引き続き settings に保存しない。
 
-同じ round-tripでBoard列上限も常に検証する。Single-selectとIterationのlogical identity、複数の異なる数値、unlimited列、limit=1を超えるitem countを標準fixtureへ含める。Step 6はnullable collectionを検査し、初回verifyとrender checkはtargetの数値/unlimited/over-limit状態を確認する。既存field-sum drift commandでAlphaを1→5へ変更しBetaをclearし、既存の一回のrepair importで戻す。item移動やcolumn value変更は行わない。
+同じ round-tripでBoard列上限と列visibilityも常に検証する。Single-selectとIterationのlogical identity、複数の異なる数値、unlimited列、limit=1を超えるitem count、populated hidden列、distinctなempty hidden列を標準fixtureへ含める。Step 6は両nullable collectionを検査し、初回verifyとrender checkはtargetの数値/unlimited/over-limit状態とvisible/hidden setを確認する。既存field-sum drift commandでAlphaを1→5へ変更しBetaをclearすると同時に、Single-selectはBeta→Gamma、IterationはSprint 1→Sprint 2へvisibilityをdriftさせ、既存の一回のrepair importで戻す。item移動やcolumn value変更は行わない。
 
 同じ round-trip で field defaults も常に検証する。`setup --fixture --fixture-ui` は source items 作成後に defaults を設定するため既存 item values を変更しない。Step 6 は typed defaults を snapshot から検査し、Step 10 は `Field: Match` 後に `--fixture-field-default-check` で disposable target draft への自動入力を機械確認する。drift phase は `--fixture-field-default-drift` で Text / zero Number / Single-select を変更し、negative Number default を clear した後、既存の一回の repair import で Field sum と同時に戻す。
 
@@ -910,6 +910,7 @@ fine-grained PAT の **Administration** または **All repositories** を付与
 - Number field names: `Fixture Number`, `Fixture Number 2`
 - Grouping field: `Status`
 - expected FieldSum: session state の fixture contract 表
+- expected Board visibility: `Fixture Board=[Alpha,Beta]`、`Fixture Iteration Board=[Sprint 0,Sprint 1,Sprint 3]`（GitHub UIがIteration Boardを最低3列へ自動補充するため、空の`Sprint 3`を含める）
 
 `fixture preparation=existing` の source Project number が settings から確定済みなら質問しない。未確定ならProject numberだけを一問で確認する。contract は Step 6 の snapshot inspection が機械判定するため、ユーザーへ自己申告を求めず、それまで `browser-e2e field-sum status=fixture-pending` のままにする。
 
@@ -1144,9 +1145,39 @@ foreach ($expected in $expectedBoardLimits) {
         return
     }
 }
+$expectedBoardColumns = @(
+    [pscustomobject]@{ View = 'Fixture Board'; Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Alpha' },
+    [pscustomobject]@{ View = 'Fixture Board'; Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Beta' },
+    [pscustomobject]@{ View = 'Fixture Iteration Board'; Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 0' },
+    [pscustomobject]@{ View = 'Fixture Iteration Board'; Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 1' },
+    [pscustomobject]@{ View = 'Fixture Iteration Board'; Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 3' }
+)
+foreach ($expectedView in @($expectedBoardColumns | Group-Object View)) {
+    $views = @($snapshot.views | Where-Object name -eq $expectedView.Name)
+    if ($views.Count -ne 1 -or $null -eq $views[0].ui.visibleColumns) {
+        Stop-FieldSumSnapshotCheck "View '$($expectedView.Name)' is missing captured visibleColumns."
+        return
+    }
+    $actualColumns = @($views[0].ui.visibleColumns)
+    if ($actualColumns.Count -ne $expectedView.Count) {
+        Stop-FieldSumSnapshotCheck "View '$($expectedView.Name)' visibleColumns must contain exactly $($expectedView.Count) logical values; found $($actualColumns.Count)."
+        return
+    }
+}
+foreach ($expected in $expectedBoardColumns) {
+    $views = @($snapshot.views | Where-Object name -eq $expected.View)
+    $matches = @($views[0].ui.visibleColumns | Where-Object {
+        $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+    })
+    if ($matches.Count -ne 1) {
+        Stop-FieldSumSnapshotCheck "Visible Board column '$($expected.View)/$($expected.Field)/$($expected.Value)' was not captured exactly once."
+        return
+    }
+}
+Write-Output 'GHPMV_BOARD_VISIBILITY_SNAPSHOT_MATCH'
 $selectFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Select' -and $_.dataType -eq 'SINGLE_SELECT' })
-if ($selectFields.Count -ne 1 -or @($selectFields[0].options | Where-Object name -eq 'Gamma').Count -ne 1) {
-    Stop-FieldSumSnapshotCheck "Fixture Select must contain the unlimited logical column 'Gamma'."
+if ($selectFields.Count -ne 1 -or @($selectFields[0].options | Where-Object { $_.name -in @('Gamma', 'Delta') }).Count -ne 2) {
+    Stop-FieldSumSnapshotCheck "Fixture Select must contain the unlimited logical columns 'Gamma' and 'Delta'."
     return
 }
 $iterationFields = @($snapshot.fields | Where-Object { $_.name -eq 'Fixture Sprint' -and $_.dataType -eq 'ITERATION' })
@@ -1156,7 +1187,7 @@ if ($iterationFields.Count -ne 1) {
 }
 $fixtureIterations = @($iterationFields[0].iterationConfiguration.iterations) +
     @($iterationFields[0].iterationConfiguration.completedIterations)
-foreach ($title in @('Sprint 2', 'Sprint 3')) {
+foreach ($title in @('Sprint 2', 'Sprint 3', 'Sprint 4')) {
     if (@($fixtureIterations | Where-Object title -eq $title).Count -ne 1) {
         Stop-FieldSumSnapshotCheck "Fixture Sprint must contain the unlimited logical column '$title'."
         return
@@ -1175,6 +1206,38 @@ foreach ($expected in $expectedOverLimitColumns) {
     })
     if ($matchingItems.Count -lt $expected.MinimumItems) {
         Stop-FieldSumSnapshotCheck "Board column '$($expected.Field)/$($expected.Value)' must contain at least $($expected.MinimumItems) items to exceed its limit."
+        return
+    }
+}
+$expectedPopulatedHiddenColumns = @(
+    [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Gamma' },
+    [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 2' }
+)
+foreach ($expected in $expectedPopulatedHiddenColumns) {
+    $matchingItems = @($snapshot.items | Where-Object {
+        $item = $_
+        @($item.fieldValues | Where-Object {
+            $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+        }).Count -eq 1
+    })
+    if ($matchingItems.Count -lt 1) {
+        Stop-FieldSumSnapshotCheck "Hidden Board column '$($expected.Field)/$($expected.Value)' must contain at least one item."
+        return
+    }
+}
+$expectedEmptyColumns = @(
+    [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Delta' },
+    [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 4' }
+)
+foreach ($expected in $expectedEmptyColumns) {
+    $matchingItems = @($snapshot.items | Where-Object {
+        $item = $_
+        @($item.fieldValues | Where-Object {
+            $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+        }).Count -eq 1
+    })
+    if ($matchingItems.Count -ne 0) {
+        Stop-FieldSumSnapshotCheck "Hidden Board column '$($expected.Field)/$($expected.Value)' must remain empty."
         return
     }
 }
@@ -1226,7 +1289,7 @@ Write-Output 'GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-`GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH`、`GHPMV_FIELD_SUM_SNAPSHOT_MATCH`、`GHPMV_BOARD_LIMIT_SNAPSHOT_MATCH`、`GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH`、command exit code 0 をすべて確認した場合だけ各 feature status を `snapshot-match` とし、先へ進む。zero は null と区別し、Single-select は source option ID でなく `singleSelectOptionName=Beta` を要求する。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
+`GHPMV_FIELD_DEFAULT_SNAPSHOT_MATCH`、`GHPMV_FIELD_SUM_SNAPSHOT_MATCH`、`GHPMV_BOARD_LIMIT_SNAPSHOT_MATCH`、`GHPMV_BOARD_VISIBILITY_SNAPSHOT_MATCH`、`GHPMV_ROADMAP_DISPLAY_SNAPSHOT_MATCH`、command exit code 0 をすべて確認した場合だけ各 feature status を `snapshot-match` とし、先へ進む。zero は null と区別し、Single-select は source option ID でなく `singleSelectOptionName=Beta` を要求する。Table / Roadmap のいずれかだけ一致、warning、missing UI、`1 more` のような summary text、`null` と空集合以外の不一致を成功扱いしない。失敗時は source fixture contract の実値を示し、新しい標準 fixture を作るかどうかを一問で確認して停止する。
 
 `api-only` / `browser-e2e`では、target PAT入力またはtarget resource準備より前に同じterminalでsnapshot-driven capabilityを算出する。
 
@@ -1631,12 +1694,14 @@ target が data residency の場合は `--api-base-url <target-api-url>` と `--
 - `View 1`: layout、Group by=`Status`、Field sum=`Count`, `Fixture Number`, `Fixture Number 2`
 - `Fixture Roadmap`: layout、Group by=`Status`、Field sum=`Fixture Number 2`
 - `Fixture Board`: layout、Swimlanes=`Status`、Field sum=`Fixture Number`
-- `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma=unlimited`
-- `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
+- `Fixture Board`: `Fixture Select/Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`
+- `Fixture Iteration Board`: `Fixture Sprint/Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`
+- `Fixture Board`: visible=`Fixture Select/Alpha`,`Beta`; hidden populated=`Gamma`; hidden empty=`Delta`
+- `Fixture Iteration Board`: visible=`Fixture Sprint/Sprint 0`,`Sprint 1`,`Sprint 3`; hidden populated=`Sprint 2`; hidden empty=`Sprint 4`
 - `Fixture Empty Sums`: layout、Group by=`Status`、Field sum=empty
 - `Fixture Roadmap Dates Hidden`: layout、Group by=`Status`、Field sum=`Fixture Number 2`、Show date fields=false
 
-このため Group by、Field sum menu の選択状態、空集合について対話用質問や目視確認を重ねない。Issue #62 の派生描画 checkpoint も、初回 `View: Match` 後に次の Playwright command で自動検証する。ユーザーへ browser reload や自己申告を求めない。
+このため Group by、Field sum menu、Board列pickerの選択状態、空集合について対話用質問を重ねない。Issue #62 の派生描画 checkpoint とBoard visibilityの直接UI観測も、初回 `View: Match` 後にPlaywrightで自動検証する。ユーザーへbrowser reloadや自己申告を求めない。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN
@@ -1656,7 +1721,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は grouped Viewと2つのBoardをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示、Boardの数値/unlimited/over-limit状態をDOMで検査する。`Rendered Field sums verified`、両Boardの`Rendered Board limits verified`、`Fixture field-sum and Board-limit rendering verified`、command exit code 0を確認した場合だけ Field sum / Board-limit / Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。command は grouped Viewと2つのBoardをreloadし、aggregate rendering、長いtitleのclip/ellipsis、同じitem内のdate field表示/非表示、Boardの数値/unlimited/over-limit状態とvisible/hidden列をDOMで検査する。`Rendered Field sums verified`、両Boardの`Rendered Board limits verified`と`Rendered Board visibility verified`、`Fixture field-sum, Board-limit, and Board-visibility rendering verified`、command exit code 0を確認した場合だけ Field sum / Board-limit / Board visibility / Roadmap display のstatusを`target-render-observed`としてdeliberate driftへ進む。
 
 ### Deliberate drift と repair
 
@@ -1875,7 +1940,7 @@ finally {
 }
 ```
 
-target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum and Board-limit drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、保持中のRoadmap date-display driftを含め、Field default / Field sum / Board limit / Roadmap date-displayの4 driftを同時検証するverifyを送る。drift commandは`Fixture Board`のAlphaを5へ変更しBetaをclearするが、itemやcolumn valueは変更しない。
+target が data residency の場合は `--api-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。`Fixture field-sum, Board-limit, and Board-visibility drift applied`、`viewWarnings=0`、command exit code 0 を確認した後、保持中のRoadmap date-display driftを含め、Field default / Field sum / Board limit / Board visibility / Roadmap date-displayの5 driftを同時検証するverifyを送る。drift commandは`Fixture Board`のAlphaを5へ変更しBetaをclearし、visibilityはSingle-selectのBeta→GammaとIterationのSprint 1→Sprint 2を入れ替えるが、itemやcolumn valueは変更しない。
 
 ```powershell
 function Stop-FieldSumDriftCheck([string]$Message) {
@@ -1916,6 +1981,19 @@ $driftViewCategories = @($driftReport.categories | Where-Object category -eq 'Vi
 $fieldDefaultDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'Field' -and $_.message -match 'default value mismatch' })
 $fieldSumDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'View 1': field sum mismatch" })
 $boardLimitDifferences = @($driftReport.differences | Where-Object { $_.category -eq 'View' -and $_.message -match "view 'Fixture Board': Board limit mismatch" })
+$boardVisibilityDifferences = @($driftReport.differences | Where-Object {
+    $_.category -eq 'View' -and $_.message -match "view 'Fixture (?:Iteration )?Board': Board column visibility mismatch"
+})
+$expectedBoardVisibilityMessages = @(
+    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Beta' (source visible, target hidden)",
+    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Gamma' (source hidden, target visible)",
+    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 1' (source visible, target hidden)",
+    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 2' (source hidden, target visible)"
+)
+$missingBoardVisibilityMessages = @($expectedBoardVisibilityMessages | Where-Object {
+    $expectedMessage = $_
+    @($boardVisibilityDifferences | Where-Object message -eq $expectedMessage).Count -ne 1
+})
 $roadmapTitleDifferences = @($driftReport.differences | Where-Object {
     $_.category -eq 'View' -and $_.message -match "view 'Fixture Roadmap(?: Dates Hidden)?': truncate titles mismatch"
 })
@@ -1933,24 +2011,28 @@ if ($driftFieldCategories.Count -ne 1 -or
     $driftViewCategories[0].status -ne 'Mismatch' -or
     $fieldSumDifferences.Count -ne 1 -or
     $boardLimitDifferences.Count -ne 2 -or
+    $boardVisibilityDifferences.Count -ne 4 -or
+    $missingBoardVisibilityMessages.Count -ne 0 -or
     $roadmapTitleDifferences.Count -ne 0 -or
     $roadmapDateDifferences.Count -ne 2 -or
-    $nonInfoDifferences.Count -ne 9 -or
+    $nonInfoDifferences.Count -ne 13 -or
     $unexpectedCategoryStatuses.Count -ne 0) {
-    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, two Fixture Board limit mismatches, and both Roadmap date-display mismatches.'
+    Stop-FieldSumDriftCheck 'Verify did not contain exactly four Field default mismatches, the View 1 field-sum mismatch, two Fixture Board limit mismatches, four exact Board visibility mismatches, and both Roadmap date-display mismatches.'
     return
 }
 Write-Output $fieldDefaultDifferences.message
 Write-Output $fieldSumDifferences.message
 Write-Output $boardLimitDifferences.message
+Write-Output $boardVisibilityDifferences.message
 Write-Output 'GHPMV_FIELD_DEFAULT_DRIFT_DETECTED'
 Write-Output 'GHPMV_FIELD_SUM_DRIFT_DETECTED'
 Write-Output 'GHPMV_BOARD_LIMIT_DRIFT_DETECTED'
+Write-Output 'GHPMV_BOARD_VISIBILITY_DRIFT_DETECTED'
 Write-Output 'GHPMV_ROADMAP_DISPLAY_DRIFT_DETECTED'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。4つの drift marker と wrapper exit code 0 を確認した場合だけ各feature status=`drift-detected`としてrepairへ進む。
+target が data residency の場合は、この drift verify にも初回 verify と同じ `--target-base-url <target-api-url>` と `--browser-base-url <target-web-url>` を追加する。5つの drift marker と wrapper exit code 0 を確認した場合だけ各feature status=`drift-detected`としてrepairへ進む。
 
 続けて同じ snapshot と target Project へ browser-assisted import を再実行する。`--project-number` は既存 Project を常に更新するため、`--on-conflict` や `--project-title` を追加しない。
 
@@ -2059,11 +2141,12 @@ Write-Output 'GHPMV_ITEM_VALUES_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_DEFAULT_REPAIR_MATCH'
 Write-Output 'GHPMV_FIELD_SUM_REPAIR_MATCH'
 Write-Output 'GHPMV_BOARD_LIMIT_REPAIR_MATCH'
+Write-Output 'GHPMV_BOARD_VISIBILITY_REPAIR_MATCH'
 Write-Output 'GHPMV_ROADMAP_DISPLAY_REPAIR_MATCH'
 $global:LASTEXITCODE = 0
 ```
 
-target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。Field default / Field sum / Board limit / Roadmap display の4つの repair marker と command exit code 0 を確認後、次のfunctional checkを同じterminalへ送る。
+target が data residency の場合は repair import / verify にも初回と同じ endpoint option を追加する。Field default / Field sum / Board limit / Board visibility / Roadmap display の5つの repair marker と command exit code 0 を確認後、次のfunctional checkを同じterminalへ送る。
 
 ```powershell
 $previousGhpmvToken = $env:GHPMV_TOKEN

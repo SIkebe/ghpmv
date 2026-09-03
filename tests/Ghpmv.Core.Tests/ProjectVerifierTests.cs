@@ -128,6 +128,17 @@ public class ProjectVerifierTests
             Limit = limit,
         };
 
+    private static BoardColumnSnapshot VisibleColumn(
+        string fieldName,
+        string? option = null,
+        string? iteration = null)
+        => new()
+        {
+            FieldName = fieldName,
+            SingleSelectOptionName = option,
+            IterationTitle = iteration,
+        };
+
     private static ItemSnapshot DraftItem(int position, string title, string? body, string? status, bool archived = false) => new()
     {
         Type = "DRAFT_ISSUE",
@@ -871,6 +882,150 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Duplicate_view_names_do_not_pair_uncaptured_visibility_with_different_ui_settings()
+    {
+        var baseline = BuildSnapshot();
+        var first = baseline.Views[0] with
+        {
+            Number = 7,
+            Name = "Duplicate",
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Count"],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var second = first with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot
+            {
+                FieldSum = ["Fixture Number"],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var source = baseline with { Views = [first, second] };
+        var target = baseline with
+        {
+            Views =
+            [
+                first with { Number = 21 },
+                second with
+                {
+                    Number = 22,
+                    Ui = new ViewUiSnapshot
+                    {
+                        FieldSum = ["Different"],
+                        VisibleColumns = null,
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility was captured", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Duplicate_view_names_report_visibility_uncaptured_when_limits_are_also_uncaptured()
+    {
+        var baseline = BuildSnapshot();
+        var captured = baseline.Views[0] with
+        {
+            Number = 7,
+            Name = "Duplicate",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var legacy = captured with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot(),
+        };
+        var source = baseline with { Views = [captured, legacy] };
+        var target = baseline with
+        {
+            Views =
+            [
+                captured with { Number = 21, Ui = new ViewUiSnapshot() },
+                legacy with
+                {
+                    Number = 22,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                        VisibleColumns = [VisibleColumn("Status", option: "Done")],
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility was captured", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Duplicate_view_names_match_uncaptured_limits_by_visibility()
+    {
+        var baseline = BuildSnapshot();
+        var todo = baseline.Views[0] with
+        {
+            Number = 7,
+            Name = "Duplicate",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var done = todo with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot
+            {
+                BoardColumnLimits = [Limit("Status", option: "Todo", limit: 1)],
+                VisibleColumns = [VisibleColumn("Status", option: "Done")],
+            },
+        };
+        var source = baseline with { Views = [todo, done] };
+        var target = baseline with
+        {
+            Views =
+            [
+                todo with
+                {
+                    Number = 21,
+                    Ui = new ViewUiSnapshot
+                    {
+                        BoardColumnLimits = null,
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+                done with { Number = 22 },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column limits were captured", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void View_ui_is_not_verified_when_target_ui_was_not_read()
     {
         var source = BuildSnapshot();
@@ -957,6 +1112,140 @@ public class ProjectVerifierTests
 
         Assert.DoesNotContain(ProjectVerifier.Compare(source, target).Differences, difference =>
             difference.Category == "View");
+    }
+
+    [Fact]
+    public void Board_column_visibility_reports_each_logical_value_drift()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                VisibleColumns =
+                [
+                    VisibleColumn("Status", option: "Todo"),
+                    VisibleColumn("Status", option: "In Progress"),
+                ],
+            },
+        };
+        var source = baseline with { Views = [sourceBoard] };
+        var target = baseline with
+        {
+            Views =
+            [
+                sourceBoard with
+                {
+                    Number = 9,
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns =
+                        [
+                            VisibleColumn("Status", option: "Todo"),
+                            VisibleColumn("Status", option: "Done"),
+                        ],
+                    },
+                },
+            ],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+        var differences = report.Differences
+            .Where(difference => difference.Category == "View"
+                && difference.Message.Contains("Board column visibility mismatch", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'In Progress' (source visible, target hidden)", StringComparison.Ordinal));
+        Assert.Contains(differences, difference =>
+            difference.Message.Contains("'Done' (source hidden, target visible)", StringComparison.Ordinal));
+        Assert.Equal(2, differences.Count);
+    }
+
+    [Fact]
+    public void Board_column_visibility_rejects_duplicate_logical_values()
+    {
+        var baseline = BuildSnapshot();
+        var visible = VisibleColumn("Status", option: "Todo");
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot { VisibleColumns = [visible, visible] },
+        };
+        var source = baseline with { Views = [sourceBoard] };
+        var target = baseline with
+        {
+            Views =
+            [
+                sourceBoard with
+                {
+                    Ui = new ViewUiSnapshot { VisibleColumns = [visible] },
+                },
+            ],
+        };
+
+        var difference = Assert.Single(ProjectVerifier.Compare(source, target).Differences, candidate =>
+            candidate.Category == "View"
+            && candidate.Message.Contains("duplicate logical columns", StringComparison.Ordinal));
+
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+    }
+
+    [Fact]
+    public void Legacy_uncaptured_Board_visibility_does_not_compare_target_state()
+    {
+        var source = BuildSnapshot();
+        var target = source with
+        {
+            Views =
+            [
+                source.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+            ],
+        };
+
+        Assert.DoesNotContain(ProjectVerifier.Compare(source, target).Differences, difference =>
+            difference.Category == "View");
+    }
+
+    [Fact]
+    public void Captured_Board_visibility_is_not_verified_when_target_capture_is_unavailable()
+    {
+        var baseline = BuildSnapshot();
+        var source = baseline with
+        {
+            Views =
+            [
+                baseline.Views[0] with
+                {
+                    Ui = new ViewUiSnapshot
+                    {
+                        VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+                    },
+                },
+            ],
+        };
+        var target = source with
+        {
+            Views = [source.Views[0] with { Ui = new ViewUiSnapshot() }],
+        };
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Equal(VerifyStatus.NotVerified, report.Status);
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility", StringComparison.Ordinal));
     }
 
     [Fact]

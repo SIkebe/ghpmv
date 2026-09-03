@@ -1381,6 +1381,7 @@ public sealed class FixtureProjectBuilder
         var sprint1Start = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint2Start = today.AddDays(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var sprint3Start = today.AddDays(28).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var sprint4Start = today.AddDays(42).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return new ProjectSnapshot
         {
@@ -1420,6 +1421,7 @@ public sealed class FixtureProjectBuilder
                         new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED", Description = "First" },
                         new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE", Description = "Second" },
                         new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN", Description = "Third" },
+                        new SingleSelectOptionSnapshot { Id = "delta", Name = "Delta", Color = "GRAY", Description = "Empty hidden column" },
                     ],
                 },
                 new FieldSnapshot
@@ -1436,6 +1438,7 @@ public sealed class FixtureProjectBuilder
                             new IterationSnapshot { Id = "sprint-1", Title = "Sprint 1", StartDate = sprint1Start, Duration = 14 },
                             new IterationSnapshot { Id = "sprint-2", Title = "Sprint 2", StartDate = sprint2Start, Duration = 14 },
                             new IterationSnapshot { Id = "sprint-3", Title = "Sprint 3", StartDate = sprint3Start, Duration = 14 },
+                            new IterationSnapshot { Id = "sprint-4", Title = "Sprint 4", StartDate = sprint4Start, Duration = 14 },
                         ],
                     },
                 },

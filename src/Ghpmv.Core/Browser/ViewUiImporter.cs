@@ -89,6 +89,7 @@ public sealed class ViewUiImporter
             }
 
             CollectBoardColumnLimitWarnings(view, fieldsByName, warnings);
+            CollectBoardColumnVisibilityWarnings(view, fieldsByName, warnings);
 
             if (view.Ui?.Roadmap is { } roadmap)
             {
@@ -105,6 +106,36 @@ public sealed class ViewUiImporter
         }
 
         return warnings;
+    }
+
+    private static void CollectBoardColumnVisibilityWarnings(
+        ViewSnapshot view,
+        Dictionary<string, List<FieldSnapshot>> fieldsByName,
+        List<string> warnings)
+    {
+        if (view.Ui?.VisibleColumns is not { } columns)
+        {
+            return;
+        }
+
+        if (!string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            || view.VerticalGroupByFields.Count != 1)
+        {
+            warnings.Add(
+                $"view '{view.Name}': visible Board columns require a Board layout with exactly one column-by field");
+            return;
+        }
+
+        var fieldName = view.VerticalGroupByFields[0];
+        if (!fieldsByName.TryGetValue(fieldName, out var matches) || matches.Count != 1)
+        {
+            warnings.Add(
+                $"view '{view.Name}': visible Board column field '{fieldName}' does not uniquely exist in the snapshot");
+            return;
+        }
+
+        warnings.AddRange(
+            BoardColumnVisibilityUi.BuildReconciliationPlan(view, matches[0], columns).Warnings);
     }
 
     private static void CollectBoardColumnLimitWarnings(
@@ -371,20 +402,47 @@ public sealed class ViewUiImporter
                 projectNumber,
                 string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-            _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
-                page,
-                view,
-                fields,
-                desired,
-                cancellationToken).ConfigureAwait(false));
-            var persisted = await BoardColumnLimitUi.ReadAsync(
+            var currentVisibility = await BoardColumnVisibilityUi.ReadAsync(
                 page,
                 view,
                 fields,
                 cancellationToken).ConfigureAwait(false);
-            foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
+            try
             {
-                _warnings.Add($"view '{view.Name}': {difference} did not persist");
+                var revealWarnings = await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    BoardColumnVisibilityUi.GetAllColumns(view, fields),
+                    cancellationToken).ConfigureAwait(false);
+                _warnings.AddRange(revealWarnings);
+                if (revealWarnings.Count == 0)
+                {
+                    _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
+                        page,
+                        view,
+                        fields,
+                        desired,
+                        cancellationToken).ConfigureAwait(false));
+                    var persisted = await BoardColumnLimitUi.ReadAsync(
+                        page,
+                        view,
+                        fields,
+                        cancellationToken).ConfigureAwait(false);
+                    foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
+                    {
+                        _warnings.Add($"view '{view.Name}': {difference} did not persist");
+                    }
+                }
+            }
+            finally
+            {
+                _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    currentVisibility,
+                    cancellationToken).ConfigureAwait(false));
             }
 
             await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
@@ -392,6 +450,61 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view '{view.Name}': Board column-limit drift could not be applied — {exception.Message}");
+        }
+    }
+
+    /// <summary>Applies and verifies the complete visible-column set for one target Board View.</summary>
+    public async Task ApplyBoardColumnVisibilityAsync(
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(fields);
+        var desired = view.Ui?.VisibleColumns
+            ?? throw new ArgumentException("The View has no captured Board column-visibility state.", nameof(view));
+
+        OnProgress?.Invoke($"Applying Board column-visibility drift for view '{view.Name}'...");
+        try
+        {
+            var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
+            var url = BrowserProjectUrl.Build(
+                _session.BaseUrl,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
+            await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+                page,
+                view,
+                fields,
+                desired,
+                cancellationToken).ConfigureAwait(false));
+            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var actual = await BoardColumnVisibilityUi.ReadAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
+            if (!BoardColumnVisibilityUi.SetEquals(desired, actual))
+            {
+                _warnings.Add($"view '{view.Name}': Board column visibility did not persist");
+            }
+
+            await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
+        {
+            _warnings.Add(
+                $"view '{view.Name}': Board column visibility drift could not be applied — {exception.Message}");
         }
     }
 
@@ -866,18 +979,48 @@ public sealed class ViewUiImporter
             // Column limits are saved by their own dialog and require the persisted
             // Column-by selection to have rendered the target columns first.
             await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
-            var warnings = await BoardColumnLimitUi.ApplyAsync(
-                page,
-                view,
-                fields,
-                boardColumnLimits,
-                cancellationToken).ConfigureAwait(false);
-            _warnings.AddRange(warnings);
+            var limitsReady = true;
+            if (view.Ui.VisibleColumns is not null)
+            {
+                var visibilityWarnings = await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    BoardColumnVisibilityUi.GetAllColumns(view, fields),
+                    cancellationToken).ConfigureAwait(false);
+                _warnings.AddRange(visibilityWarnings);
+                limitsReady = visibilityWarnings.Count == 0;
+            }
+
+            if (limitsReady)
+            {
+                _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    boardColumnLimits,
+                    cancellationToken).ConfigureAwait(false));
+            }
         }
         else if (isBoard && view.Ui?.BoardColumnLimits is not null && !columnByReady)
         {
             _warnings.Add(
                 $"view '{view.Name}': Board column limits were not applied because the target column-by field could not be selected");
+        }
+
+        if (isBoard && view.Ui?.VisibleColumns is { } visibleColumns && columnByReady)
+        {
+            _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+                page,
+                view,
+                fields,
+                visibleColumns,
+                cancellationToken).ConfigureAwait(false));
+        }
+        else if (isBoard && view.Ui?.VisibleColumns is not null && !columnByReady)
+        {
+            _warnings.Add(
+                $"view '{view.Name}': Board column visibility was not applied because the target column-by field could not be selected");
         }
 
         if (view.SortByFields.Count > 0)
@@ -1000,6 +1143,8 @@ public sealed class ViewUiImporter
             var warningStart = _warnings.Count;
             await ApplyBrowserOnlySettingsAsync(page, view, fields, cancellationToken).ConfigureAwait(false);
             await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
 
             var persisted = await ReadPersistedSettingsAsync(
                 page,
@@ -1027,8 +1172,6 @@ public sealed class ViewUiImporter
                _warnings.RemoveRange(warningStart, _warnings.Count - warningStart);
                OnProgress?.Invoke(
                    $"View '{view.Name}' did not persist all browser settings; retrying ({attempt + 1}/{ViewPersistenceAttempts})...");
-               await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
-               await PauseAsync(cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -1169,15 +1312,34 @@ public sealed class ViewUiImporter
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
 
+        IReadOnlyList<BoardColumnSnapshot>? currentVisibility = null;
+        if (view.Ui?.BoardColumnLimits is not null || view.Ui?.VisibleColumns is not null)
+        {
+            currentVisibility = await BoardColumnVisibilityUi.ReadAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         if (view.Ui?.BoardColumnLimits is not null)
         {
             settings = settings with
             {
-                BoardColumnLimits = await BoardColumnLimitUi.ReadAsync(
+                BoardColumnLimits = await BoardColumnLimitUi.ReadCompleteAsync(
                     page,
                     view,
                     fields,
+                    currentVisibility!,
                     cancellationToken).ConfigureAwait(false),
+            };
+        }
+
+        if (view.Ui?.VisibleColumns is not null)
+        {
+            settings = settings with
+            {
+                VisibleColumns = currentVisibility,
             };
         }
 
@@ -1346,6 +1508,20 @@ public sealed class ViewUiImporter
             }
         }
 
+        if (expected.Ui?.VisibleColumns is { } expectedColumns)
+        {
+            if (actual.VisibleColumns is null)
+            {
+                differences.Add("Board column visibility is unavailable");
+            }
+            else if (!BoardColumnVisibilityUi.SetEquals(expectedColumns, actual.VisibleColumns))
+            {
+                differences.Add(
+                    $"visible Board columns expected [{string.Join(", ", expectedColumns.Select(BoardColumnVisibilityUi.Describe))}], "
+                    + $"actual [{string.Join(", ", actual.VisibleColumns.Select(BoardColumnVisibilityUi.Describe))}]");
+            }
+        }
+
         if (expected.Ui?.Roadmap is { } roadmap)
         {
             if (roadmap.TruncateTitles is { } expectedTruncateTitles
@@ -1427,7 +1603,8 @@ public sealed class ViewUiImporter
         IReadOnlyList<string> FieldSum,
         bool? TruncateTitles = null,
         bool? ShowDateFields = null,
-        IReadOnlyList<BoardColumnLimitSnapshot>? BoardColumnLimits = null);
+        IReadOnlyList<BoardColumnLimitSnapshot>? BoardColumnLimits = null,
+        IReadOnlyList<BoardColumnSnapshot>? VisibleColumns = null);
 
     private async Task TrySetMenuCheckboxAsync(
         IPage page,

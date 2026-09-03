@@ -66,7 +66,7 @@ GitHub Copilot に一問一答で案内させる場合は、repository-local Ski
 | Linked repositories | `ghpmv verify` warning 確認 + 目視 | `--repo-mapping` が必須。 |
 | Project-to-Team links | `ghpmv verify` + Team Projects / Manage access UI | `organization/slug` で識別。explicit collaborator とは別カテゴリ。 |
 | Explicit project collaborators | browser export/import + 目視 | inherited access は対象外。 |
-| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、tab order。saved-tab orderのread/verifyにはbrowser automationが必要。 |
+| Views | GraphQL + browser export/import/verify + 目視 | Table / Board / Roadmap、filter、sort、slice、field sum、Board列visibility、tab order。saved-tab orderとBoard列visibilityのread/write/verifyにはbrowser automationが必要。 |
 | Workflows | browser export/import + 目視 | built-in workflows、Auto-add、disabled workflow。 |
 
 ### 2.2 対象外または warning 許容
@@ -323,8 +323,8 @@ Source project number: <source-project-number>
 
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
-  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma=unlimited`)
-  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`)
+  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、visible columns=`Alpha`,`Beta`、hidden populated column=`Gamma`、hidden empty column=`Delta`、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`)
+  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、visible columns=`Sprint 0`,`Sprint 1`,`Sprint 3`、hidden populated column=`Sprint 2`、hidden empty column=`Sprint 4`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`)。GitHub UIがIteration Boardを最低3列へ自動補充するため、空の`Sprint 3`を表示集合に含める
   - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、shared `Truncate titles`=on、`Show date fields`=off。fixture は truncation 確認用の長い draft title を含む
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
   - `Fixture Roadmap Dates Hidden`: grouped Roadmap、`Truncate titles`=on、`Show date fields`=off
@@ -357,10 +357,12 @@ Views:
   - Column by=`Fixture Select`
   - Swimlanes=`Status`
   - Field sum=`Fixture Number`
-  - Column limits: `Alpha=1`, `Beta=2`, `Gamma=unlimited`
+  - Columns: `Alpha`, `Beta`を表示し、`Gamma`, `Delta`を非表示
+  - Column limits: `Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`
 - `Fixture Iteration Board` (Board)
   - Column by=`Fixture Sprint`
-  - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
+  - Columns: `Sprint 0`, `Sprint 1`, `Sprint 3`を表示し、`Sprint 2`, `Sprint 4`を非表示
+  - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`
 - `Fixture Roadmap` (Roadmap)
   - group by Status
   - Field sum=`Fixture Number 2`
@@ -638,16 +640,16 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile target
 ```
 
-`Rendered Field sums verified`、`Rendered Board limits verified` が対象Viewに出力され、最後に `Fixture field-sum and Board-limit rendering verified: project=#<target-project-number>` と exit code 0 になることを確認します。両Boardで数値上限、unlimited列、limit=1を超えるcountを機械確認します。
+`Rendered Field sums verified`、`Rendered Board limits verified`、`Rendered Board visibility verified` が対象Viewに出力され、最後に `Fixture field-sum, Board-limit, and Board-visibility rendering verified: project=#<target-project-number>` と exit code 0 になることを確認します。両Boardで数値上限、unlimited列、limit=1を超えるcount、visible/hidden列を機械確認します。
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-roadmap-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baseline `(true,false)` から titleだけを `(false,false)` へ変更します。
 5. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `truncate titles mismatch` だけを確認します。続けて `--fixture-roadmap-title-display-render-check` を実行し、full title / hidden datesをDOMで確認します。
 6. repairを挟まず `ghpmv setup --fixture-roadmap-date-display-drift ...` を実行します。この`(true,true)` transitionはtitleだけをbaselineへ戻し、dateだけをdriftします。
 7. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `show date fields mismatch` だけを確認します。続けて `--fixture-roadmap-date-display-render-check` を実行し、truncated title / visible datesをDOMで確認します。
-8. `ghpmv setup --fixture-field-default-drift ...` と `--fixture-field-sum-drift ...` を同じtargetに実行します。後者はField sumに加えて`Fixture Board`のAlpha上限を5へ変更し、Beta上限をclearしますが、itemの列やfield valueは変更しません。
-9. browser-assisted verify `--categories Field,View` で4件のdefault mismatch、View 1 field-sum mismatch、2件のBoard column-limit mismatch、2件のdate mismatchだけを確認します。
-10. 7.3 の再 import を同じtargetへ一度だけ実行し、Status Updates、field defaults、Field sum、Board column limits、Roadmap stateを同時に復元します。
-11. browser-assisted verifyを`--categories Field,Item,View`で実行し、`Field: Match` / `View: Match`、Board上限の復元、inventory済みdraft以外のItem差分がないことを確認します。最後に`--fixture-field-default-check`を再実行して修復後defaultsを確認します。
+8. `ghpmv setup --fixture-field-default-drift ...` と `--fixture-field-sum-drift ...` を同じtargetに実行します。後者はField sumに加えて`Fixture Board`のAlpha上限を5へ変更し、Beta上限をclearし、Single-select visibilityをBeta→Gamma、Iteration visibilityをSprint 1→Sprint 2へ入れ替えます。itemの列やfield valueは変更しません。
+9. browser-assisted verify `--categories Field,View` で4件のdefault mismatch、View 1 field-sum mismatch、2件のBoard column-limit mismatch、Beta/GammaとSprint 1/Sprint 2の方向付きvisibility mismatch 4件、2件のdate mismatchだけを確認します。
+10. 7.3 の再 import を同じtargetへ一度だけ実行し、Status Updates、field defaults、Field sum、Board column limits、Board column visibility、Roadmap stateを同時に復元します。
+11. browser-assisted verifyを`--categories Field,Item,View`で実行し、`Field: Match` / `View: Match`、Board上限とvisible/hidden集合の復元、inventory済みdraft以外のItem差分がないことを確認します。最後に`--fixture-field-default-check`を再実行して修復後defaultsを確認します。
 
 同じsnapshot / target / mappingsを再利用し、Roadmapの各controlはexactly-one-property driftと直後のDOM observationで独立に検証します。draftとProjectの削除は既存cleanup同意へまとめます。
 
@@ -769,6 +771,8 @@ warning / error が出た場合は、次の観点で切り分けます。
 | N-10 | target にだけ別の Team link を追加して verify | `TeamLink` warning と `PartialMatch` になり、target-only link は削除されない。 |
 | N-11 | target UI で View tab を逆順にして browser-assisted verify | `View` categoryとJSON reportに`view tab order mismatch`が出る。続けてbrowser-assisted importを再実行すると順序が修復される。 |
 | N-12 | `project.template: true` の snapshot を `--owner-type user` で import | 最初の API write より前に、user-owned Project は template にできないことを示す error で停止する。 |
+| N-13 | Single-select Boardでhiddenな`Gamma`を表示し、visibleな`Beta`を非表示にしてbrowser-assisted verify | `View` categoryに`Fixture Select / Beta`のsource visible/target hiddenと`Fixture Select / Gamma`のsource hidden/target visibleが別々に出る。 |
+| N-14 | Iteration Boardでhiddenな`Sprint 2`を表示し、visibleな`Sprint 1`を非表示にしてbrowser-assisted verify | `View` categoryに`Fixture Sprint / Sprint 1`と`Fixture Sprint / Sprint 2`の正確なvisibility差分が出る。続けて同じsnapshotをbrowser-assisted importし、両Boardをreloadして元の表示集合と`Match`を確認する。 |
 
 ---
 
@@ -814,6 +818,11 @@ Field sum initial verify:
 Field sum rendered-header check:
 Field sum drift verify:
 Field sum rerun verify:
+
+Board column visibility source sets:
+Board column visibility target UI:
+Board column visibility drift verify:
+Board column visibility rerun verify:
 
 Warnings:
 -

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using Ghpmv.Core.Browser;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
@@ -368,7 +369,8 @@ public sealed class ProjectVerifier
 
         var sections = ProjectExportSections.None;
         if (Includes(includedCategories, VerifyCategories.Field)
-            || Includes(includedCategories, VerifyCategories.Item))
+            || Includes(includedCategories, VerifyCategories.Item)
+            || Includes(includedCategories, VerifyCategories.View))
         {
             sections |= ProjectExportSections.Fields;
         }
@@ -904,6 +906,7 @@ public sealed class ProjectVerifier
                 if (s[0].Ui is { } sourceUi && t[0].Ui is { } targetUi)
                 {
                     WarnIfBoardLimitsNotCaptured(name, sourceUi, targetUi, differences, notVerified);
+                    WarnIfBoardVisibilityNotCaptured(name, sourceUi, targetUi, differences, notVerified);
                     CompareViewUi(name, sourceUi, targetUi, differences);
                 }
                 else
@@ -950,6 +953,12 @@ public sealed class ProjectVerifier
                     Add(differences, VerifySeverity.Warning, ViewCategory,
                         $"views named '{name}': Board column limits were captured in the source but could not all be read from the target");
                 }
+                if (HasUncapturedTargetBoardVisibility(s, t))
+                {
+                    notVerified.Add(ViewCategory);
+                    Add(differences, VerifySeverity.Warning, ViewCategory,
+                        $"views named '{name}': Board column visibility was captured in the source but could not all be read from the target");
+                }
             }
 
         }
@@ -987,6 +996,38 @@ public sealed class ProjectVerifier
         return false;
     }
 
+    private static bool HasUncapturedTargetBoardVisibility(
+        IReadOnlyList<ViewSnapshot> source,
+        IReadOnlyList<ViewSnapshot> target)
+    {
+        var availableTargets = target.ToList();
+        foreach (var sourceView in source.Where(view => view.Ui?.VisibleColumns is not null))
+        {
+            var capturedIndex = availableTargets.FindIndex(targetView =>
+                targetView.Ui?.VisibleColumns is not null
+                && ViewApiEquals(sourceView, targetView)
+                && ViewUiEqualsWithoutBoardVisibility(sourceView.Ui!, targetView.Ui)
+                && BoardColumnVisibilityUi.SetEquals(
+                    sourceView.Ui!.VisibleColumns,
+                    targetView.Ui.VisibleColumns));
+            if (capturedIndex >= 0)
+            {
+                availableTargets.RemoveAt(capturedIndex);
+                continue;
+            }
+
+            if (availableTargets.Any(targetView =>
+                targetView.Ui is { VisibleColumns: null } targetUi
+                && ViewApiEquals(sourceView, targetView)
+                && ViewUiEqualsWithoutBoardVisibility(sourceView.Ui!, targetUi)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static void WarnIfBoardLimitsNotCaptured(
         string name,
         ViewUiSnapshot source,
@@ -1002,6 +1043,23 @@ public sealed class ProjectVerifier
         notVerified.Add(ViewCategory);
         Add(differences, VerifySeverity.Warning, ViewCategory,
             $"view '{name}': Board column limits were captured in the source but could not be read from the target");
+    }
+
+    private static void WarnIfBoardVisibilityNotCaptured(
+        string name,
+        ViewUiSnapshot source,
+        ViewUiSnapshot target,
+        List<VerifyDifference> differences,
+        HashSet<string> notVerified)
+    {
+        if (source.VisibleColumns is null || target.VisibleColumns is not null)
+        {
+            return;
+        }
+
+        notVerified.Add(ViewCategory);
+        Add(differences, VerifySeverity.Warning, ViewCategory,
+            $"view '{name}': Board column visibility was captured in the source but could not be read from the target");
     }
 
     private static void CompareViewOrder(
@@ -1080,13 +1138,22 @@ public sealed class ProjectVerifier
                 && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
 
     private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
-        => ViewUiEqualsWithoutBoardLimits(source, target)
-            && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits);
+        => ViewUiEqualsWithoutBoardState(source, target)
+            && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits)
+            && BoardColumnVisibilityUi.SetEquals(source.VisibleColumns, target.VisibleColumns);
 
     private static bool ViewUiEqualsWithoutBoardLimits(ViewUiSnapshot source, ViewUiSnapshot target)
+        => ViewUiEqualsWithoutBoardState(source, target)
+            && BoardColumnVisibilityUi.SetEquals(source.VisibleColumns, target.VisibleColumns);
+
+    private static bool ViewUiEqualsWithoutBoardState(ViewUiSnapshot source, ViewUiSnapshot target)
         => string.Equals(source.SliceBy, target.SliceBy, StringComparison.Ordinal)
             && UiListEquals(source.FieldSum, target.FieldSum)
             && RoadmapEquals(source.Roadmap, target.Roadmap);
+
+    private static bool ViewUiEqualsWithoutBoardVisibility(ViewUiSnapshot source, ViewUiSnapshot target)
+        => ViewUiEqualsWithoutBoardState(source, target)
+            && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits);
 
     private static bool BoardColumnLimitsEqual(
         IReadOnlyList<BoardColumnLimitSnapshot>? source,
@@ -1210,6 +1277,7 @@ public sealed class ProjectVerifier
         }
 
         CompareBoardColumnLimits(name, source.BoardColumnLimits, target.BoardColumnLimits, differences);
+        CompareBoardColumnVisibility(name, source.VisibleColumns, target.VisibleColumns, differences);
 
         if ((source.Roadmap is null) != (target.Roadmap is null))
         {
@@ -1273,6 +1341,40 @@ public sealed class ProjectVerifier
         {
             AddError(differences, ViewCategory,
                 $"view '{name}': Board limit mismatch for {DescribeBoardColumn(targetLimit)} (source unlimited, target {targetLimit.Limit})");
+        }
+    }
+
+    private static void CompareBoardColumnVisibility(
+        string name,
+        IReadOnlyList<BoardColumnSnapshot>? source,
+        IReadOnlyList<BoardColumnSnapshot>? target,
+        List<VerifyDifference> differences)
+    {
+        if (source is null || target is null)
+        {
+            return;
+        }
+
+        var differenceCount = differences.Count;
+        foreach (var sourceColumn in source.Where(sourceColumn =>
+            !target.Any(targetColumn => BoardColumnVisibilityUi.SameColumn(sourceColumn, targetColumn))))
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': Board column visibility mismatch for {BoardColumnVisibilityUi.Describe(sourceColumn)} (source visible, target hidden)");
+        }
+
+        foreach (var targetColumn in target.Where(targetColumn =>
+            !source.Any(sourceColumn => BoardColumnVisibilityUi.SameColumn(sourceColumn, targetColumn))))
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': Board column visibility mismatch for {BoardColumnVisibilityUi.Describe(targetColumn)} (source hidden, target visible)");
+        }
+
+        if (!BoardColumnVisibilityUi.SetEquals(source, target)
+            && differences.Count == differenceCount)
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': Board column visibility mismatch because one side contains duplicate logical columns");
         }
     }
 

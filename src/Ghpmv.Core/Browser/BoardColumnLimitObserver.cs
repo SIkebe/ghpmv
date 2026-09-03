@@ -50,10 +50,16 @@ public sealed class BoardColumnLimitObserver
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
             await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
 
-            var actual = await BoardColumnLimitUi.ReadAsync(
+            var currentVisibility = await BoardColumnVisibilityUi.ReadAsync(
                 page,
                 board,
                 expected.Fields,
+                cancellationToken).ConfigureAwait(false);
+            var actual = await BoardColumnLimitUi.ReadCompleteAsync(
+                page,
+                board,
+                expected.Fields,
+                currentVisibility,
                 cancellationToken).ConfigureAwait(false);
             ValidateLimits(board, actual);
             var columnField = expected.Fields.Single(field =>
@@ -68,15 +74,6 @@ public sealed class BoardColumnLimitObserver
             {
                 throw new InvalidOperationException(
                     $"view '{board.Name}': fixture does not define an unlimited Board column");
-            }
-
-            foreach (var unlimitedName in unlimitedNames)
-            {
-                if (await Sel.BoardColumnActionsButton(page, unlimitedName).CountAsync().ConfigureAwait(false) == 0)
-                {
-                    throw new InvalidOperationException(
-                        $"view '{board.Name}': unlimited column '{unlimitedName}' is not displayed");
-                }
             }
 
             foreach (var limit in board.Ui.BoardColumnLimits!.Where(limit => limit.Limit == 1))

@@ -34,7 +34,8 @@ public static class ProjectFilterTransformer
         string filter,
         IReadOnlyDictionary<string, string>? userMapping = null,
         IReadOnlyDictionary<string, string>? repositoryMapping = null,
-        IReadOnlyDictionary<string, string>? organizationMapping = null)
+        IReadOnlyDictionary<string, string>? organizationMapping = null,
+        IReadOnlySet<string>? projectFieldQualifiers = null)
     {
         ArgumentNullException.ThrowIfNull(filter);
         userMapping ??= ReadOnlyDictionary<string, string>.Empty;
@@ -74,7 +75,8 @@ public static class ProjectFilterTransformer
             if (mapping is null)
             {
                 builder.Append(rawValue);
-                if (!PassthroughQualifiers.Contains(qualifier))
+                if (!PassthroughQualifiers.Contains(qualifier)
+                    && projectFieldQualifiers?.Contains(qualifier) != true)
                 {
                     unsupported.Add(new FilterIdentifier(qualifier, value));
                 }
@@ -151,13 +153,19 @@ public static class ProjectFilterTransformer
     {
         ArgumentNullException.ThrowIfNull(snapshot);
 
+        var projectFieldQualifiers = BuildProjectFieldQualifiers(snapshot.Fields);
         return snapshot with
         {
             Views = snapshot.Views.Select(view => view.Filter is null
                 ? view
                 : view with
                 {
-                    Filter = Transform(view.Filter, userMapping, repositoryMapping, organizationMapping).Transformed,
+                    Filter = Transform(
+                        view.Filter,
+                        userMapping,
+                        repositoryMapping,
+                        organizationMapping,
+                        projectFieldQualifiers).Transformed,
                 }).ToList(),
             Workflows = snapshot.Workflows.Select(workflow => workflow.Ui?.Filter is null
                 ? workflow
@@ -165,7 +173,12 @@ public static class ProjectFilterTransformer
                 {
                     Ui = workflow.Ui with
                     {
-                        Filter = Transform(workflow.Ui.Filter, userMapping, repositoryMapping, organizationMapping).Transformed,
+                        Filter = Transform(
+                            workflow.Ui.Filter,
+                            userMapping,
+                            repositoryMapping,
+                            organizationMapping,
+                            projectFieldQualifiers).Transformed,
                     },
                 }).ToList(),
         };
@@ -179,16 +192,84 @@ public static class ProjectFilterTransformer
         IReadOnlyDictionary<string, string>? organizationMapping = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        var projectFieldQualifiers = BuildProjectFieldQualifiers(snapshot.Fields);
         var results = new List<SnapshotFilterTransform>();
         results.AddRange(snapshot.Views.Where(view => view.Filter is not null).Select(view =>
             new SnapshotFilterTransform(
                 $"view '{view.Name}'",
-                Transform(view.Filter!, userMapping, repositoryMapping, organizationMapping))));
+                Transform(
+                    view.Filter!,
+                    userMapping,
+                    repositoryMapping,
+                    organizationMapping,
+                    projectFieldQualifiers))));
         results.AddRange(snapshot.Workflows.Where(workflow => workflow.Ui?.Filter is not null).Select(workflow =>
             new SnapshotFilterTransform(
                 $"workflow '{workflow.Name}'",
-                Transform(workflow.Ui!.Filter!, userMapping, repositoryMapping, organizationMapping))));
+                Transform(
+                    workflow.Ui!.Filter!,
+                    userMapping,
+                    repositoryMapping,
+                    organizationMapping,
+                    projectFieldQualifiers))));
         return results;
+    }
+
+    /// <summary>
+    /// Builds the filter qualifier names GitHub derives from simple value-only custom field names.
+    /// Built-in identity fields require mapping support and names containing other punctuation
+    /// remain unsupported rather than being guessed.
+    /// </summary>
+    public static IReadOnlySet<string> BuildProjectFieldQualifiers(IEnumerable<FieldSnapshot> fields)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        var qualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in fields.Where(field =>
+            field.DataType is "TEXT" or "NUMBER" or "DATE" or "SINGLE_SELECT" or "ITERATION" or "MULTI_SELECT"))
+        {
+            var builder = new StringBuilder(field.Name.Length);
+            var pendingSeparator = false;
+            var supported = true;
+            foreach (var character in field.Name)
+            {
+                if (character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' || char.IsDigit(character))
+                {
+                    if (pendingSeparator && builder.Length > 0)
+                    {
+                        builder.Append('-');
+                    }
+
+                    builder.Append(char.ToLowerInvariant(character));
+                    pendingSeparator = false;
+                }
+                else if (char.IsWhiteSpace(character) || character == '-')
+                {
+                    pendingSeparator = true;
+                }
+                else if (character == '_')
+                {
+                    if (pendingSeparator && builder.Length > 0)
+                    {
+                        builder.Append('-');
+                    }
+
+                    builder.Append(character);
+                    pendingSeparator = false;
+                }
+                else
+                {
+                    supported = false;
+                    break;
+                }
+            }
+
+            if (supported && builder.Length > 0)
+            {
+                qualifiers.Add(builder.ToString());
+            }
+        }
+
+        return qualifiers;
     }
 
     /// <summary>Returns Auto-add repository mapping results with their workflow locations.</summary>

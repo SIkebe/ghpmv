@@ -79,7 +79,7 @@ GitHub Docs と public schema introspection で Text / Number / Single-select de
   - 3=Fixture Roadmap (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Dates=Fixture Date → Fixture Sprint end, Zoom=Quarter, Markers=[Fixture Date]
   - 4=Fixture Empty Sums (TABLE): Group by=Status, Field sum=[]
   - 5=Fixture Roadmap Dates Hidden (ROADMAP): Group by=Status, Field sum=Fixture Number 2, Truncate titles=on, Show date fields=off
-  - 6=Fixture Iteration Board (BOARD): Column by=Fixture Sprint, Sprint 0=1, Sprint 1=3, Sprint 2/3=unlimited
+  - 6=Fixture Iteration Board (BOARD): Column by=Fixture Sprint, Sprint 0=1, Sprint 1=3, Sprint 2/3/4=unlimited
 - Workflows 9(GraphQL 可視分): 既定 6 enabled + Auto-add to project (#7: repo=fixture-repo, filter=`is:issue is:open`) + **Auto-add secondary**(repo=fixture-repo, filter=`is:issue label:bug`, enabled)+ **Code changes requested**(保存済み disabled, Set value=In Progress)
 - Field defaults: Fixture Text=`既定値 🌏`、Fixture Number=`-7`、Fixture Number 2=`0`、Fixture Select=`Beta`
 - fixture-repo: private, Issue #1/#2(gpm-target 側にも同名 repo あり — workflow E2E 用)
@@ -151,3 +151,17 @@ GitHub公式手順では、Board列名の横にあるcontext menuから列上限
 - selectorは`Sel.BoardColumn*`へ集約する。context button、dialog role/name、`data-board-column`/`data-board-card-id`は公開APIではなくGitHub UI依存であるため、変更時はBrowser E2Eで再確認する。
 
 公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#setting-a-limit-on-the-number-of-items-in-a-column
+
+## Board column visibility UI contract (2026-08-31)
+
+Board右端の`button "Add a new column to the board"`から列pickerを開き、Single-select optionまたはIteration titleごとのcheckable entryを切り替える。公開GraphQL/REST APIには値単位のvisibilityがないため、browser-assisted export/import/verifyだけがこの状態を扱う。
+
+- snapshotのidentityはcolumn field名とSingle-select option名またはIteration titleで、node IDを保存しない。
+- `visibleColumns=null`は未取得、`visibleColumns=[]`は取得済みの明示的な空集合として区別する。
+- exportは表示中の`button "Actions for column: <column>"`から完全なvisible setを取得する。
+- importは`Column by`と対象option/iterationの作成後、column limit適用後にpickerのcomplete setを同期する。
+- targetに同名値がなければ別値を推測せず、field名と期待値を含むwarningを出す。
+- verifyは順序を比較せず、source-visible/target-hiddenとsource-hidden/target-visibleを値単位で報告する。
+- selectorは`Sel.AddBoardColumnButton`、`Sel.CheckboxOptions`、`Sel.BoardColumnActionsButtons`へ集約する。
+
+公式仕様: https://docs.github.com/en/issues/planning-and-tracking-with-projects/customizing-views-in-your-project/customizing-the-board-layout#showing-and-hiding-columns-in-board-layout

@@ -1143,7 +1143,7 @@ var fixtureUiOption = new Option<bool>("--fixture-ui")
 };
 var fixtureFieldSumDriftOption = new Option<bool>("--fixture-field-sum-drift")
 {
-    Description = "Apply the standard field-sum and Board column-limit drift to an existing fixture Project using browser automation.",
+    Description = "Apply the standard field-sum, Board column-limit, and Board column-visibility drift to an existing fixture Project using browser automation.",
 };
 var fixtureRoadmapDisplayDriftOption = new Option<bool>("--fixture-roadmap-display-drift")
 {
@@ -1510,8 +1510,18 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 projectNumber,
                 viewNumbers,
                 cancellationToken);
+            await new BoardColumnVisibilityObserver(browserSession)
+            {
+                OnProgress = Console.Error.WriteLine,
+            }.ValidateFixtureAsync(
+                expected,
+                org,
+                ProjectOwnerType.Organization,
+                projectNumber,
+                viewNumbers,
+                cancellationToken);
             Console.Error.WriteLine(
-                $"Fixture field-sum and Board-limit rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
+                $"Fixture field-sum, Board-limit, and Board-visibility rendering verified: project=#{projectNumber} views={viewNumbers.Count}");
             return 0;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
@@ -1730,6 +1740,37 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 board,
                 snapshot.Fields,
                 cancellationToken);
+            foreach (var driftedBoard in snapshot.Views.Where(candidate =>
+                         candidate.Ui?.VisibleColumns is not null
+                         && candidate.Layout == "BOARD_LAYOUT"))
+            {
+                var matches = projectData
+                    .GetProperty("organization")
+                    .GetProperty("projectV2")
+                    .GetProperty("views")
+                    .GetProperty("nodes")
+                    .EnumerateArray()
+                    .Where(node => string.Equals(
+                        node.GetProperty("name").GetString(),
+                        driftedBoard.Name,
+                        StringComparison.Ordinal))
+                    .ToArray();
+                if (matches.Length != 1)
+                {
+                    Console.Error.WriteLine(
+                        $"error: expected exactly one target View named '{driftedBoard.Name}', found {matches.Length}.");
+                    return 1;
+                }
+
+                await viewImporter.ApplyBoardColumnVisibilityAsync(
+                    org,
+                    ProjectOwnerType.Organization,
+                    projectNumber,
+                    matches[0].GetProperty("number").GetInt32(),
+                    driftedBoard,
+                    snapshot.Fields,
+                    cancellationToken);
+            }
             foreach (var warning in viewImporter.Warnings)
             {
                 Console.Error.WriteLine($"warning: {warning}");
@@ -1737,7 +1778,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             Console.Error.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"Fixture field-sum and Board-limit drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
+                $"Fixture field-sum, Board-limit, and Board-visibility drift applied: project=#{projectNumber} viewWarnings={viewImporter.Warnings.Count}"));
             return viewImporter.Warnings.Count == 0 ? 0 : 1;
         }
         catch (Exception exception) when (exception is PlaywrightException or InvalidOperationException or IOException or TimeoutException or GitHubGraphQLException or ArgumentException or FormatException)
