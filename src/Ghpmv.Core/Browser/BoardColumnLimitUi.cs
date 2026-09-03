@@ -41,6 +41,43 @@ internal static class BoardColumnLimitUi
         return limits;
     }
 
+    public static async Task<IReadOnlyList<BoardColumnLimitSnapshot>> ReadCompleteAsync(
+        IPage page,
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
+        IReadOnlyList<BoardColumnSnapshot> originalVisibility,
+        CancellationToken cancellationToken)
+    {
+        var allColumns = BoardColumnVisibilityUi.GetAllColumns(view, fields);
+        var restoreVisibility = !BoardColumnVisibilityUi.SetEquals(originalVisibility, allColumns);
+        try
+        {
+            if (restoreVisibility)
+            {
+                ThrowIfVisibilityWarnings(await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    allColumns,
+                    cancellationToken).ConfigureAwait(false));
+            }
+
+            return await ReadAsync(page, view, fields, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (restoreVisibility)
+            {
+                ThrowIfVisibilityWarnings(await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    originalVisibility,
+                    cancellationToken).ConfigureAwait(false));
+            }
+        }
+    }
+
     public static async Task<IReadOnlyList<string>> ApplyAsync(
         IPage page,
         ViewSnapshot view,
@@ -356,6 +393,14 @@ internal static class BoardColumnLimitUi
             ?? limit.IterationTitle
             ?? throw new InvalidOperationException(
                 $"Board column limit for field '{limit.FieldName}' has no logical value identity");
+
+    private static void ThrowIfVisibilityWarnings(IReadOnlyList<string> warnings)
+    {
+        if (warnings.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join("; ", warnings));
+        }
+    }
 
     private sealed record DisplayedColumn(string Name);
 

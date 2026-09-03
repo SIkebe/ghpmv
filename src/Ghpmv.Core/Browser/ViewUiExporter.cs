@@ -223,61 +223,21 @@ public sealed class ViewUiExporter
         IReadOnlyList<BoardColumnSnapshot> originalVisibility,
         CancellationToken cancellationToken)
     {
-        var allColumns = BoardColumnVisibilityUi.GetAllColumns(view, fields);
-        var restoreVisibility = !BoardColumnVisibilityUi.SetEquals(originalVisibility, allColumns);
         try
         {
             // Limits are only reachable from rendered columns, so reveal every logical
             // value without saving and restore the captured visibility afterward.
-            if (restoreVisibility)
-            {
-                var revealWarnings = await BoardColumnVisibilityUi.ApplyAsync(
-                    page,
-                    view,
-                    fields,
-                    allColumns,
-                    cancellationToken).ConfigureAwait(false);
-                if (revealWarnings.Count > 0)
-                {
-                    throw new InvalidOperationException(string.Join("; ", revealWarnings));
-                }
-            }
-
-            return await BoardColumnLimitUi.ReadAsync(
+            return await BoardColumnLimitUi.ReadCompleteAsync(
                 page,
                 view,
                 fields,
+                originalVisibility,
                 cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add($"view '{view.Name}': Board column limits were not captured — {exception.Message}");
             return null;
-        }
-        finally
-        {
-            if (restoreVisibility)
-            {
-                try
-                {
-                    var restoreWarnings = await BoardColumnVisibilityUi.ApplyAsync(
-                        page,
-                        view,
-                        fields,
-                        originalVisibility,
-                        cancellationToken).ConfigureAwait(false);
-                    foreach (var warning in restoreWarnings)
-                    {
-                        _warnings.Add(
-                            $"view '{view.Name}': Board column visibility was not restored after limit capture — {warning}");
-                    }
-                }
-                catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
-                {
-                    _warnings.Add(
-                        $"view '{view.Name}': Board column visibility was not restored after limit capture — {exception.Message}");
-                }
-            }
         }
     }
 

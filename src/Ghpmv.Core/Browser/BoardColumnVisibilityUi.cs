@@ -74,15 +74,19 @@ internal static class BoardColumnVisibilityUi
                 available.Add(name);
             }
 
+            foreach (var missing in FindMissingValueNames(field, available))
+            {
+                plan.Warnings.Add(
+                    $"view '{view.Name}': Board column '{field.Name}' / '{missing}' is not available on the target; no visibility was changed");
+            }
+            if (plan.Warnings.Count > 0)
+            {
+                return plan.Warnings;
+            }
+
             foreach (var change in BuildApplyOrder(available.ToList(), plan.VisibleNames))
             {
                 await ApplyVisibilityAsync(change.Name, change.ShouldBeVisible).ConfigureAwait(false);
-            }
-
-            foreach (var missing in plan.VisibleNames.Where(name => !available.Contains(name)))
-            {
-                plan.Warnings.Add(
-                    $"view '{view.Name}': visible Board column '{field.Name}' / '{missing}' is not available on the target; no other column was selected");
             }
 
             return plan.Warnings;
@@ -189,6 +193,13 @@ internal static class BoardColumnVisibilityUi
                 .Where(name => !visibleNames.Contains(name))
                 .Select(name => new VisibilityChange(name, ShouldBeVisible: false)))
             .ToList();
+
+    internal static IReadOnlyList<string> FindMissingValueNames(
+        FieldSnapshot field,
+        IReadOnlySet<string> availableNames)
+        => GetValueNames(field)
+            .Where(name => !availableNames.Contains(name))
+            .ToArray();
 
     internal static IReadOnlyList<BoardColumnSnapshot> GetAllColumns(
         ViewSnapshot view,

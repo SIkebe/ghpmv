@@ -1209,6 +1209,22 @@ foreach ($expected in $expectedOverLimitColumns) {
         return
     }
 }
+$expectedPopulatedHiddenColumns = @(
+    [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Gamma' },
+    [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 2' }
+)
+foreach ($expected in $expectedPopulatedHiddenColumns) {
+    $matchingItems = @($snapshot.items | Where-Object {
+        $item = $_
+        @($item.fieldValues | Where-Object {
+            $_.fieldName -eq $expected.Field -and $_.($expected.Property) -eq $expected.Value
+        }).Count -eq 1
+    })
+    if ($matchingItems.Count -lt 1) {
+        Stop-FieldSumSnapshotCheck "Hidden Board column '$($expected.Field)/$($expected.Value)' must contain at least one item."
+        return
+    }
+}
 $expectedEmptyColumns = @(
     [pscustomobject]@{ Field = 'Fixture Select'; Property = 'singleSelectOptionName'; Value = 'Delta' },
     [pscustomobject]@{ Field = 'Fixture Sprint'; Property = 'iterationTitle'; Value = 'Sprint 4' }
