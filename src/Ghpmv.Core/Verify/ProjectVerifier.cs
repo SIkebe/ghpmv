@@ -1149,9 +1149,7 @@ public sealed class ProjectVerifier
 
     private static bool ViewUiEqualsWithoutBoardVisibility(ViewUiSnapshot source, ViewUiSnapshot target)
         => ViewUiEqualsWithoutBoardLimits(source, target)
-            && (source.BoardColumnLimits is null
-                || target.BoardColumnLimits is not null
-                && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits));
+            && BoardColumnLimitsEqual(source.BoardColumnLimits, target.BoardColumnLimits);
 
     private static bool BoardColumnLimitsEqual(
         IReadOnlyList<BoardColumnLimitSnapshot>? source,

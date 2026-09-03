@@ -402,16 +402,22 @@ public sealed class ViewUiImporter
                 projectNumber,
                 string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
+            var currentVisibility = await BoardColumnVisibilityUi.ReadAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
             _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
                 page,
                 view,
                 fields,
                 desired,
                 cancellationToken).ConfigureAwait(false));
-            var persisted = await BoardColumnLimitUi.ReadAsync(
+            var persisted = await BoardColumnLimitUi.ReadCompleteAsync(
                 page,
                 view,
                 fields,
+                currentVisibility,
                 cancellationToken).ConfigureAwait(false);
             foreach (var difference in CollectBoardColumnLimitDifferences(desired, persisted))
             {
