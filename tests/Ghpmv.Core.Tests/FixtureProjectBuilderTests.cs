@@ -413,7 +413,7 @@ public class FixtureProjectBuilderTests
         var iterationField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint");
         Assert.NotNull(iterationField.IterationConfiguration);
         Assert.Equal(
-            ["2026-07-20", "2026-08-17", "2026-08-31", "2026-09-14"],
+            ["2026-07-20", "2026-08-17", "2026-08-31", "2026-09-14", "2026-09-28"],
             iterationField.IterationConfiguration.CompletedIterations!
                 .Concat(iterationField.IterationConfiguration.Iterations!)
                 .Select(iteration => iteration.StartDate));
@@ -423,6 +423,26 @@ public class FixtureProjectBuilderTests
             snapshot.Items
                 .Where(item => item.Draft?.Title is "Fixture draft 1" or "Fixture draft 2" or "Fixture draft 3")
                 .Select(item => Assert.Single(item.FieldValues, value => value.FieldName == "Fixture Date").Date));
+    }
+
+    [Fact]
+    public void Demo_fixture_includes_distinct_empty_Board_columns()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture",
+            "example/fixture",
+            "octocat",
+            pullRequestNumber: 2);
+
+        var selectField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Select");
+        Assert.Contains(selectField.Options!, option => option.Name == "Delta");
+        var sprintField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint");
+        Assert.Contains(
+            sprintField.IterationConfiguration!.Iterations!,
+            iteration => iteration.Title == "Sprint 4");
+        Assert.DoesNotContain(
+            snapshot.Items.SelectMany(item => item.FieldValues),
+            value => value.SingleSelectOptionName == "Delta" || value.IterationTitle == "Sprint 4");
     }
 
     [Fact]

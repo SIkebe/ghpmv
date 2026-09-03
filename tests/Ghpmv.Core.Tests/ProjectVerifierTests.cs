@@ -1022,6 +1022,37 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Board_column_visibility_rejects_duplicate_logical_values()
+    {
+        var baseline = BuildSnapshot();
+        var visible = VisibleColumn("Status", option: "Todo");
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot { VisibleColumns = [visible, visible] },
+        };
+        var source = baseline with { Views = [sourceBoard] };
+        var target = baseline with
+        {
+            Views =
+            [
+                sourceBoard with
+                {
+                    Ui = new ViewUiSnapshot { VisibleColumns = [visible] },
+                },
+            ],
+        };
+
+        var difference = Assert.Single(ProjectVerifier.Compare(source, target).Differences, candidate =>
+            candidate.Category == "View"
+            && candidate.Message.Contains("duplicate logical columns", StringComparison.Ordinal));
+
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+    }
+
+    [Fact]
     public void Legacy_uncaptured_Board_visibility_does_not_compare_target_state()
     {
         var source = BuildSnapshot();

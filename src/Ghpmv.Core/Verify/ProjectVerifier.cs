@@ -1343,6 +1343,7 @@ public sealed class ProjectVerifier
             return;
         }
 
+        var differenceCount = differences.Count;
         foreach (var sourceColumn in source.Where(sourceColumn =>
             !target.Any(targetColumn => BoardColumnVisibilityUi.SameColumn(sourceColumn, targetColumn))))
         {
@@ -1355,6 +1356,13 @@ public sealed class ProjectVerifier
         {
             AddError(differences, ViewCategory,
                 $"view '{name}': Board column visibility mismatch for {BoardColumnVisibilityUi.Describe(targetColumn)} (source hidden, target visible)");
+        }
+
+        if (!BoardColumnVisibilityUi.SetEquals(source, target)
+            && differences.Count == differenceCount)
+        {
+            AddError(differences, ViewCategory,
+                $"view '{name}': Board column visibility mismatch because one side contains duplicate logical columns");
         }
     }
 

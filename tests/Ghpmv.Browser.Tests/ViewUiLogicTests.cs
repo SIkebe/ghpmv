@@ -834,6 +834,23 @@ public class ViewUiLogicTests
             [("Sprint 0", 1), ("Sprint 1", 3)],
             snapshot.Views.Single(view => view.Name == "Fixture Iteration Board").Ui!.BoardColumnLimits!
                 .Select(limit => (limit.IterationTitle, limit.Limit)));
+        var selectField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Select");
+        Assert.Equal(["Alpha", "Beta", "Gamma", "Delta"], selectField.Options!.Select(option => option.Name));
+        Assert.Equal(
+            ["Gamma", "Delta"],
+            selectField.Options!
+                .Select(option => option.Name)
+                .Except(snapshot.Views.Single(view => view.Name == "Fixture Board").Ui!.VisibleColumns!
+                    .Select(column => column.SingleSelectOptionName!)));
+        var sprintField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint");
+        var sprintTitles = sprintField.IterationConfiguration!.CompletedIterations!
+            .Concat(sprintField.IterationConfiguration.Iterations!)
+            .Select(iteration => iteration.Title);
+        Assert.Equal(["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3", "Sprint 4"], sprintTitles);
+        Assert.Equal(
+            ["Sprint 2", "Sprint 4"],
+            sprintTitles.Except(snapshot.Views.Single(view => view.Name == "Fixture Iteration Board").Ui!.VisibleColumns!
+                .Select(column => column.IterationTitle!)));
         Assert.Contains(snapshot.Fields, field =>
             field.Name == "Fixture Teams"
             && field.DataType == "MULTI_SELECT"
@@ -1389,6 +1406,24 @@ public class ViewUiLogicTests
 
         Assert.Empty(plan.Warnings);
         Assert.Equal(["Sprint 1"], plan.VisibleNames);
+    }
+
+    [Fact]
+    public void Board_column_visibility_apply_order_shows_columns_before_hiding_columns()
+    {
+        var changes = BoardColumnVisibilityUi.BuildApplyOrder(
+            ["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3", "Sprint 4"],
+            new HashSet<string>(["Sprint 0", "Sprint 2", "Sprint 3"], StringComparer.Ordinal));
+
+        Assert.Equal(
+            [
+                ("Sprint 0", true),
+                ("Sprint 2", true),
+                ("Sprint 3", true),
+                ("Sprint 1", false),
+                ("Sprint 4", false),
+            ],
+            changes.Select(change => (change.Name, change.ShouldBeVisible)));
     }
 
     [Fact]

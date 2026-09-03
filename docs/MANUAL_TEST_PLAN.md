@@ -323,8 +323,8 @@ Source project number: <source-project-number>
 
 - Views
   - `View 1`: grouped Table、filter、sort、Slice by、Field sum=`Count` + `Fixture Number` + `Fixture Number 2`、visible fields
-  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、visible columns=`Alpha`,`Beta`、hidden populated/empty column=`Gamma`、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma=unlimited`)
-  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、visible columns=`Sprint 0`,`Sprint 1`,`Sprint 3`、hidden populated column=`Sprint 2`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`)。GitHub UIがIteration Boardを最低3列へ自動補充するため、空の`Sprint 3`を表示集合に含める
+  - `Fixture Board`: Board、Column by、Swimlanes、Field sum、visible columns=`Alpha`,`Beta`、hidden populated column=`Gamma`、hidden empty column=`Delta`、Single-select列上限(`Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`)
+  - `Fixture Iteration Board`: Board、Column by=`Fixture Sprint`、visible columns=`Sprint 0`,`Sprint 1`,`Sprint 3`、hidden populated column=`Sprint 2`、hidden empty column=`Sprint 4`、Iteration列上限(`Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`)。GitHub UIがIteration Boardを最低3列へ自動補充するため、空の`Sprint 3`を表示集合に含める
   - `Fixture Roadmap`: grouped Roadmap、Field sum=`Fixture Number 2`、date fields、Quarter zoom、markers、shared `Truncate titles`=on、`Show date fields`=off。fixture は truncation 確認用の長い draft title を含む
   - `Fixture Empty Sums`: grouped Table、Field sum の空選択
   - `Fixture Roadmap Dates Hidden`: grouped Roadmap、`Truncate titles`=on、`Show date fields`=off
@@ -357,12 +357,12 @@ Views:
   - Column by=`Fixture Select`
   - Swimlanes=`Status`
   - Field sum=`Fixture Number`
-  - Columns: `Alpha`, `Beta`を表示し、`Gamma`を非表示
-  - Column limits: `Alpha=1`, `Beta=2`, `Gamma=unlimited`
+  - Columns: `Alpha`, `Beta`を表示し、`Gamma`, `Delta`を非表示
+  - Column limits: `Alpha=1`, `Beta=2`, `Gamma/Delta=unlimited`
 - `Fixture Iteration Board` (Board)
   - Column by=`Fixture Sprint`
-  - Columns: `Sprint 0`, `Sprint 1`, `Sprint 3`を表示し、`Sprint 2`を非表示
-  - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3=unlimited`
+  - Columns: `Sprint 0`, `Sprint 1`, `Sprint 3`を表示し、`Sprint 2`, `Sprint 4`を非表示
+  - Column limits: `Sprint 0=1`, `Sprint 1=3`, `Sprint 2/3/4=unlimited`
 - `Fixture Roadmap` (Roadmap)
   - group by Status
   - Field sum=`Fixture Number 2`
@@ -640,7 +640,7 @@ dotnet run --project src/Ghpmv.Cli -- setup `
   --browser-profile target
 ```
 
-`Rendered Field sums verified`、`Rendered Board limits verified` が対象Viewに出力され、最後に `Fixture field-sum and Board-limit rendering verified: project=#<target-project-number>` と exit code 0 になることを確認します。両Boardで数値上限、unlimited列、limit=1を超えるcountを機械確認します。
+`Rendered Field sums verified`、`Rendered Board limits verified`、`Rendered Board visibility verified` が対象Viewに出力され、最後に `Fixture field-sum, Board-limit, and Board-visibility rendering verified: project=#<target-project-number>` と exit code 0 になることを確認します。両Boardで数値上限、unlimited列、limit=1を超えるcount、visible/hidden列を機械確認します。
 3. `ghpmv setup --fixture-field-default-check --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、Projects UIから作成されたdisposable draftにText / negative Number / zero / Single-select defaultsが自動入力されることを確認します。出力されたdraft item ID / titleをresource inventoryに追加し、cleanup同意前には削除しません。
 4. `ghpmv setup --fixture-roadmap-display-drift --fixture-org <target-org> --fixture-project <target-project-number> --browser-profile target` を実行し、baseline `(true,false)` から titleだけを `(false,false)` へ変更します。
 5. browser-assisted verify を `--categories View` で実行し、2 Roadmapの `truncate titles mismatch` だけを確認します。続けて `--fixture-roadmap-title-display-render-check` を実行し、full title / hidden datesをDOMで確認します。
