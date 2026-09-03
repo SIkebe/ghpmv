@@ -1456,6 +1456,28 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public void Board_column_visibility_preflight_detects_missing_hidden_values()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+                new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN" },
+            ],
+        };
+
+        var missing = BoardColumnVisibilityUi.FindMissingValueNames(
+            field,
+            new HashSet<string>(["Alpha", "Beta"], StringComparer.Ordinal));
+
+        Assert.Equal(["Gamma"], missing);
+    }
+
+    [Fact]
     public void Board_column_visibility_reconciliation_warns_for_missing_or_renamed_value()
     {
         var view = View("Board", "BOARD_LAYOUT") with

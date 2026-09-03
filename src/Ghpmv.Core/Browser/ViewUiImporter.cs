@@ -1285,14 +1285,25 @@ public sealed class ViewUiImporter
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
 
+        IReadOnlyList<BoardColumnSnapshot>? currentVisibility = null;
+        if (view.Ui?.BoardColumnLimits is not null || view.Ui?.VisibleColumns is not null)
+        {
+            currentVisibility = await BoardColumnVisibilityUi.ReadAsync(
+                page,
+                view,
+                fields,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         if (view.Ui?.BoardColumnLimits is not null)
         {
             settings = settings with
             {
-                BoardColumnLimits = await BoardColumnLimitUi.ReadAsync(
+                BoardColumnLimits = await BoardColumnLimitUi.ReadCompleteAsync(
                     page,
                     view,
                     fields,
+                    currentVisibility!,
                     cancellationToken).ConfigureAwait(false),
             };
         }
@@ -1301,11 +1312,7 @@ public sealed class ViewUiImporter
         {
             settings = settings with
             {
-                VisibleColumns = await BoardColumnVisibilityUi.ReadAsync(
-                    page,
-                    view,
-                    fields,
-                    cancellationToken).ConfigureAwait(false),
+                VisibleColumns = currentVisibility,
             };
         }
 
