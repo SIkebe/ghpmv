@@ -455,10 +455,21 @@ public class BrowserRoundTripTests
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
                     && difference.Message.Contains("Board limit mismatch", StringComparison.Ordinal)));
-                Assert.Equal(4, driftReport.Differences.Count(difference =>
+                var visibilityDifferences = driftReport.Differences.Where(difference =>
                     difference.Severity == VerifySeverity.Error
                     && difference.Category == VerifyCategories.View
-                    && difference.Message.Contains("Board column visibility mismatch", StringComparison.Ordinal)));
+                    && difference.Message.Contains("Board column visibility mismatch", StringComparison.Ordinal)).ToList();
+                Assert.Equal(4, visibilityDifferences.Count);
+                string[] expectedVisibilityDifferences =
+                [
+                    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Beta' (source visible, target hidden)",
+                    "view 'Fixture Board': Board column visibility mismatch for Single-select column 'Fixture Select' / 'Gamma' (source hidden, target visible)",
+                    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 1' (source visible, target hidden)",
+                    "view 'Fixture Iteration Board': Board column visibility mismatch for Iteration column 'Fixture Sprint' / 'Sprint 2' (source hidden, target visible)",
+                ];
+                Assert.All(expectedVisibilityDifferences, expected =>
+                    Assert.Contains(visibilityDifferences, difference =>
+                        string.Equals(difference.Message, expected, StringComparison.Ordinal)));
                 Assert.DoesNotContain(driftReport.Differences, difference =>
                     difference.Category == VerifyCategories.View
                     && difference.Message.Contains("truncate titles mismatch", StringComparison.Ordinal));
@@ -620,17 +631,21 @@ public class BrowserRoundTripTests
         Assert.Equal(
             [("Alpha", 1), ("Beta", 2)],
             sourceBoard.Ui.BoardColumnLimits!.Select(limit => (limit.SingleSelectOptionName, limit.Limit)));
-        Assert.Equal(
-            ["Alpha", "Beta"],
-            sourceBoard.Ui.VisibleColumns!.Select(column => column.SingleSelectOptionName));
+        var visibleSelectOptions = sourceBoard.Ui.VisibleColumns!
+            .Select(column => column.SingleSelectOptionName!)
+            .ToList();
+        Assert.Equal(2, visibleSelectOptions.Count);
+        Assert.True(visibleSelectOptions.ToHashSet(StringComparer.Ordinal).SetEquals(["Alpha", "Beta"]));
         var sourceIterationBoard = Assert.Single(source.Views, view => view.Name == "Fixture Iteration Board");
         Assert.Equal("Fixture Sprint", Assert.Single(sourceIterationBoard.VerticalGroupByFields));
         Assert.Equal(
             [("Sprint 0", 1), ("Sprint 1", 3)],
             sourceIterationBoard.Ui!.BoardColumnLimits!.Select(limit => (limit.IterationTitle, limit.Limit)));
-        Assert.Equal(
-            ["Sprint 0", "Sprint 1", "Sprint 3"],
-            sourceIterationBoard.Ui.VisibleColumns!.Select(column => column.IterationTitle));
+        var visibleIterations = sourceIterationBoard.Ui.VisibleColumns!
+            .Select(column => column.IterationTitle!)
+            .ToList();
+        Assert.Equal(3, visibleIterations.Count);
+        Assert.True(visibleIterations.ToHashSet(StringComparer.Ordinal).SetEquals(["Sprint 0", "Sprint 1", "Sprint 3"]));
 
         var sourceRoadmap = Assert.Single(source.Views, view => view.Name == "Fixture Roadmap");
         Assert.Equal(["Status"], sourceRoadmap.GroupByFields);

@@ -952,13 +952,28 @@ public sealed class ViewUiImporter
             // Column limits are saved by their own dialog and require the persisted
             // Column-by selection to have rendered the target columns first.
             await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
-            var warnings = await BoardColumnLimitUi.ApplyAsync(
-                page,
-                view,
-                fields,
-                boardColumnLimits,
-                cancellationToken).ConfigureAwait(false);
-            _warnings.AddRange(warnings);
+            var limitsReady = true;
+            if (view.Ui.VisibleColumns is not null)
+            {
+                var visibilityWarnings = await BoardColumnVisibilityUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    BoardColumnVisibilityUi.GetAllColumns(view, fields),
+                    cancellationToken).ConfigureAwait(false);
+                _warnings.AddRange(visibilityWarnings);
+                limitsReady = visibilityWarnings.Count == 0;
+            }
+
+            if (limitsReady)
+            {
+                _warnings.AddRange(await BoardColumnLimitUi.ApplyAsync(
+                    page,
+                    view,
+                    fields,
+                    boardColumnLimits,
+                    cancellationToken).ConfigureAwait(false));
+            }
         }
         else if (isBoard && view.Ui?.BoardColumnLimits is not null && !columnByReady)
         {
