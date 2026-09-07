@@ -1073,6 +1073,7 @@ public sealed class ProjectImporter
         UserMapping = UserMapping,
         OrganizationMapping = OrganizationMapping,
         ProjectFieldQualifiers = ProjectFilterTransformer.BuildProjectFieldQualifiers(fields),
+        ProjectFields = fields,
         BrowserEnrichmentPlanned = BrowserViewEnrichmentPlanned,
         OnProgress = OnProgress,
     };

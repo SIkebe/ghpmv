@@ -207,6 +207,110 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void ApplyBoardVisibilityFilter_merges_hidden_single_select_values_with_existing_filter()
+    {
+        var view = Board(
+            "Fixture Select",
+            [
+                new BoardColumnSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Alpha" },
+                new BoardColumnSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Beta" },
+            ],
+            "status:Todo -fixture-select:Old");
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options =
+                [
+                    Option("Alpha"),
+                    Option("Beta"),
+                    Option("Gamma"),
+                    Option("Delta"),
+                ],
+            },
+        };
+
+        var result = ProjectFilterTransformer.ApplyBoardVisibilityFilter(view, fields);
+
+        Assert.Equal("status:Todo -fixture-select:Gamma,Delta", result);
+    }
+
+    [Fact]
+    public void ApplyBoardVisibilityFilter_quotes_each_hidden_iteration_title()
+    {
+        var view = Board(
+            "Fixture Sprint",
+            [
+                new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 0" },
+                new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 1" },
+                new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 3" },
+            ],
+            null);
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Sprint",
+                DataType = "ITERATION",
+                IterationConfiguration = new IterationConfigurationSnapshot
+                {
+                    Duration = 14,
+                    StartDay = 1,
+                    CompletedIterations = [Iteration("Sprint 0")],
+                    Iterations =
+                    [
+                        Iteration("Sprint 1"),
+                        Iteration("Sprint 2"),
+                        Iteration("Sprint 3"),
+                        Iteration("Sprint 4"),
+                    ],
+                },
+            },
+        };
+
+        var result = ProjectFilterTransformer.ApplyBoardVisibilityFilter(view, fields);
+
+        Assert.Equal("-fixture-sprint:\"Sprint 2\",\"Sprint 4\"", result);
+    }
+
+    [Fact]
+    public void ApplyBoardVisibilityFilter_removes_stale_qualifier_when_every_column_is_visible()
+    {
+        var view = Board(
+            "Fixture Select",
+            [
+                new BoardColumnSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Alpha" },
+                new BoardColumnSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Beta" },
+            ],
+            "status:Todo -fixture-select:\"Old value\",\"Other value\"");
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options = [Option("Alpha"), Option("Beta")],
+            },
+        };
+
+        var result = ProjectFilterTransformer.ApplyBoardVisibilityFilter(view, fields);
+
+        Assert.Equal("status:Todo", result);
+    }
+
+    [Fact]
+    public void RemoveNegativeQualifier_preserves_whitespace_inside_unrelated_quoted_values()
+    {
+        const string Filter = "label:\"needs  triage\"  -fixture-sprint:\"Sprint 2\",\"Sprint 4\"  status:Todo";
+
+        var result = ProjectFilterTransformer.RemoveNegativeQualifier(Filter, "fixture-sprint");
+
+        Assert.Equal("label:\"needs  triage\" status:Todo", result);
+    }
+
+    [Fact]
     public void Transform_preserves_whitespace_around_comma_separated_values()
     {
         var result = ProjectFilterTransformer.Transform(
@@ -280,4 +384,27 @@ public class ProjectFilterTransformerTests
         ],
         Items = [],
     };
+
+    private static ViewSnapshot Board(
+        string fieldName,
+        IReadOnlyList<BoardColumnSnapshot> visibleColumns,
+        string? filter)
+        => new()
+        {
+            Number = 1,
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            Filter = filter,
+            GroupByFields = [],
+            SortByFields = [],
+            VerticalGroupByFields = [fieldName],
+            VisibleFields = [],
+            Ui = new ViewUiSnapshot { VisibleColumns = visibleColumns },
+        };
+
+    private static SingleSelectOptionSnapshot Option(string name)
+        => new() { Id = name, Name = name, Color = "GRAY" };
+
+    private static IterationSnapshot Iteration(string title)
+        => new() { Id = title, Title = title, StartDate = "2026-01-01", Duration = 14 };
 }

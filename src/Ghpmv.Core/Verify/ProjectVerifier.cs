@@ -1128,7 +1128,10 @@ public sealed class ProjectVerifier
 
     private static bool ViewApiEquals(ViewSnapshot source, ViewSnapshot target)
         => string.Equals(source.Layout, target.Layout, StringComparison.Ordinal)
-            && string.Equals(source.Filter, target.Filter, StringComparison.Ordinal)
+            && string.Equals(
+                NormalizeBoardVisibilityFilter(source),
+                NormalizeBoardVisibilityFilter(target),
+                StringComparison.Ordinal)
             && source.VisibleFields.SequenceEqual(target.VisibleFields, StringComparer.Ordinal)
             && source.GroupByFields.SequenceEqual(target.GroupByFields, StringComparer.Ordinal)
             && source.VerticalGroupByFields.SequenceEqual(target.VerticalGroupByFields, StringComparer.Ordinal)
@@ -1229,7 +1232,12 @@ public sealed class ProjectVerifier
 
     private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)
     {
-        CompareViewValue(name, "filter", source.Filter, target.Filter, differences);
+        CompareViewValue(
+            name,
+            "filter",
+            NormalizeBoardVisibilityFilter(source),
+            NormalizeBoardVisibilityFilter(target),
+            differences);
         CompareViewList(name, "visible fields", source.VisibleFields, target.VisibleFields, differences);
         CompareViewList(name, "group by fields", source.GroupByFields, target.GroupByFields, differences);
         CompareViewList(name, "vertical group by fields", source.VerticalGroupByFields, target.VerticalGroupByFields, differences);
@@ -1237,6 +1245,21 @@ public sealed class ProjectVerifier
         var sourceSort = source.SortByFields.Select(field => $"{field.Field}:{field.Direction}").ToList();
         var targetSort = target.SortByFields.Select(field => $"{field.Field}:{field.Direction}").ToList();
         CompareViewList(name, "sort by fields", sourceSort, targetSort, differences);
+    }
+
+    private static string? NormalizeBoardVisibilityFilter(ViewSnapshot view)
+    {
+        if (view.Filter is null
+            || !string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            || view.VerticalGroupByFields.Count != 1
+            || !ProjectFilterTransformer.TryBuildProjectFieldQualifier(
+                view.VerticalGroupByFields[0],
+                out var qualifier))
+        {
+            return view.Filter;
+        }
+
+        return ProjectFilterTransformer.RemoveNegativeQualifier(view.Filter, qualifier);
     }
 
     private static void CompareViewValue(

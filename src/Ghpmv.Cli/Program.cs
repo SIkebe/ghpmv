@@ -689,7 +689,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 viewWarnings,
                 workflowWarningCount: 0);
 
-            var viewImporter = new ViewUiImporter(session)
+            var viewImporter = new ViewUiImporter(session, client)
             {
                 OnProgress = Console.Error.WriteLine,
             };
@@ -1705,7 +1705,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             }
 
             var targetViewNumber = targetViews[0].GetProperty("number").GetInt32();
-            var viewImporter = new ViewUiImporter(browserSession) { OnProgress = Console.Error.WriteLine };
+            var viewImporter = new ViewUiImporter(browserSession, client) { OnProgress = Console.Error.WriteLine };
             await viewImporter.ApplyFieldSumAsync(
                 org,
                 ProjectOwnerType.Organization,
@@ -2098,7 +2098,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             org,
             projectNumber.Value,
             cancellationToken);
-        var viewImporter = new ViewUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
+        var viewImporter = new ViewUiImporter(fixtureUiSession, fixtureUiClient) { OnProgress = Console.Error.WriteLine };
         var fieldDefaultImporter = new FieldDefaultUiImporter(fixtureUiSession) { OnProgress = Console.Error.WriteLine };
         await fieldDefaultImporter.ImportAsync(
             snapshot,

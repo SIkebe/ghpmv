@@ -6,6 +6,8 @@ namespace Ghpmv.Core.Browser;
 
 internal static class BoardColumnLimitUi
 {
+    private const int MaxHorizontalScrollSteps = 50;
+
     public static async Task<IReadOnlyList<BoardColumnLimitSnapshot>> ReadAsync(
         IPage page,
         ViewSnapshot view,
@@ -248,7 +250,7 @@ internal static class BoardColumnLimitUi
         return true;
     }
 
-    private static async Task<IReadOnlyList<DisplayedColumn>> ReadDisplayedColumnsAsync(
+    internal static async Task<IReadOnlyList<string>> ReadDisplayedColumnNamesAsync(
         IPage page,
         CancellationToken cancellationToken)
     {
@@ -260,35 +262,58 @@ internal static class BoardColumnLimitUi
         }).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var columns = new List<DisplayedColumn>();
-        var count = await buttons.CountAsync().ConfigureAwait(false);
-        for (var index = 0; index < count; index++)
+        var columns = new List<string>();
+        await ScrollBoardAsync(page, reset: true).ConfigureAwait(false);
+        for (var step = 0; step < MaxHorizontalScrollSteps; step++)
         {
-            var button = buttons.Nth(index);
-            var columnName = ViewUiExporter.NormalizeUiText(
-                await Sel.BoardColumnHeading(button).InnerTextAsync().ConfigureAwait(false));
-            if (columnName is null)
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var namesAtPosition = new HashSet<string>(StringComparer.Ordinal);
+            var count = await buttons.CountAsync().ConfigureAwait(false);
+            for (var index = 0; index < count; index++)
             {
-                throw new InvalidOperationException("Board column heading has no readable logical value");
+                var button = buttons.Nth(index);
+                var columnName = ViewUiExporter.NormalizeUiText(
+                    await Sel.BoardColumnHeading(button).InnerTextAsync().ConfigureAwait(false));
+                if (columnName is null)
+                {
+                    throw new InvalidOperationException("Board column heading has no readable logical value");
+                }
+
+                if (!namesAtPosition.Add(columnName))
+                {
+                    throw new InvalidOperationException($"Board contains more than one displayed column named '{columnName}'");
+                }
+
+                if (!columns.Contains(columnName, StringComparer.Ordinal))
+                {
+                    columns.Add(columnName);
+                }
             }
 
-            if (columns.Any(column => string.Equals(column.Name, columnName, StringComparison.Ordinal)))
+            if (await ScrollBoardAsync(page, reset: false).ConfigureAwait(false))
             {
-                throw new InvalidOperationException($"Board contains more than one displayed column named '{columnName}'");
+                break;
             }
-
-            columns.Add(new DisplayedColumn(columnName));
         }
 
         return columns;
     }
+
+    private static async Task<IReadOnlyList<DisplayedColumn>> ReadDisplayedColumnsAsync(
+        IPage page,
+        CancellationToken cancellationToken)
+        => (await ReadDisplayedColumnNamesAsync(page, cancellationToken).ConfigureAwait(false))
+            .Select(name => new DisplayedColumn(name))
+            .ToArray();
 
     private static async Task<int?> ReadLimitAsync(
         IPage page,
         string columnName,
         CancellationToken cancellationToken)
     {
-        await Sel.BoardColumnActionsButton(page, columnName).ClickAsync().ConfigureAwait(false);
+        var actionsButton = await EnsureColumnActionsButtonAsync(page, columnName, cancellationToken)
+            .ConfigureAwait(false);
+        await actionsButton.ClickAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
         var item = Sel.BoardColumnLimitMenuItem(page);
         await item.WaitForAsync().ConfigureAwait(false);
@@ -318,7 +343,9 @@ internal static class BoardColumnLimitUi
         int? limit,
         CancellationToken cancellationToken)
     {
-        await Sel.BoardColumnActionsButton(page, columnName).ClickAsync().ConfigureAwait(false);
+        var actionsButton = await EnsureColumnActionsButtonAsync(page, columnName, cancellationToken)
+            .ConfigureAwait(false);
+        await actionsButton.ClickAsync().ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
         var item = Sel.BoardColumnLimitMenuItem(page);
         await item.WaitForAsync().ConfigureAwait(false);
@@ -333,6 +360,63 @@ internal static class BoardColumnLimitUi
         await Sel.BoardColumnLimitSaveButton(overlay).ClickAsync().ConfigureAwait(false);
         await input.WaitForAsync(new() { State = WaitForSelectorState.Hidden }).ConfigureAwait(false);
         await PauseAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<ILocator> EnsureColumnActionsButtonAsync(
+        IPage page,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        var button = Sel.BoardColumnActionsButton(page, columnName);
+        await ScrollBoardAsync(page, reset: true).ConfigureAwait(false);
+        for (var step = 0; step < MaxHorizontalScrollSteps; step++)
+        {
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            if (await button.CountAsync().ConfigureAwait(false) > 0)
+            {
+                return button;
+            }
+
+            if (await ScrollBoardAsync(page, reset: false).ConfigureAwait(false))
+            {
+                break;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Board column '{columnName}' was not rendered while traversing the horizontal Board");
+    }
+
+    private static async Task<bool> ScrollBoardAsync(IPage page, bool reset)
+    {
+        var renderedColumn = Sel.BoardColumns(page).First;
+        if (await renderedColumn.CountAsync().ConfigureAwait(false) == 0)
+        {
+            return true;
+        }
+
+        return await renderedColumn.EvaluateAsync<bool>(
+            """
+            (column, reset) => {
+              let scroller = column.parentElement;
+              while (scroller && scroller.scrollWidth <= scroller.clientWidth + 1) {
+                scroller = scroller.parentElement;
+              }
+              if (!scroller) {
+                return true;
+              }
+              if (reset) {
+                scroller.scrollLeft = 0;
+              } else {
+                const increment = Math.max(Math.floor(scroller.clientWidth * 0.8), 200);
+                scroller.scrollLeft = Math.min(
+                  scroller.scrollLeft + increment,
+                  scroller.scrollWidth - scroller.clientWidth);
+              }
+              return scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 1;
+            }
+            """,
+            reset).ConfigureAwait(false);
     }
 
     // 300ms between consecutive UI operations (BROWSER_AUTOMATION_PLAN §1.4).

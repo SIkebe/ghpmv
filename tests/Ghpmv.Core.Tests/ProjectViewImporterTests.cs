@@ -396,6 +396,77 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Board_visibility_is_persisted_through_the_view_filter()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-board-visibility-").FullName;
+        try
+        {
+            var field = new FieldSnapshot
+            {
+                Name = "Fixture Sprint",
+                DataType = "ITERATION",
+                IterationConfiguration = new IterationConfigurationSnapshot
+                {
+                    Duration = 14,
+                    StartDay = 1,
+                    CompletedIterations = [Iteration("Sprint 0")],
+                    Iterations =
+                    [
+                        Iteration("Sprint 1"),
+                        Iteration("Sprint 2"),
+                        Iteration("Sprint 3"),
+                        Iteration("Sprint 4"),
+                    ],
+                },
+            };
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                BrowserEnrichmentPlanned = true,
+                ProjectFields = [field],
+                ProjectFieldQualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "fixture-sprint",
+                },
+            };
+            var view = View(1, "Board", "BOARD_LAYOUT", "status:Todo -fixture-sprint:\"Old\"", []) with
+            {
+                VerticalGroupByFields = ["Fixture Sprint"],
+                Ui = new ViewUiSnapshot
+                {
+                    VisibleColumns =
+                    [
+                        new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 0" },
+                        new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 1" },
+                        new BoardColumnSnapshot { FieldName = "Fixture Sprint", IterationTitle = "Sprint 3" },
+                    ],
+                },
+            };
+
+            await importer.ImportAsync(
+                [view],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            var update = Assert.Single(handler.RequestBodies, body =>
+                body.Contains("updateProjectV2View", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(update);
+            Assert.Equal(
+                "status:Todo -fixture-sprint:\"Sprint 2\",\"Sprint 4\"",
+                document.RootElement.GetProperty("variables").GetProperty("filter").GetString());
+            Assert.Empty(importer.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 
@@ -415,6 +486,9 @@ public class ProjectViewImporterTests
             VerticalGroupByFields = [],
             VisibleFields = visibleFields,
         };
+
+    private static IterationSnapshot Iteration(string title)
+        => new() { Id = title, Title = title, StartDate = "2026-01-01", Duration = 14 };
 
     private sealed class ViewHandler(string directory) : HttpMessageHandler
     {

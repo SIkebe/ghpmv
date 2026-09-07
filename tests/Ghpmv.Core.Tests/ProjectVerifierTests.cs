@@ -976,6 +976,39 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Uncaptured_target_visibility_does_not_create_a_spurious_filter_mismatch()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            Filter = "-status:Done",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot
+            {
+                VisibleColumns = [VisibleColumn("Status", option: "Todo")],
+            },
+        };
+        var targetBoard = sourceBoard with
+        {
+            Number = 9,
+            Ui = new ViewUiSnapshot(),
+        };
+
+        var report = ProjectVerifier.Compare(
+            baseline with { Views = [sourceBoard] },
+            baseline with { Views = [targetBoard] });
+
+        Assert.Contains(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Warning
+            && difference.Message.Contains("Board column visibility was captured", StringComparison.Ordinal));
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Severity == VerifySeverity.Error
+            && difference.Message.Contains("filter mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Duplicate_view_names_match_uncaptured_limits_by_visibility()
     {
         var baseline = BuildSnapshot();
@@ -1047,6 +1080,7 @@ public class ProjectVerifierTests
         {
             Name = "Board",
             Layout = "BOARD_LAYOUT",
+            Filter = "-status:Done is:open",
             VerticalGroupByFields = ["Status"],
             Ui = new ViewUiSnapshot
             {
@@ -1065,6 +1099,7 @@ public class ProjectVerifierTests
                 sourceBoard with
                 {
                     Number = 9,
+                    Filter = "-status:\"In Progress\" is:open",
                     Ui = new ViewUiSnapshot
                     {
                         BoardColumnLimits =
@@ -1163,6 +1198,9 @@ public class ProjectVerifierTests
         Assert.Contains(differences, difference =>
             difference.Message.Contains("'Done' (source hidden, target visible)", StringComparison.Ordinal));
         Assert.Equal(2, differences.Count);
+        Assert.DoesNotContain(report.Differences, difference =>
+            difference.Category == "View"
+            && difference.Message.Contains("filter mismatch", StringComparison.Ordinal));
     }
 
     [Fact]

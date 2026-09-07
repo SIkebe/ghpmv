@@ -158,8 +158,11 @@ Board右端の`button "Add a new column to the board"`から列pickerを開き�
 
 - snapshotのidentityはcolumn field名とSingle-select option名またはIteration titleで、node IDを保存しない。
 - `visibleColumns=null`は未取得、`visibleColumns=[]`は取得済みの明示的な空集合として区別する。
-- exportは表示中の`button "Actions for column: <column>"`から完全なvisible setを取得する。
+- exportは横方向にvirtualizeされたBoard列DOMではなく、列pickerの全項目を大きなviewport内で列挙し、`aria-checked`からlogical visible setを取得する。Board列DOMは未描画のvisible列をhiddenと誤判定するためvisibilityの正には使わない。
 - importは`Column by`と対象option/iterationの作成後、column limit適用後にpickerのcomplete setを同期する。
+- 表示はpicker optionへのtrusted click、非表示は描画対象列のactions menuにある`Hide from view`を使う。picker項目はtoggle後に並び替わるため、表示対象を先に有効化し、非表示対象は末尾から逆順に処理する。各操作後はpickerの`aria-checked`を再読してlogical stateを確認する。
+- `Hide from view`後はdirty statusが出ても`Save view`が表示されないBoard variantがある。この場合、reloadだけでは変更が破棄されるため、`Field sum`の`Count`を一時的に反転してvisibilityと同時保存し、続く明示保存で元のField sumへ戻す。fresh browser-assisted verifyでvisibilityとField sumの両方を再読して永続性を確認する。
+- visibilityはGitHubのAPI-visible filterにも`-<column-field>:<hidden-values>`として反映される。browser capture済みBoardではverifierがこの派生negative qualifierをfilter比較から除外し、値単位のBoard visibility差分として一度だけ報告する。他のfilter条件は引き続き比較する。
 - targetに同名値がなければ別値を推測せず、field名と期待値を含むwarningを出す。
 - verifyは順序を比較せず、source-visible/target-hiddenとsource-hidden/target-visibleを値単位で報告する。
 - selectorは`Sel.AddBoardColumnButton`、`Sel.CheckboxOptions`、`Sel.BoardColumnActionsButtons`へ集約する。
