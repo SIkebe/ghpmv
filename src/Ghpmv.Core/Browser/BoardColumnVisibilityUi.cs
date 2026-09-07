@@ -5,6 +5,8 @@ namespace Ghpmv.Core.Browser;
 
 internal static class BoardColumnVisibilityUi
 {
+    private const int PickerViewportHeight = 3000;
+
     public static async Task<IReadOnlyList<BoardColumnSnapshot>> ReadAsync(
         IPage page,
         ViewSnapshot view,
@@ -12,30 +14,38 @@ internal static class BoardColumnVisibilityUi
         CancellationToken cancellationToken)
     {
         var field = ResolveColumnField(view, fields);
-        await Sel.AddBoardColumnButton(page).WaitForAsync(new()
+        var originalViewport = page.ViewportSize;
+        var resizeViewport = originalViewport is { Height: < PickerViewportHeight };
+        if (resizeViewport)
         {
-            State = WaitForSelectorState.Visible,
-            Timeout = 15_000,
-        }).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        var visibleNames = new HashSet<string>(StringComparer.Ordinal);
-        var buttons = Sel.BoardColumnActionsButtons(page);
-        var count = await buttons.CountAsync().ConfigureAwait(false);
-        for (var index = 0; index < count; index++)
-        {
-            var name = ViewUiExporter.NormalizeUiText(
-                await Sel.BoardColumnHeading(buttons.Nth(index)).InnerTextAsync().ConfigureAwait(false));
-            if (name is not null && ValueExists(field, name))
-            {
-                visibleNames.Add(name);
-            }
+            await page.SetViewportSizeAsync(
+                originalViewport!.Width,
+                PickerViewportHeight).ConfigureAwait(false);
         }
 
-        return GetValueNames(field)
-            .Where(visibleNames.Contains)
-            .Select(value => CreateSnapshot(field, value))
-            .ToArray();
+        try
+        {
+            var pickerState = await ReadPickerStateAsync(page, field, cancellationToken)
+                .ConfigureAwait(false);
+            var visibleNames = pickerState
+                .Where(column => column.IsVisible)
+                .Select(column => column.Name)
+                .ToHashSet(StringComparer.Ordinal);
+
+            return GetValueNames(field)
+                .Where(visibleNames.Contains)
+                .Select(value => CreateSnapshot(field, value))
+                .ToArray();
+        }
+        finally
+        {
+            if (resizeViewport)
+            {
+                await page.SetViewportSizeAsync(
+                    originalViewport!.Width,
+                    originalViewport.Height).ConfigureAwait(false);
+            }
+        }
     }
 
     public static async Task<IReadOnlyList<string>> ApplyAsync(
@@ -52,13 +62,21 @@ internal static class BoardColumnVisibilityUi
             return plan.Warnings;
         }
 
-        await Sel.AddBoardColumnButton(page).ClickAsync().ConfigureAwait(false);
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
-        var overlay = Sel.OpenMenu(page);
-        await overlay.WaitForAsync().ConfigureAwait(false);
-
+        var originalViewport = page.ViewportSize;
+        var resizeViewport = originalViewport is { Height: < PickerViewportHeight };
+        if (resizeViewport)
+        {
+            await page.SetViewportSizeAsync(
+                originalViewport!.Width,
+                PickerViewportHeight).ConfigureAwait(false);
+        }
         try
         {
+            await Sel.AddBoardColumnButton(page).ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+            var overlay = Sel.OpenMenu(page);
+            await overlay.WaitForAsync().ConfigureAwait(false);
+
             var available = new HashSet<string>(StringComparer.Ordinal);
             var options = Sel.CheckboxOptions(overlay);
             var count = await options.CountAsync().ConfigureAwait(false);
@@ -84,45 +102,267 @@ internal static class BoardColumnVisibilityUi
                 return plan.Warnings;
             }
 
+            await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+            await overlay.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Hidden,
+            }).ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+
             foreach (var change in BuildApplyOrder(available.ToList(), plan.VisibleNames))
             {
-                await ApplyVisibilityAsync(change.Name, change.ShouldBeVisible).ConfigureAwait(false);
+                if (change.ShouldBeVisible)
+                {
+                    await ShowColumnAsync(change.Name).ConfigureAwait(false);
+                }
+                else
+                {
+                    await HideColumnAsync(change.Name).ConfigureAwait(false);
+                }
             }
 
             return plan.Warnings;
 
-            async Task ApplyVisibilityAsync(string name, bool shouldBeVisible)
+            async Task ShowColumnAsync(string name)
             {
-                var option = await FindOptionAsync(options, name).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException(
-                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
-                var isVisible = string.Equals(
-                    await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
-                    "true",
-                    StringComparison.Ordinal);
-                var isDisabled = string.Equals(
-                    await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
-                    "true",
-                    StringComparison.Ordinal);
-                if (isDisabled && shouldBeVisible != isVisible)
+                await Sel.AddBoardColumnButton(page).ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                var picker = Sel.OpenMenu(page);
+                await picker.WaitForAsync().ConfigureAwait(false);
+                var pickerOptions = Sel.CheckboxOptions(picker);
+                try
                 {
-                    plan.Warnings.Add(
-                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' is disabled on the target and its visibility could not be changed");
+                    var option = await FindOptionAsync(page, pickerOptions, name).ConfigureAwait(false)
+                        ?? throw new InvalidOperationException(
+                            $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
+                    var isDisabled = string.Equals(
+                        await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
+                        "true",
+                        StringComparison.Ordinal);
+                    if (isDisabled)
+                    {
+                        plan.Warnings.Add(
+                            $"view '{view.Name}': Board column '{field.Name}' / '{name}' is disabled on the target and its visibility could not be changed");
+                        return;
+                    }
+
+                    for (var attempt = 0; attempt < 6; attempt++)
+                    {
+                        option = await FindOptionAsync(page, pickerOptions, name).ConfigureAwait(false);
+                        if (option is null)
+                        {
+                            await PauseAsync(cancellationToken).ConfigureAwait(false);
+                            continue;
+                        }
+                        if (string.Equals(
+                            await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                            "true",
+                            StringComparison.Ordinal))
+                        {
+                            return;
+                        }
+
+                        await ActivatePickerOptionAsync(page, pickerOptions, option, name, attempt)
+                            .ConfigureAwait(false);
+                        await PauseAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    throw new InvalidOperationException(
+                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' visibility did not update in the picker");
                 }
-                else if (shouldBeVisible != isVisible)
+                finally
                 {
-                    await option.ClickAsync().ConfigureAwait(false);
+                    await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+                    await picker.WaitForAsync(new()
+                    {
+                        State = WaitForSelectorState.Hidden,
+                    }).ConfigureAwait(false);
                     await PauseAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            async Task HideColumnAsync(string name)
+            {
+                var pickerState = await ReadPickerStateAsync(page, field, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!pickerState.Any(column =>
+                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsVisible))
+                {
+                    return;
+                }
+
+                var actionsButton = await BoardColumnLimitUi.EnsureColumnActionsButtonAsync(
+                    page,
+                    name,
+                    cancellationToken).ConfigureAwait(false);
+                await actionsButton.ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                var hideItem = Sel.BoardColumnHideMenuItem(page);
+                await hideItem.WaitForAsync().ConfigureAwait(false);
+                await hideItem.ClickAsync().ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+
+                pickerState = await ReadPickerStateAsync(page, field, cancellationToken)
+                    .ConfigureAwait(false);
+                if (pickerState.Any(column =>
+                    string.Equals(column.Name, name, StringComparison.Ordinal) && column.IsVisible))
+                {
+                    throw new InvalidOperationException(
+                        $"view '{view.Name}': Board column '{field.Name}' / '{name}' remained visible after using Hide from view");
                 }
             }
         }
         finally
         {
-            await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+            if (resizeViewport)
+            {
+                await page.SetViewportSizeAsync(
+                    originalViewport!.Width,
+                    originalViewport.Height).ConfigureAwait(false);
+            }
+        }
+
+        static async Task ActivatePickerOptionAsync(
+            IPage page,
+            ILocator options,
+            ILocator option,
+            string name,
+            int attempt)
+        {
+            await option.EvaluateAsync(
+                "element => element.scrollIntoView({ block: 'center', inline: 'nearest' })").ConfigureAwait(false);
+            var box = await option.BoundingBoxAsync().ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Board column '{name}' has no clickable bounds");
+            var localClickX = box.Width / 2;
+            var localClickY = box.Height / 2;
+            if (!double.IsFinite(localClickX) || !double.IsFinite(localClickY))
+            {
+                throw new InvalidOperationException($"Board column '{name}' has non-finite clickable bounds");
+            }
+
+            if (attempt == 0)
+            {
+                await page.WaitForTimeoutAsync(100).ConfigureAwait(false);
+                option = await FindOptionAsync(page, options, name).ConfigureAwait(false) ?? option;
+                var labelBox = await option.GetByText(name, new() { Exact = true }).BoundingBoxAsync()
+                    .ConfigureAwait(false);
+                var viewport = page.ViewportSize;
+                if (labelBox is not null &&
+                    (viewport is null ||
+                     (labelBox.X >= 0 &&
+                      labelBox.Y >= 0 &&
+                      labelBox.X + labelBox.Width <= viewport.Width &&
+                      labelBox.Y + labelBox.Height <= viewport.Height)))
+                {
+                    await page.Mouse.ClickAsync(
+                        labelBox.X + (labelBox.Width / 2),
+                        labelBox.Y + (labelBox.Height / 2),
+                        new() { Delay = 100 }).ConfigureAwait(false);
+                }
+            }
+            else if (attempt == 1)
+            {
+                var leadingVisual = Sel.CheckboxOptionLeadingVisual(option);
+                var leadingVisualBox = await leadingVisual.CountAsync().ConfigureAwait(false) > 0
+                    ? await leadingVisual.BoundingBoxAsync().ConfigureAwait(false)
+                    : null;
+                if (leadingVisualBox is not null)
+                {
+                    await page.Mouse.ClickAsync(
+                        leadingVisualBox.X + (leadingVisualBox.Width / 2),
+                        leadingVisualBox.Y + (leadingVisualBox.Height / 2),
+                        new() { Delay = 100 }).ConfigureAwait(false);
+                }
+                else
+                {
+                    await option.ClickAsync(new()
+                    {
+                        Delay = 100,
+                        Force = true,
+                        Position = new() { X = Math.Min(16, box.Width / 2), Y = localClickY },
+                        Timeout = 5_000,
+                    }).ConfigureAwait(false);
+                }
+            }
+            else if (attempt == 2)
+            {
+                await option.ClickAsync(new()
+                {
+                    Delay = 100,
+                    Force = true,
+                    Position = new() { X = localClickX, Y = localClickY },
+                    Timeout = 5_000,
+                }).ConfigureAwait(false);
+            }
+            else if (attempt == 3)
+            {
+                await page.Mouse.ClickAsync(
+                    box.X + Math.Max(1, box.Width - 16),
+                    box.Y + localClickY,
+                    new() { Delay = 100 }).ConfigureAwait(false);
+            }
+            else if (attempt == 4)
+            {
+                await option.PressAsync("Space", new() { Timeout = 5_000 }).ConfigureAwait(false);
+            }
+            else
+            {
+                await option.PressAsync("Enter", new() { Timeout = 5_000 }).ConfigureAwait(false);
+            }
         }
     }
 
-    private static async Task<ILocator?> FindOptionAsync(ILocator options, string name)
+    private static async Task<IReadOnlyList<PickerColumnState>> ReadPickerStateAsync(
+        IPage page,
+        FieldSnapshot field,
+        CancellationToken cancellationToken)
+    {
+        await Sel.AddBoardColumnButton(page).WaitForAsync(new()
+        {
+            State = WaitForSelectorState.Visible,
+            Timeout = 15_000,
+        }).ConfigureAwait(false);
+        await Sel.AddBoardColumnButton(page).ClickAsync().ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        var picker = Sel.OpenMenu(page);
+        await picker.WaitForAsync().ConfigureAwait(false);
+        try
+        {
+            var result = new List<PickerColumnState>();
+            var options = Sel.CheckboxOptions(picker);
+            var count = await options.CountAsync().ConfigureAwait(false);
+            for (var index = 0; index < count; index++)
+            {
+                var option = options.Nth(index);
+                var name = ViewUiExporter.NormalizeUiText(
+                    await option.InnerTextAsync().ConfigureAwait(false));
+                if (name is null || !ValueExists(field, name))
+                {
+                    continue;
+                }
+
+                result.Add(new(
+                    name,
+                    string.Equals(
+                        await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                        "true",
+                        StringComparison.Ordinal)));
+            }
+
+            return result;
+        }
+        finally
+        {
+            await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+            await picker.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Hidden,
+            }).ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<ILocator?> FindOptionAsync(IPage page, ILocator options, string name)
     {
         var count = await options.CountAsync().ConfigureAwait(false);
         for (var index = 0; index < count; index++)
@@ -132,7 +372,10 @@ internal static class BoardColumnVisibilityUi
                 await option.InnerTextAsync().ConfigureAwait(false));
             if (string.Equals(currentName, name, StringComparison.Ordinal))
             {
-                return option;
+                return options.Filter(new()
+                {
+                    Has = page.GetByText(name, new() { Exact = true }),
+                }).First;
             }
         }
 
@@ -191,6 +434,7 @@ internal static class BoardColumnVisibilityUi
             .Select(name => new VisibilityChange(name, ShouldBeVisible: true))
             .Concat(availableNames
                 .Where(name => !visibleNames.Contains(name))
+                .Reverse()
                 .Select(name => new VisibilityChange(name, ShouldBeVisible: false)))
             .ToList();
 
@@ -286,6 +530,8 @@ internal static class BoardColumnVisibilityUi
     internal sealed record ReconciliationPlan(
         HashSet<string> VisibleNames,
         List<string> Warnings);
+
+    private sealed record PickerColumnState(string Name, bool IsVisible);
 
     internal sealed record VisibilityChange(string Name, bool ShouldBeVisible);
 }

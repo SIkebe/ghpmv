@@ -1420,8 +1420,8 @@ public class ViewUiLogicTests
                 ("Sprint 0", true),
                 ("Sprint 2", true),
                 ("Sprint 3", true),
-                ("Sprint 1", false),
                 ("Sprint 4", false),
+                ("Sprint 1", false),
             ],
             changes.Select(change => (change.Name, change.ShouldBeVisible)));
     }

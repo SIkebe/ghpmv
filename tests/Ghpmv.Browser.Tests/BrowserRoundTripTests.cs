@@ -199,7 +199,7 @@ public class BrowserRoundTripTests
                         truncateTitles = (!expectedRoadmapDisplay.TruncateTitles!.Value).ToString().ToLowerInvariant(),
                         showDateFields = (!expectedRoadmapDisplay.ShowDateFields!.Value).ToString().ToLowerInvariant(),
                     });
-                var viewImporter = new ViewUiImporter(targetSession);
+                var viewImporter = new ViewUiImporter(targetSession, targetClient);
                 await viewImporter.EnrichAsync(
                     snapshot,
                     TargetOrg,

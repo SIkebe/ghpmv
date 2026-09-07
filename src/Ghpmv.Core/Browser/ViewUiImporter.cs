@@ -1,5 +1,6 @@
 using System.Globalization;
 using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
 
@@ -24,12 +25,14 @@ public sealed class ViewUiImporter
     private static readonly string[] RoadmapDateSuffixes = [" start", " end"];
 
     private readonly BrowserSession _session;
+    private readonly GitHubGraphQLClient? _client;
     private readonly List<string> _warnings = [];
 
-    public ViewUiImporter(BrowserSession session)
+    public ViewUiImporter(BrowserSession session, GitHubGraphQLClient? client = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         _session = session;
+        _client = client;
     }
 
     /// <summary>Invoked with a human-readable progress message per view.</summary>
@@ -296,6 +299,10 @@ public sealed class ViewUiImporter
                     page,
                     view,
                     snapshot.Fields,
+                    ownerLogin,
+                    ownerType,
+                    projectNumber,
+                    targetNumber,
                     cancellationToken).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
@@ -480,13 +487,16 @@ public sealed class ViewUiImporter
                 projectNumber,
                 string.Create(CultureInfo.InvariantCulture, $"views/{viewNumber}"));
             await _session.GotoAsync(url, cancellationToken).ConfigureAwait(false);
-            _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+            await ApplyAndPersistBoardColumnVisibilityAsync(
                 page,
                 view,
                 fields,
                 desired,
-                cancellationToken).ConfigureAwait(false));
-            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                viewNumber,
+                cancellationToken).ConfigureAwait(false);
             await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
             var actual = await BoardColumnVisibilityUi.ReadAsync(
@@ -561,7 +571,7 @@ public sealed class ViewUiImporter
                         showDateFields,
                         viewName,
                         cancellationToken).ConfigureAwait(false);
-                    await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+                    await SaveViewAsync(page, cancellationToken, forceAttempt: true).ConfigureAwait(false);
                     persisted = await ReadPersistedRoadmapDisplayOptionsAsync(page, cancellationToken).ConfigureAwait(false);
                     if (persisted.TruncateTitles == truncateTitles
                         && persisted.ShowDateFields == showDateFields)
@@ -927,6 +937,10 @@ public sealed class ViewUiImporter
         IPage page,
         ViewSnapshot view,
         IReadOnlyList<FieldSnapshot> fields,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
         CancellationToken cancellationToken)
     {
         // GraphQL-derived settings. Boards expose their horizontal grouping as the
@@ -951,7 +965,7 @@ public sealed class ViewUiImporter
 
         // Grouped Table/Roadmap views do not reliably expose Field sum until the
         // grouping change has been persisted and the View has reloaded.
-        await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+        await SaveViewAsync(page, cancellationToken, forceAttempt: true).ConfigureAwait(false);
 
         var columnByReady = true;
         if (isBoard && view.VerticalGroupByFields.Count > 0)
@@ -978,7 +992,7 @@ public sealed class ViewUiImporter
         {
             // Column limits are saved by their own dialog and require the persisted
             // Column-by selection to have rendered the target columns first.
-            await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
+            await SaveViewAsync(page, cancellationToken, forceAttempt: true).ConfigureAwait(false);
             var limitsReady = true;
             if (view.Ui.VisibleColumns is not null)
             {
@@ -990,6 +1004,7 @@ public sealed class ViewUiImporter
                     cancellationToken).ConfigureAwait(false);
                 _warnings.AddRange(visibilityWarnings);
                 limitsReady = visibilityWarnings.Count == 0;
+                await SaveViewAsync(page, cancellationToken, forceAttempt: true).ConfigureAwait(false);
             }
 
             if (limitsReady)
@@ -1010,12 +1025,16 @@ public sealed class ViewUiImporter
 
         if (isBoard && view.Ui?.VisibleColumns is { } visibleColumns && columnByReady)
         {
-            _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+            await ApplyAndPersistBoardColumnVisibilityAsync(
                 page,
                 view,
                 fields,
                 visibleColumns,
-                cancellationToken).ConfigureAwait(false));
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                viewNumber,
+                cancellationToken).ConfigureAwait(false);
         }
         else if (isBoard && view.Ui?.VisibleColumns is not null && !columnByReady)
         {
@@ -1135,13 +1154,26 @@ public sealed class ViewUiImporter
         IPage page,
         ViewSnapshot view,
         IReadOnlyList<FieldSnapshot> fields,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
         CancellationToken cancellationToken)
     {
         IReadOnlyList<string> differences = [];
         for (var attempt = 1; attempt <= ViewPersistenceAttempts; attempt++)
         {
             var warningStart = _warnings.Count;
-            await ApplyBrowserOnlySettingsAsync(page, view, fields, cancellationToken).ConfigureAwait(false);
+            await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+            await ApplyBrowserOnlySettingsAsync(
+                page,
+                view,
+                fields,
+                ownerLogin,
+                ownerType,
+                projectNumber,
+                viewNumber,
+                cancellationToken).ConfigureAwait(false);
             await SaveViewAsync(page, cancellationToken).ConfigureAwait(false);
             await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
             await PauseAsync(cancellationToken).ConfigureAwait(false);
@@ -1152,6 +1184,17 @@ public sealed class ViewUiImporter
                 fields,
                 cancellationToken).ConfigureAwait(false);
             differences = CollectPersistenceDifferences(view, persisted);
+            if (differences.Count == 0 && view.Ui?.VisibleColumns is not null)
+            {
+                await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
+                persisted = await ReadPersistedSettingsAsync(
+                    page,
+                    view,
+                    fields,
+                    cancellationToken).ConfigureAwait(false);
+                differences = CollectPersistenceDifferences(view, persisted);
+            }
             if (differences.Count == 0)
             {
                if (view.Ui?.Roadmap is { } roadmap)
@@ -2040,39 +2083,209 @@ public sealed class ViewUiImporter
 
     // ----- save -----
 
-    private static async Task SaveViewAsync(IPage page, CancellationToken cancellationToken)
+    private async Task ApplyAndPersistBoardColumnVisibilityAsync(
+        IPage page,
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
+        IReadOnlyList<BoardColumnSnapshot> desired,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        CancellationToken cancellationToken)
+    {
+        var current = await BoardColumnVisibilityUi.ReadAsync(
+            page,
+            view,
+            fields,
+            cancellationToken).ConfigureAwait(false);
+        if (BoardColumnVisibilityUi.SetEquals(desired, current))
+        {
+            return;
+        }
+
+        var warningStart = _warnings.Count;
+        _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+            page,
+            view,
+            fields,
+            desired,
+            cancellationToken).ConfigureAwait(false));
+        if (_warnings.Count != warningStart)
+        {
+            return;
+        }
+
+        if (_client is null)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': a GitHub API client is required to persist Board column visibility");
+        }
+
+        var target = await ResolveTargetViewAsync(
+            view,
+            ownerLogin,
+            ownerType,
+            projectNumber,
+            viewNumber,
+            cancellationToken).ConfigureAwait(false);
+        var filter = ProjectFilterTransformer.ApplyBoardVisibilityFilter(
+            view,
+            fields,
+            target.Filter);
+        await _client.MutationAsync(
+            "updateProjectV2View",
+            """
+            mutation($viewId: ID!, $filter: String, $clientMutationId: String!) {
+              updateProjectV2View(input: { viewId: $viewId, filter: $filter, clientMutationId: $clientMutationId }) {
+                projectV2View { id }
+              }
+            }
+            """,
+            new { viewId = target.Id, filter },
+            MutationRetryPolicy.Idempotent,
+            target: target.Id,
+            requiredResultPath: "projectV2View.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        await page.ReloadAsync(new() { WaitUntil = WaitUntilState.DOMContentLoaded }).ConfigureAwait(false);
+        await PauseAsync(cancellationToken).ConfigureAwait(false);
+        var persisted = await BoardColumnVisibilityUi.ReadAsync(
+            page,
+            view,
+            fields,
+            cancellationToken).ConfigureAwait(false);
+        if (!BoardColumnVisibilityUi.SetEquals(desired, persisted))
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': Board column visibility did not persist through the View filter");
+        }
+    }
+
+    private async Task<TargetViewFilter> ResolveTargetViewAsync(
+        ViewSnapshot view,
+        string ownerLogin,
+        ProjectOwnerType ownerType,
+        int projectNumber,
+        int viewNumber,
+        CancellationToken cancellationToken)
+    {
+        var query = ownerType == ProjectOwnerType.Organization
+            ? """
+              query($login: String!, $number: Int!) {
+                organization(login: $login) {
+                  projectV2(number: $number) {
+                    views(first: 100) { nodes { id number name filter } }
+                  }
+                }
+              }
+              """
+            : """
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    views(first: 100) { nodes { id number name filter } }
+                  }
+                }
+              }
+              """;
+        var data = await _client!.QueryAsync(
+            query,
+            new { login = ownerLogin, number = projectNumber },
+            cancellationToken).ConfigureAwait(false);
+        var owner = ownerType == ProjectOwnerType.Organization
+            ? data.GetProperty("organization")
+            : data.GetProperty("user");
+        var matches = owner
+            .GetProperty("projectV2")
+            .GetProperty("views")
+            .GetProperty("nodes")
+            .EnumerateArray()
+            .Where(candidate =>
+                candidate.GetProperty("number").GetInt32() == viewNumber)
+            .Select(candidate => new TargetViewFilter(
+                candidate.GetProperty("id").GetString()!,
+                candidate.TryGetProperty("filter", out var filter)
+                    && filter.ValueKind != System.Text.Json.JsonValueKind.Null
+                        ? filter.GetString()
+                        : null))
+            .ToArray();
+        return matches.Length == 1
+            ? matches[0]
+            : throw new InvalidOperationException(
+                $"view '{view.Name}': expected exactly one target View #{viewNumber}, found {matches.Length}");
+    }
+
+    private sealed record TargetViewFilter(string Id, string? Filter);
+
+    private static async Task<bool> SaveViewAsync(
+        IPage page,
+        CancellationToken cancellationToken,
+        bool forceAttempt = false,
+        bool reloadWhenUnavailable = true)
     {
         var unsavedChanges = Sel.UnsavedChangesStatus(page);
+        var hasUnsavedChanges = true;
         try
         {
             await unsavedChanges.WaitForAsync(new()
             {
                 State = WaitForSelectorState.Visible,
-                Timeout = 750,
+                Timeout = forceAttempt ? 5_000 : 750,
             }).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            return;
+            hasUnsavedChanges = false;
+            if (!forceAttempt)
+            {
+                await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                return true;
+            }
         }
-
-        // D0: the "Save view" button lives inside the View menu overlay. Close any
-        // child menu first so clicking View opens the parent configuration menu.
-        await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-        await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
-        await PauseAsync(cancellationToken).ConfigureAwait(false);
 
         var save = Sel.SaveViewButton(page);
-        try
+        for (var attempt = 0;
+             attempt < ViewPersistenceAttempts
+             && !await save.IsVisibleAsync().ConfigureAwait(false);
+             attempt++)
         {
-            await save.WaitForAsync(new() { State = WaitForSelectorState.Visible, Timeout = 1_000 }).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
-        {
+            // D0: the "Save view" button lives inside the View menu overlay. Close any
+            // child menu first so clicking View opens the parent configuration menu.
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
-            throw new InvalidOperationException(
-                "the View has unsaved changes but Save view is unavailable",
-                exception);
+            await Sel.ViewMenuButton(page).ClickAsync().ConfigureAwait(false);
+            await PauseAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                await save.WaitForAsync(new()
+                {
+                    State = WaitForSelectorState.Visible,
+                    Timeout = 5_000,
+                }).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
+            {
+                if (attempt + 1 == ViewPersistenceAttempts)
+                {
+                    await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+                    if (!hasUnsavedChanges)
+                    {
+                        return false;
+                    }
+
+                    if (reloadWhenUnavailable)
+                    {
+                        await page.ReloadAsync(new()
+                        {
+                            WaitUntil = WaitUntilState.DOMContentLoaded,
+                        }).ConfigureAwait(false);
+                        await PauseAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return false;
+                }
+            }
         }
 
         await save.ClickAsync().ConfigureAwait(false);
@@ -2106,6 +2319,7 @@ public sealed class ViewUiImporter
         }
 
         await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
+        return true;
     }
 
     // ----- helpers -----

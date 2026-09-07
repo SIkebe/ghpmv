@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Text;
+using System.Text.RegularExpressions;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Import;
@@ -227,49 +228,213 @@ public static class ProjectFilterTransformer
         foreach (var field in fields.Where(field =>
             field.DataType is "TEXT" or "NUMBER" or "DATE" or "SINGLE_SELECT" or "ITERATION" or "MULTI_SELECT"))
         {
-            var builder = new StringBuilder(field.Name.Length);
-            var pendingSeparator = false;
-            var supported = true;
-            foreach (var character in field.Name)
+            if (TryBuildProjectFieldQualifier(field.Name, out var qualifier))
             {
-                if (character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' || char.IsDigit(character))
-                {
-                    if (pendingSeparator && builder.Length > 0)
-                    {
-                        builder.Append('-');
-                    }
-
-                    builder.Append(char.ToLowerInvariant(character));
-                    pendingSeparator = false;
-                }
-                else if (char.IsWhiteSpace(character) || character == '-')
-                {
-                    pendingSeparator = true;
-                }
-                else if (character == '_')
-                {
-                    if (pendingSeparator && builder.Length > 0)
-                    {
-                        builder.Append('-');
-                    }
-
-                    builder.Append(character);
-                    pendingSeparator = false;
-                }
-                else
-                {
-                    supported = false;
-                    break;
-                }
-            }
-
-            if (supported && builder.Length > 0)
-            {
-                qualifiers.Add(builder.ToString());
+                qualifiers.Add(qualifier);
             }
         }
 
         return qualifiers;
+    }
+
+    public static bool TryBuildProjectFieldQualifier(string fieldName, out string qualifier)
+    {
+        ArgumentNullException.ThrowIfNull(fieldName);
+        var builder = new StringBuilder(fieldName.Length);
+        var pendingSeparator = false;
+        foreach (var character in fieldName)
+        {
+            if (character is >= 'A' and <= 'Z' or >= 'a' and <= 'z' || char.IsDigit(character))
+            {
+                if (pendingSeparator && builder.Length > 0)
+                {
+                    builder.Append('-');
+                }
+
+                builder.Append(char.ToLowerInvariant(character));
+                pendingSeparator = false;
+            }
+            else if (char.IsWhiteSpace(character) || character == '-')
+            {
+                pendingSeparator = true;
+            }
+            else if (character == '_')
+            {
+                if (pendingSeparator && builder.Length > 0)
+                {
+                    builder.Append('-');
+                }
+
+                builder.Append(character);
+                pendingSeparator = false;
+            }
+            else
+            {
+                qualifier = string.Empty;
+                return false;
+            }
+        }
+
+        qualifier = builder.ToString();
+        return qualifier.Length > 0;
+    }
+
+    /// <summary>
+    /// Merges the negative custom-field qualifier GitHub uses to persist visible Board columns.
+    /// </summary>
+    public static string? ApplyBoardVisibilityFilter(
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields)
+        => ApplyBoardVisibilityFilter(view, fields, view.Filter);
+
+    /// <summary>
+    /// Merges Board visibility into an explicitly supplied target filter.
+    /// </summary>
+    public static string? ApplyBoardVisibilityFilter(
+        ViewSnapshot view,
+        IReadOnlyList<FieldSnapshot> fields,
+        string? baseFilter)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(fields);
+
+        if (view.Ui?.VisibleColumns is null)
+        {
+            return baseFilter;
+        }
+
+        if (!string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
+            || view.VerticalGroupByFields.Count != 1)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': visible Board columns require a Board layout with exactly one column-by field");
+        }
+
+        var fieldName = view.VerticalGroupByFields[0];
+        var matchingFields = fields
+            .Where(field => string.Equals(field.Name, fieldName, StringComparison.Ordinal))
+            .ToArray();
+        if (matchingFields.Length != 1)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': visible Board column field '{fieldName}' does not uniquely exist in the snapshot");
+        }
+
+        if (!TryBuildProjectFieldQualifier(fieldName, out var qualifier))
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': column-by field '{fieldName}' cannot be represented as a Project filter qualifier");
+        }
+
+        var field = matchingFields[0];
+        var allValues = GetBoardColumnValues(view, field);
+        var visibleValues = view.Ui.VisibleColumns.Select(column =>
+        {
+            if (!string.Equals(column.FieldName, fieldName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"view '{view.Name}': visible Board column '{column.FieldName}' does not use column-by field '{fieldName}'");
+            }
+
+            return field.DataType switch
+            {
+                "SINGLE_SELECT" when column.SingleSelectOptionName is not null
+                    && column.IterationTitle is null => column.SingleSelectOptionName,
+                "ITERATION" when column.IterationTitle is not null
+                    && column.SingleSelectOptionName is null => column.IterationTitle,
+                _ => throw new InvalidOperationException(
+                    $"view '{view.Name}': visible Board column has an invalid identity for field '{fieldName}' ({field.DataType})"),
+            };
+        }).ToHashSet(StringComparer.Ordinal);
+
+        var unknownVisibleValues = visibleValues.Except(allValues, StringComparer.Ordinal).ToArray();
+        if (unknownVisibleValues.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': visible Board columns are missing from field '{fieldName}': {string.Join(", ", unknownVisibleValues)}");
+        }
+
+        var filterWithoutVisibility = RemoveNegativeQualifier(baseFilter, qualifier);
+        var hiddenValues = allValues.Where(value => !visibleValues.Contains(value)).ToArray();
+        if (hiddenValues.Length == 0)
+        {
+            return filterWithoutVisibility;
+        }
+
+        var visibilityFilter = $"-{qualifier}:{string.Join(",", hiddenValues.Select(FormatFilterValue))}";
+        return string.IsNullOrWhiteSpace(filterWithoutVisibility)
+            ? visibilityFilter
+            : $"{filterWithoutVisibility} {visibilityFilter}";
+    }
+
+    /// <summary>Removes one complete negative qualifier, including comma-separated quoted values.</summary>
+    public static string? RemoveNegativeQualifier(string? filter, string qualifier)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(qualifier);
+        if (string.IsNullOrWhiteSpace(filter))
+        {
+            return null;
+        }
+
+        var atom = @"""(?:\\.|[^""\\])*""|[^\s,""]+";
+        var pattern = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $@"(?<!\S)-{Regex.Escape(qualifier)}:(?:{atom})(?:,(?:{atom}))*");
+        var matches = Regex.Matches(filter, pattern, RegexOptions.IgnoreCase);
+        if (matches.Count == 0)
+        {
+            return filter;
+        }
+
+        var builder = new StringBuilder(filter);
+        for (var index = matches.Count - 1; index >= 0; index--)
+        {
+            var match = matches[index];
+            var removeStart = match.Index;
+            while (removeStart > 0 && char.IsWhiteSpace(filter[removeStart - 1]))
+            {
+                removeStart--;
+            }
+
+            var removeEnd = match.Index + match.Length;
+            while (removeEnd < filter.Length && char.IsWhiteSpace(filter[removeEnd]))
+            {
+                removeEnd++;
+            }
+
+            var replacement = removeStart > 0 && removeEnd < filter.Length ? " " : string.Empty;
+            builder.Remove(removeStart, removeEnd - removeStart);
+            builder.Insert(removeStart, replacement);
+        }
+
+        var normalized = builder.ToString();
+        return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static string[] GetBoardColumnValues(ViewSnapshot view, FieldSnapshot field)
+        => field.DataType switch
+        {
+            "SINGLE_SELECT" when field.Options is not null
+                => field.Options.Select(option => option.Name).Distinct(StringComparer.Ordinal).ToArray(),
+            "ITERATION" when field.IterationConfiguration is not null
+                => field.IterationConfiguration.CompletedIterations
+                    .Concat(field.IterationConfiguration.Iterations)
+                    .Select(iteration => iteration.Title)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray(),
+            _ => throw new InvalidOperationException(
+                $"view '{view.Name}': Board column visibility is unsupported for field '{field.Name}' ({field.DataType})"),
+        };
+
+    private static string FormatFilterValue(string value)
+    {
+        if (value.Length > 0 && value.All(character =>
+                char.IsLetterOrDigit(character) || character is '_' or '-' or '.'))
+        {
+            return value;
+        }
+
+        return $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
     }
 
     /// <summary>Returns Auto-add repository mapping results with their workflow locations.</summary>

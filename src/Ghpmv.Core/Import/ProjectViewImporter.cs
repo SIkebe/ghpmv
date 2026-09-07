@@ -39,6 +39,8 @@ internal sealed class ProjectViewImporter
     public IReadOnlySet<string> ProjectFieldQualifiers { get; init; } =
         ReadOnlySet<string>.Empty;
 
+    public IReadOnlyList<FieldSnapshot> ProjectFields { get; init; } = [];
+
     public bool BrowserEnrichmentPlanned { get; init; }
 
     public Action<string>? OnProgress { get; set; }
@@ -282,9 +284,22 @@ internal sealed class ProjectViewImporter
         IReadOnlyList<string> visibleFieldIds,
         CancellationToken cancellationToken)
     {
-        var filter = source.Filter is null
+        string? visibilityFilter;
+        try
+        {
+            visibilityFilter = ProjectFilterTransformer.ApplyBoardVisibilityFilter(
+                source,
+                ProjectFields);
+        }
+        catch (InvalidOperationException exception)
+        {
+            Warn(exception.Message);
+            visibilityFilter = source.Filter;
+        }
+
+        var filter = visibilityFilter is null
             ? null
-            : TransformFilter(source.Name, source.Filter);
+            : TransformFilter(source.Name, visibilityFilter);
         var data = await _client.MutationAsync(
             "updateProjectV2View",
             UpdateViewMutation,

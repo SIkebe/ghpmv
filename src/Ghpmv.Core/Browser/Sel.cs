@@ -46,6 +46,16 @@ internal static class Sel
     public static ILocator CheckboxOptions(ILocator menu)
         => menu.GetByRole(AriaRole.Menuitemcheckbox).Or(menu.GetByRole(AriaRole.Option));
 
+    /// <summary>A named checkable option in the currently open picker.</summary>
+    public static ILocator CheckboxOption(IPage page, string name)
+        => page.GetByRole(AriaRole.Menuitemcheckbox, new() { Name = name, Exact = true })
+            .Or(page.GetByRole(AriaRole.Option, new() { Name = name, Exact = true }))
+            .First;
+
+    /// <summary>The checkmark visual that receives pointer input for a checkable option.</summary>
+    public static ILocator CheckboxOptionLeadingVisual(ILocator option)
+        => option.Locator("svg.octicon-check").First;
+
     /// <summary>A direct checkbox in the parent View configuration menu.</summary>
     public static ILocator ViewOptionCheckbox(ILocator menu, string name)
         => menu.GetByRole(AriaRole.Menuitemcheckbox, new() { Name = name, Exact = true });
@@ -82,6 +92,10 @@ internal static class Sel
     public static ILocator BoardColumnActionsButtons(IPage page)
         => page.GetByRole(AriaRole.Button, new() { NameRegex = BoardColumnActionsButtonName });
 
+    /// <summary>Board columns currently rendered by GitHub's horizontal virtualizer.</summary>
+    public static ILocator BoardColumns(IPage page)
+        => page.Locator("[data-board-column]");
+
     /// <summary>The actions button for one displayed Board column.</summary>
     public static ILocator BoardColumnActionsButton(IPage page, string columnName)
         => page.GetByRole(
@@ -95,6 +109,10 @@ internal static class Sel
     /// <summary>"Set limit" in an open Board column menu.</summary>
     public static ILocator BoardColumnLimitMenuItem(IPage page)
         => page.GetByRole(AriaRole.Menuitem, new() { Name = "Set limit", Exact = true }).Last;
+
+    /// <summary>"Hide from view" in an open Board column menu.</summary>
+    public static ILocator BoardColumnHideMenuItem(IPage page)
+        => page.GetByRole(AriaRole.Menuitem, new() { Name = "Hide from view", Exact = true }).Last;
 
     /// <summary>Numeric input used to set, change, or clear a Board column limit.</summary>
     public static ILocator BoardColumnLimitInput(IPage page)
