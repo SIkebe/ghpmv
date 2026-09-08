@@ -357,6 +357,28 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void ApplyBoardVisibilityFilter_removes_an_all_visibility_boolean_group()
+    {
+        var view = Board(
+            "Fixture Select",
+            [new BoardColumnSnapshot { FieldName = "Fixture Select", SingleSelectOptionName = "Alpha" }],
+            "(-fixture-select:Alpha OR -fixture-select:Beta)");
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options = [Option("Alpha"), Option("Beta")],
+            },
+        };
+
+        var result = ProjectFilterTransformer.ApplyBoardVisibilityFilter(view, fields);
+
+        Assert.Equal("-fixture-select:Beta", result);
+    }
+
+    [Fact]
     public void RemoveNegativeQualifier_preserves_whitespace_inside_unrelated_quoted_values()
     {
         const string Filter = "label:\"needs  triage\"  -fixture-sprint:\"Sprint 2\",\"Sprint 4\"  status:Todo";
