@@ -467,6 +467,17 @@ public static class ProjectFilterTransformer
                 removeStart = previousContent;
                 removeEnd = nextContent + 1;
             }
+            else if (IsInsideParentheses(filter, match.Start))
+            {
+                if (TryReadFollowingBooleanOperator(filter, removeEnd, out var afterOperator))
+                {
+                    removeEnd = afterOperator;
+                }
+                else if (TryReadPrecedingBooleanOperator(filter, removeStart, out var operatorStart))
+                {
+                    removeStart = operatorStart;
+                }
+            }
 
             if (removalSpans.Count > 0
                 && IsOnlyWhitespace(filter, removalSpans[^1].End, removeStart))
@@ -494,7 +505,12 @@ public static class ProjectFilterTransformer
                 removeEnd++;
             }
 
-            var replacement = removeStart > 0 && removeEnd < filter.Length ? " " : string.Empty;
+            var replacement = removeStart > 0
+                && removeEnd < filter.Length
+                && filter[removeStart - 1] != '('
+                && filter[removeEnd] != ')'
+                    ? " "
+                    : string.Empty;
             builder.Remove(removeStart, removeEnd - removeStart);
             builder.Insert(removeStart, replacement);
         }
@@ -519,6 +535,79 @@ public static class ProjectFilterTransformer
         }
 
         return true;
+    }
+
+    private static bool IsInsideParentheses(string filter, int position)
+    {
+        var depth = 0;
+        for (var index = 0; index < position; index++)
+        {
+            if (filter[index] == '"')
+            {
+                index = FindQuotedValueEnd(filter, index) - 1;
+            }
+            else if (filter[index] == '(')
+            {
+                depth++;
+            }
+            else if (filter[index] == ')' && depth > 0)
+            {
+                depth--;
+            }
+        }
+
+        return depth > 0;
+    }
+
+    private static bool TryReadFollowingBooleanOperator(string filter, int start, out int end)
+    {
+        var operatorStart = start;
+        while (operatorStart < filter.Length && char.IsWhiteSpace(filter[operatorStart]))
+        {
+            operatorStart++;
+        }
+
+        foreach (var candidate in new[] { "AND", "OR" })
+        {
+            var operatorEnd = operatorStart + candidate.Length;
+            if (operatorEnd <= filter.Length
+                && filter.AsSpan(operatorStart, candidate.Length).Equals(
+                    candidate,
+                    StringComparison.OrdinalIgnoreCase)
+                && operatorEnd < filter.Length
+                && char.IsWhiteSpace(filter[operatorEnd]))
+            {
+                end = operatorEnd;
+                while (end < filter.Length && char.IsWhiteSpace(filter[end]))
+                {
+                    end++;
+                }
+
+                return true;
+            }
+        }
+
+        end = start;
+        return false;
+    }
+
+    private static bool TryReadPrecedingBooleanOperator(string filter, int start, out int operatorStart)
+    {
+        var operatorEnd = start;
+        while (operatorEnd > 0 && char.IsWhiteSpace(filter[operatorEnd - 1]))
+        {
+            operatorEnd--;
+        }
+
+        operatorStart = operatorEnd;
+        while (operatorStart > 0 && IsQualifierStart(filter[operatorStart - 1]))
+        {
+            operatorStart--;
+        }
+
+        var candidate = filter[operatorStart..operatorEnd];
+        return string.Equals(candidate, "AND", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(candidate, "OR", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string[] GetBoardColumnValues(ViewSnapshot view, FieldSnapshot field)

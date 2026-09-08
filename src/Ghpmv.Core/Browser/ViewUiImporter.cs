@@ -414,13 +414,20 @@ public sealed class ViewUiImporter
                 view,
                 fields,
                 cancellationToken).ConfigureAwait(false);
+            var allColumns = BoardColumnVisibilityUi.GetAllColumns(view, fields);
+            if (_client is null && !BoardColumnVisibilityUi.SetEquals(currentVisibility, allColumns))
+            {
+                throw new InvalidOperationException(
+                    $"view '{view.Name}': a GitHub API client is required to restore Board column visibility after applying limits");
+            }
+
             try
             {
                 var revealWarnings = await BoardColumnVisibilityUi.ApplyAsync(
                     page,
                     view,
                     fields,
-                    BoardColumnVisibilityUi.GetAllColumns(view, fields),
+                    allColumns,
                     cancellationToken).ConfigureAwait(false);
                 _warnings.AddRange(revealWarnings);
                 if (revealWarnings.Count == 0)
@@ -444,12 +451,16 @@ public sealed class ViewUiImporter
             }
             finally
             {
-                _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
+                await ApplyAndPersistBoardColumnVisibilityAsync(
                     page,
                     view,
                     fields,
                     currentVisibility,
-                    cancellationToken).ConfigureAwait(false));
+                    ownerLogin,
+                    ownerType,
+                    projectNumber,
+                    viewNumber,
+                    cancellationToken).ConfigureAwait(false);
             }
 
             await _session.SaveStateAsync(cancellationToken).ConfigureAwait(false);
@@ -2133,8 +2144,15 @@ public sealed class ViewUiImporter
             projectNumber,
             viewNumber,
             cancellationToken).ConfigureAwait(false);
+        var visibilityView = view with
+        {
+            Ui = (view.Ui ?? new ViewUiSnapshot()) with
+            {
+                VisibleColumns = desired,
+            },
+        };
         var filter = ProjectFilterTransformer.ApplyBoardVisibilityFilter(
-            view,
+            visibilityView,
             fields,
             target.Filter);
         await _client.MutationAsync(
