@@ -1009,6 +1009,34 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Uncaptured_Board_visibility_preserves_negative_qualifiers_as_filter_state()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            Filter = "-status:Done",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot(),
+        };
+        var targetBoard = sourceBoard with
+        {
+            Number = 9,
+            Filter = "-status:Todo",
+        };
+
+        var difference = Assert.Single(
+            ProjectVerifier.Compare(
+                baseline with { Views = [sourceBoard] },
+                baseline with { Views = [targetBoard] }).Differences,
+            candidate => candidate.Category == "View"
+                && candidate.Message.Contains("filter mismatch", StringComparison.Ordinal));
+
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+    }
+
+    [Fact]
     public void Duplicate_view_names_match_uncaptured_limits_by_visibility()
     {
         var baseline = BuildSnapshot();

@@ -1127,10 +1127,13 @@ public sealed class ProjectVerifier
     }
 
     private static bool ViewApiEquals(ViewSnapshot source, ViewSnapshot target)
-        => string.Equals(source.Layout, target.Layout, StringComparison.Ordinal)
+    {
+        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null
+            || target.Ui?.VisibleColumns is not null;
+        return string.Equals(source.Layout, target.Layout, StringComparison.Ordinal)
             && string.Equals(
-                NormalizeBoardVisibilityFilter(source),
-                NormalizeBoardVisibilityFilter(target),
+                NormalizeBoardVisibilityFilter(source, visibilityIsAuthoritative),
+                NormalizeBoardVisibilityFilter(target, visibilityIsAuthoritative),
                 StringComparison.Ordinal)
             && source.VisibleFields.SequenceEqual(target.VisibleFields, StringComparer.Ordinal)
             && source.GroupByFields.SequenceEqual(target.GroupByFields, StringComparer.Ordinal)
@@ -1139,6 +1142,7 @@ public sealed class ProjectVerifier
             && source.SortByFields.Zip(target.SortByFields).All(pair =>
                 string.Equals(pair.First.Field, pair.Second.Field, StringComparison.Ordinal)
                 && string.Equals(pair.First.Direction, pair.Second.Direction, StringComparison.Ordinal));
+    }
 
     private static bool ViewUiEquals(ViewUiSnapshot source, ViewUiSnapshot target)
         => ViewUiEqualsWithoutBoardState(source, target)
@@ -1232,11 +1236,13 @@ public sealed class ProjectVerifier
 
     private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)
     {
+        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null
+            || target.Ui?.VisibleColumns is not null;
         CompareViewValue(
             name,
             "filter",
-            NormalizeBoardVisibilityFilter(source),
-            NormalizeBoardVisibilityFilter(target),
+            NormalizeBoardVisibilityFilter(source, visibilityIsAuthoritative),
+            NormalizeBoardVisibilityFilter(target, visibilityIsAuthoritative),
             differences);
         CompareViewList(name, "visible fields", source.VisibleFields, target.VisibleFields, differences);
         CompareViewList(name, "group by fields", source.GroupByFields, target.GroupByFields, differences);
@@ -1247,9 +1253,10 @@ public sealed class ProjectVerifier
         CompareViewList(name, "sort by fields", sourceSort, targetSort, differences);
     }
 
-    private static string? NormalizeBoardVisibilityFilter(ViewSnapshot view)
+    private static string? NormalizeBoardVisibilityFilter(ViewSnapshot view, bool visibilityIsAuthoritative)
     {
-        if (view.Filter is null
+        if (!visibilityIsAuthoritative
+            || view.Filter is null
             || !string.Equals(view.Layout, "BOARD_LAYOUT", StringComparison.Ordinal)
             || view.VerticalGroupByFields.Count != 1
             || !ProjectFilterTransformer.TryBuildProjectFieldQualifier(

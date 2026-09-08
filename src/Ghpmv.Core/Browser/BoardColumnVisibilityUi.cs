@@ -135,11 +135,20 @@ internal static class BoardColumnVisibilityUi
                     var option = await FindOptionAsync(page, pickerOptions, name).ConfigureAwait(false)
                         ?? throw new InvalidOperationException(
                             $"view '{view.Name}': Board column '{field.Name}' / '{name}' disappeared from the visibility picker");
+                    var isChecked = string.Equals(
+                        await option.GetAttributeAsync("aria-checked").ConfigureAwait(false),
+                        "true",
+                        StringComparison.Ordinal);
+                    if (isChecked)
+                    {
+                        return;
+                    }
+
                     var isDisabled = string.Equals(
                         await option.GetAttributeAsync("aria-disabled").ConfigureAwait(false),
                         "true",
                         StringComparison.Ordinal);
-                    if (isDisabled)
+                    if (DisabledColumnNeedsWarning(isChecked, isDisabled))
                     {
                         plan.Warnings.Add(
                             $"view '{view.Name}': Board column '{field.Name}' / '{name}' is disabled on the target and its visibility could not be changed");
@@ -437,6 +446,9 @@ internal static class BoardColumnVisibilityUi
                 .Reverse()
                 .Select(name => new VisibilityChange(name, ShouldBeVisible: false)))
             .ToList();
+
+    internal static bool DisabledColumnNeedsWarning(bool isChecked, bool isDisabled)
+        => !isChecked && isDisabled;
 
     internal static IReadOnlyList<string> FindMissingValueNames(
         FieldSnapshot field,
