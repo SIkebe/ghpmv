@@ -154,6 +154,15 @@ public class ProjectFilterTransformerTests
         Assert.Equal(["safe-field"], result);
     }
 
+    [Theory]
+    [InlineData("1st Field")]
+    [InlineData("_Private Field")]
+    public void TryBuildProjectFieldQualifier_rejects_non_letter_prefixes(string fieldName)
+    {
+        Assert.False(ProjectFilterTransformer.TryBuildProjectFieldQualifier(fieldName, out var qualifier));
+        Assert.Empty(qualifier);
+    }
+
     [Fact]
     public void BuildProjectFieldQualifiers_excludes_identity_bearing_built_in_fields()
     {
