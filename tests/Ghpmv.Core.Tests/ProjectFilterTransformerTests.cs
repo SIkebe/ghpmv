@@ -311,6 +311,27 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void RemoveNegativeQualifier_preserves_qualifier_like_text_inside_quoted_values()
+    {
+        const string Filter =
+            "label:\"text -fixture-sprint:Old\" -fixture-sprint:\"Sprint 2\" status:Todo";
+
+        var result = ProjectFilterTransformer.RemoveNegativeQualifier(Filter, "fixture-sprint");
+
+        Assert.Equal("label:\"text -fixture-sprint:Old\" status:Todo", result);
+    }
+
+    [Fact]
+    public void RemoveNegativeQualifier_removes_a_parenthesized_complete_token()
+    {
+        const string Filter = "status:Todo (-fixture-sprint:Old) label:bug";
+
+        var result = ProjectFilterTransformer.RemoveNegativeQualifier(Filter, "fixture-sprint");
+
+        Assert.Equal("status:Todo label:bug", result);
+    }
+
+    [Fact]
     public void Transform_preserves_whitespace_around_comma_separated_values()
     {
         var result = ProjectFilterTransformer.Transform(

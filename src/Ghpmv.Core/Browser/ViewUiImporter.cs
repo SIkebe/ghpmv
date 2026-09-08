@@ -2170,50 +2170,43 @@ public sealed class ViewUiImporter
         int viewNumber,
         CancellationToken cancellationToken)
     {
-        var query = ownerType == ProjectOwnerType.Organization
-            ? """
-              query($login: String!, $number: Int!) {
-                organization(login: $login) {
-                  projectV2(number: $number) {
-                    views(first: 100) { nodes { id number name filter } }
+        var ownerField = ownerType == ProjectOwnerType.Organization ? "organization" : "user";
+        var query = """
+            query($login: String!, $number: Int!, $first: Int!, $after: String) {
+              __OWNER__(login: $login) {
+                projectV2(number: $number) {
+                  views(first: $first, after: $after) {
+                    nodes { id number filter }
+                    pageInfo { hasNextPage endCursor }
                   }
                 }
               }
-              """
-            : """
-              query($login: String!, $number: Int!) {
-                user(login: $login) {
-                  projectV2(number: $number) {
-                    views(first: 100) { nodes { id number name filter } }
-                  }
-                }
-              }
-              """;
-        var data = await _client!.QueryAsync(
+            }
+            """.Replace("__OWNER__", ownerField, StringComparison.Ordinal);
+        var matches = new List<TargetViewFilter>();
+        await foreach (var candidate in _client!.QueryPaginatedAsync(
             query,
-            new { login = ownerLogin, number = projectNumber },
-            cancellationToken).ConfigureAwait(false);
-        var owner = ownerType == ProjectOwnerType.Organization
-            ? data.GetProperty("organization")
-            : data.GetProperty("user");
-        var matches = owner
-            .GetProperty("projectV2")
-            .GetProperty("views")
-            .GetProperty("nodes")
-            .EnumerateArray()
-            .Where(candidate =>
-                candidate.GetProperty("number").GetInt32() == viewNumber)
-            .Select(candidate => new TargetViewFilter(
+            new { login = ownerLogin, number = projectNumber, first = 100 },
+            $"{ownerField}.projectV2.views",
+            cancellationToken: cancellationToken).ConfigureAwait(false))
+        {
+            if (candidate.GetProperty("number").GetInt32() != viewNumber)
+            {
+                continue;
+            }
+
+            matches.Add(new TargetViewFilter(
                 candidate.GetProperty("id").GetString()!,
                 candidate.TryGetProperty("filter", out var filter)
                     && filter.ValueKind != System.Text.Json.JsonValueKind.Null
                         ? filter.GetString()
-                        : null))
-            .ToArray();
-        return matches.Length == 1
+                        : null));
+        }
+
+        return matches.Count == 1
             ? matches[0]
             : throw new InvalidOperationException(
-                $"view '{view.Name}': expected exactly one target View #{viewNumber}, found {matches.Length}");
+                $"view '{view.Name}': expected exactly one target View #{viewNumber}, found {matches.Count}");
     }
 
     private sealed record TargetViewFilter(string Id, string? Filter);
