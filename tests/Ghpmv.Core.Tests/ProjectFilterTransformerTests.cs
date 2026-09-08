@@ -387,6 +387,20 @@ public class ProjectFilterTransformerTests
         Assert.Equal("status:Todo label:bug", result);
     }
 
+    [Theory]
+    [InlineData("(-fixture-sprint:Old OR status:Todo)", "(status:Todo)")]
+    [InlineData("(status:Todo OR -fixture-sprint:Old)", "(status:Todo)")]
+    [InlineData("(-fixture-sprint:Old AND status:Todo)", "(status:Todo)")]
+    [InlineData("(status:Todo AND -fixture-sprint:Old)", "(status:Todo)")]
+    public void RemoveNegativeQualifier_removes_the_adjacent_parenthesized_boolean_operator(
+        string filter,
+        string expected)
+    {
+        var result = ProjectFilterTransformer.RemoveNegativeQualifier(filter, "fixture-sprint");
+
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void Transform_preserves_whitespace_around_comma_separated_values()
     {
