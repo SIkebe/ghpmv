@@ -2108,6 +2108,12 @@ public sealed class ViewUiImporter
             return;
         }
 
+        if (_client is null)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': a GitHub API client is required to persist Board column visibility");
+        }
+
         var warningStart = _warnings.Count;
         _warnings.AddRange(await BoardColumnVisibilityUi.ApplyAsync(
             page,
@@ -2118,12 +2124,6 @@ public sealed class ViewUiImporter
         if (_warnings.Count != warningStart)
         {
             return;
-        }
-
-        if (_client is null)
-        {
-            throw new InvalidOperationException(
-                $"view '{view.Name}': a GitHub API client is required to persist Board column visibility");
         }
 
         var target = await ResolveTargetViewAsync(
