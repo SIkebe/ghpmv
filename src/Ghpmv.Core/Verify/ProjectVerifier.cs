@@ -1128,8 +1128,7 @@ public sealed class ProjectVerifier
 
     private static bool ViewApiEquals(ViewSnapshot source, ViewSnapshot target)
     {
-        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null
-            || target.Ui?.VisibleColumns is not null;
+        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null;
         return string.Equals(source.Layout, target.Layout, StringComparison.Ordinal)
             && string.Equals(
                 NormalizeBoardVisibilityFilter(source, visibilityIsAuthoritative),
@@ -1236,8 +1235,7 @@ public sealed class ProjectVerifier
 
     private static void CompareViewApi(string name, ViewSnapshot source, ViewSnapshot target, List<VerifyDifference> differences)
     {
-        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null
-            || target.Ui?.VisibleColumns is not null;
+        var visibilityIsAuthoritative = source.Ui?.VisibleColumns is not null;
         CompareViewValue(
             name,
             "filter",
