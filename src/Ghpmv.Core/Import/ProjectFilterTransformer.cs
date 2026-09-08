@@ -438,10 +438,9 @@ public static class ProjectFilterTransformer
             return filter;
         }
 
-        var builder = new StringBuilder(filter);
-        for (var index = matches.Count - 1; index >= 0; index--)
+        var removalSpans = new List<(int Start, int End)>();
+        foreach (var match in matches)
         {
-            var match = matches[index];
             var removeStart = match.Start;
             var removeEnd = match.End;
             var previousContent = removeStart - 1;
@@ -463,6 +462,22 @@ public static class ProjectFilterTransformer
                 removeEnd = nextContent + 1;
             }
 
+            if (removalSpans.Count > 0
+                && IsOnlyWhitespace(filter, removalSpans[^1].End, removeStart))
+            {
+                removalSpans[^1] = (removalSpans[^1].Start, removeEnd);
+            }
+            else
+            {
+                removalSpans.Add((removeStart, removeEnd));
+            }
+        }
+
+        var builder = new StringBuilder(filter);
+        for (var index = removalSpans.Count - 1; index >= 0; index--)
+        {
+            var (removeStart, removeEnd) = removalSpans[index];
+
             while (removeStart > 0 && char.IsWhiteSpace(filter[removeStart - 1]))
             {
                 removeStart--;
@@ -480,6 +495,24 @@ public static class ProjectFilterTransformer
 
         var normalized = builder.ToString();
         return normalized.Length == 0 ? null : normalized;
+    }
+
+    private static bool IsOnlyWhitespace(string value, int start, int end)
+    {
+        if (start > end)
+        {
+            return true;
+        }
+
+        for (var index = start; index < end; index++)
+        {
+            if (!char.IsWhiteSpace(value[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static string[] GetBoardColumnValues(ViewSnapshot view, FieldSnapshot field)
