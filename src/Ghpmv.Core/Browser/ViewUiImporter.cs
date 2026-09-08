@@ -1004,7 +1004,11 @@ public sealed class ViewUiImporter
                     cancellationToken).ConfigureAwait(false);
                 _warnings.AddRange(visibilityWarnings);
                 limitsReady = visibilityWarnings.Count == 0;
-                await SaveViewAsync(page, cancellationToken, forceAttempt: true).ConfigureAwait(false);
+                await SaveViewAsync(
+                    page,
+                    cancellationToken,
+                    forceAttempt: true,
+                    reloadWhenUnavailable: false).ConfigureAwait(false);
             }
 
             if (limitsReady)
