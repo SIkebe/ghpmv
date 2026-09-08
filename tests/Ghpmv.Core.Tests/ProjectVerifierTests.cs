@@ -1285,6 +1285,38 @@ public class ProjectVerifierTests
     }
 
     [Fact]
+    public void Target_only_Board_visibility_does_not_hide_source_filter_drift()
+    {
+        var baseline = BuildSnapshot();
+        var sourceBoard = baseline.Views[0] with
+        {
+            Name = "Board",
+            Layout = "BOARD_LAYOUT",
+            Filter = "-status:Done",
+            VerticalGroupByFields = ["Status"],
+            Ui = new ViewUiSnapshot(),
+        };
+        var targetBoard = sourceBoard with
+        {
+            Number = 9,
+            Filter = "-status:Todo",
+            Ui = new ViewUiSnapshot
+            {
+                VisibleColumns = [VisibleColumn("Status", option: "Done")],
+            },
+        };
+
+        var difference = Assert.Single(
+            ProjectVerifier.Compare(
+                baseline with { Views = [sourceBoard] },
+                baseline with { Views = [targetBoard] }).Differences,
+            candidate => candidate.Category == "View"
+                && candidate.Message.Contains("filter mismatch", StringComparison.Ordinal));
+
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+    }
+
+    [Fact]
     public void Captured_Board_visibility_is_not_verified_when_target_capture_is_unavailable()
     {
         var baseline = BuildSnapshot();
