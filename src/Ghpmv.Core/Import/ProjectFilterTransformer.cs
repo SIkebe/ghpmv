@@ -490,6 +490,37 @@ public static class ProjectFilterTransformer
             }
         }
 
+        for (var index = 0; index < removalSpans.Count; index++)
+        {
+            var (removeStart, removeEnd) = removalSpans[index];
+            var previousContent = removeStart - 1;
+            while (previousContent >= 0 && char.IsWhiteSpace(filter[previousContent]))
+            {
+                previousContent--;
+            }
+            var nextContent = removeEnd;
+            while (nextContent < filter.Length && char.IsWhiteSpace(filter[nextContent]))
+            {
+                nextContent++;
+            }
+            if (previousContent >= 0
+                && filter[previousContent] == '('
+                && nextContent < filter.Length
+                && filter[nextContent] == ')')
+            {
+                removalSpans[index] = (previousContent, nextContent + 1);
+            }
+        }
+
+        for (var index = removalSpans.Count - 1; index > 0; index--)
+        {
+            if (IsOnlyWhitespace(filter, removalSpans[index - 1].End, removalSpans[index].Start))
+            {
+                removalSpans[index - 1] = (removalSpans[index - 1].Start, removalSpans[index].End);
+                removalSpans.RemoveAt(index);
+            }
+        }
+
         var builder = new StringBuilder(filter);
         for (var index = removalSpans.Count - 1; index >= 0; index--)
         {
