@@ -275,7 +275,13 @@ public static class ProjectFilterTransformer
         }
 
         qualifier = builder.ToString();
-        return qualifier.Length > 0;
+        if (qualifier.Length > 0 && IsQualifierStart(qualifier[0]))
+        {
+            return true;
+        }
+
+        qualifier = string.Empty;
+        return false;
     }
 
     /// <summary>
