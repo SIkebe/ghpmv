@@ -1426,6 +1426,19 @@ public class ViewUiLogicTests
             changes.Select(change => (change.Name, change.ShouldBeVisible)));
     }
 
+    [Theory]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void Disabled_visible_column_warns_only_when_it_still_needs_to_be_shown(
+        bool isChecked,
+        bool isDisabled,
+        bool expected)
+        => Assert.Equal(
+            expected,
+            BoardColumnVisibilityUi.DisabledColumnNeedsWarning(isChecked, isDisabled));
+
     [Fact]
     public void Board_column_limit_preparation_reveals_every_logical_column()
     {

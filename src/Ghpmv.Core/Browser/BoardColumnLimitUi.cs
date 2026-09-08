@@ -405,15 +405,17 @@ internal static class BoardColumnLimitUi
               if (!scroller) {
                 return true;
               }
+              const wasAtEnd =
+                scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 1;
               if (reset) {
                 scroller.scrollLeft = 0;
-              } else {
+              } else if (!wasAtEnd) {
                 const increment = Math.max(Math.floor(scroller.clientWidth * 0.8), 200);
                 scroller.scrollLeft = Math.min(
                   scroller.scrollLeft + increment,
                   scroller.scrollWidth - scroller.clientWidth);
               }
-              return scroller.scrollLeft + scroller.clientWidth >= scroller.scrollWidth - 1;
+              return !reset && wasAtEnd;
             }
             """,
             reset).ConfigureAwait(false);
