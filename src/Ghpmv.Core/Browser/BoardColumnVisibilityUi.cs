@@ -99,6 +99,12 @@ internal static class BoardColumnVisibilityUi
             }
             if (plan.Warnings.Count > 0)
             {
+                await page.Keyboard.PressAsync("Escape").ConfigureAwait(false);
+                await overlay.WaitForAsync(new()
+                {
+                    State = WaitForSelectorState.Hidden,
+                }).ConfigureAwait(false);
+                await PauseAsync(cancellationToken).ConfigureAwait(false);
                 return plan.Warnings;
             }
 
