@@ -467,6 +467,122 @@ public class ProjectViewImporterTests
         }
     }
 
+    [Fact]
+    public async Task Api_only_Board_visibility_does_not_emit_a_browser_only_warning()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-api-visibility-").FullName;
+        try
+        {
+            var field = new FieldSnapshot
+            {
+                Name = "Status",
+                DataType = "SINGLE_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "todo", Name = "Todo", Color = "GRAY" },
+                    new SingleSelectOptionSnapshot { Id = "done", Name = "Done", Color = "GREEN" },
+                ],
+            };
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                ProjectFields = [field],
+                ProjectFieldQualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "status",
+                },
+            };
+            var view = View(1, "Board", "BOARD_LAYOUT", null, []) with
+            {
+                VerticalGroupByFields = ["Status"],
+                Ui = new ViewUiSnapshot
+                {
+                    VisibleColumns =
+                    [
+                        new BoardColumnSnapshot { FieldName = "Status", SingleSelectOptionName = "Todo" },
+                    ],
+                },
+            };
+
+            await importer.ImportAsync(
+                [view],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            Assert.Empty(importer.Warnings);
+            var update = Assert.Single(handler.RequestBodies, body =>
+                body.Contains("updateProjectV2View", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(update);
+            Assert.Equal(
+                "-status:Done",
+                document.RootElement.GetProperty("variables").GetProperty("filter").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Duplicate_Board_visibility_metadata_becomes_an_import_warning()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-duplicate-visibility-").FullName;
+        try
+        {
+            var field = new FieldSnapshot
+            {
+                Name = "Status",
+                DataType = "SINGLE_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "todo", Name = "Todo", Color = "GRAY" },
+                    new SingleSelectOptionSnapshot { Id = "done", Name = "Done", Color = "GREEN" },
+                ],
+            };
+            var visible = new BoardColumnSnapshot { FieldName = "Status", SingleSelectOptionName = "Todo" };
+            using var handler = new ViewHandler(directory);
+            using var client = CreateClient(handler);
+            var log = new ProjectImportLog();
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct))
+            {
+                ProjectFields = [field],
+                ProjectFieldQualifiers = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "status",
+                },
+            };
+            var view = View(1, "Board", "BOARD_LAYOUT", "status:Todo", []) with
+            {
+                VerticalGroupByFields = ["Status"],
+                Ui = new ViewUiSnapshot { VisibleColumns = [visible, visible] },
+            };
+
+            await importer.ImportAsync(
+                [view],
+                "PVT_target",
+                new Dictionary<string, string>(),
+                ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+
+            Assert.Contains(importer.Warnings, warning =>
+                warning.Contains("duplicate logical values", StringComparison.Ordinal));
+            var update = Assert.Single(handler.RequestBodies, body =>
+                body.Contains("updateProjectV2View", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(update);
+            Assert.Equal(
+                "status:Todo",
+                document.RootElement.GetProperty("variables").GetProperty("filter").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static GitHubGraphQLClient CreateClient(HttpMessageHandler handler)
         => new("token", new Uri("https://example.test/graphql"), handler, (_, _) => Task.CompletedTask);
 
