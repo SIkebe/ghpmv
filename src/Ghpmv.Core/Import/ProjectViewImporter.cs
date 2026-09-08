@@ -412,7 +412,22 @@ internal sealed class ProjectViewImporter
             settings.Add("sort-by");
         }
 
-        if (view.Ui is not null)
+        if (view.Ui is
+            {
+                SliceBy: not null,
+            }
+            or
+            {
+                FieldSum: not null,
+            }
+            or
+            {
+                BoardColumnLimits: not null,
+            }
+            or
+            {
+                Roadmap: not null,
+            })
         {
             settings.Add("UI-only settings");
         }

@@ -301,6 +301,31 @@ public class ProjectFilterTransformerTests
     }
 
     [Fact]
+    public void ApplyBoardVisibilityFilter_rejects_duplicate_logical_columns()
+    {
+        var visible = new BoardColumnSnapshot
+        {
+            FieldName = "Fixture Select",
+            SingleSelectOptionName = "Alpha",
+        };
+        var view = Board("Fixture Select", [visible, visible], null);
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options = [Option("Alpha"), Option("Beta")],
+            },
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => ProjectFilterTransformer.ApplyBoardVisibilityFilter(view, fields));
+
+        Assert.Contains("duplicate logical values", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RemoveNegativeQualifier_preserves_whitespace_inside_unrelated_quoted_values()
     {
         const string Filter = "label:\"needs  triage\"  -fixture-sprint:\"Sprint 2\",\"Sprint 4\"  status:Todo";

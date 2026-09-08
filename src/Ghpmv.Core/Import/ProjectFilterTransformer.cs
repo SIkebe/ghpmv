@@ -327,7 +327,7 @@ public static class ProjectFilterTransformer
 
         var field = matchingFields[0];
         var allValues = GetBoardColumnValues(view, field);
-        var visibleValues = view.Ui.VisibleColumns.Select(column =>
+        var visibleValueList = view.Ui.VisibleColumns.Select(column =>
         {
             if (!string.Equals(column.FieldName, fieldName, StringComparison.Ordinal))
             {
@@ -344,7 +344,13 @@ public static class ProjectFilterTransformer
                 _ => throw new InvalidOperationException(
                     $"view '{view.Name}': visible Board column has an invalid identity for field '{fieldName}' ({field.DataType})"),
             };
-        }).ToHashSet(StringComparer.Ordinal);
+        }).ToArray();
+        var visibleValues = visibleValueList.ToHashSet(StringComparer.Ordinal);
+        if (visibleValues.Count != visibleValueList.Length)
+        {
+            throw new InvalidOperationException(
+                $"view '{view.Name}': visible Board columns contain duplicate logical values for field '{fieldName}'");
+        }
 
         var unknownVisibleValues = visibleValues.Except(allValues, StringComparer.Ordinal).ToArray();
         if (unknownVisibleValues.Length > 0)
