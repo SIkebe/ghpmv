@@ -383,7 +383,7 @@ public class ViewUiLogicTests
     }
 
     [Fact]
-    public void Board_limit_reconciliation_skips_all_writes_when_an_unlimited_target_column_is_hidden()
+    public void Board_limit_reconciliation_ignores_hidden_columns_without_a_configured_limit()
     {
         var field = new FieldSnapshot
         {
@@ -406,35 +406,10 @@ public class ViewUiLogicTests
             [BoardLimit(field.Name, option: "Alpha", limit: 1)],
             ["Alpha"]);
 
-        Assert.Contains(plan.Warnings, warning =>
-            warning.Contains("column 'Fixture Select' / 'Beta'", StringComparison.Ordinal)
-            && warning.Contains("hidden or missing", StringComparison.Ordinal));
-        Assert.Empty(plan.Targets);
-    }
-
-    [Fact]
-    public void Board_limit_capture_requires_every_logical_column_to_be_displayed()
-    {
-        var field = new FieldSnapshot
-        {
-            Name = "Fixture Sprint",
-            DataType = "ITERATION",
-            IterationConfiguration = new IterationConfigurationSnapshot
-            {
-                Duration = 14,
-                StartDay = 1,
-                Iterations =
-                [
-                    new IterationSnapshot { Id = "sprint-0", Title = "Sprint 0", StartDate = "2026-08-31", Duration = 14 },
-                    new IterationSnapshot { Id = "sprint-1", Title = "Sprint 1", StartDate = "2026-09-14", Duration = 14 },
-                ],
-                CompletedIterations = [],
-            },
-        };
-
-        var missing = BoardColumnLimitUi.FindMissingLogicalColumns(field, ["Sprint 0"]);
-
-        Assert.Equal(["Sprint 1"], missing);
+        Assert.Empty(plan.Warnings);
+        var target = Assert.Single(plan.Targets);
+        Assert.Equal("Alpha", target.ColumnName);
+        Assert.Equal(1, target.Limit);
     }
 
     [Fact]
@@ -859,6 +834,23 @@ public class ViewUiLogicTests
             [("Sprint 0", 1), ("Sprint 1", 3)],
             snapshot.Views.Single(view => view.Name == "Fixture Iteration Board").Ui!.BoardColumnLimits!
                 .Select(limit => (limit.IterationTitle, limit.Limit)));
+        var selectField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Select");
+        Assert.Equal(["Alpha", "Beta", "Gamma", "Delta"], selectField.Options!.Select(option => option.Name));
+        Assert.Equal(
+            ["Gamma", "Delta"],
+            selectField.Options!
+                .Select(option => option.Name)
+                .Except(snapshot.Views.Single(view => view.Name == "Fixture Board").Ui!.VisibleColumns!
+                    .Select(column => column.SingleSelectOptionName!)));
+        var sprintField = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint");
+        var sprintTitles = sprintField.IterationConfiguration!.CompletedIterations!
+            .Concat(sprintField.IterationConfiguration.Iterations!)
+            .Select(iteration => iteration.Title);
+        Assert.Equal(["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3", "Sprint 4"], sprintTitles);
+        Assert.Equal(
+            ["Sprint 2", "Sprint 4"],
+            sprintTitles.Except(snapshot.Views.Single(view => view.Name == "Fixture Iteration Board").Ui!.VisibleColumns!
+                .Select(column => column.IterationTitle!)));
         Assert.Contains(snapshot.Fields, field =>
             field.Name == "Fixture Teams"
             && field.DataType == "MULTI_SELECT"
@@ -911,7 +903,7 @@ public class ViewUiLogicTests
     }
 
     [Fact]
-    public void FixtureUiSnapshotFactory_combined_drift_changes_field_sum_and_Board_limits()
+    public void FixtureUiSnapshotFactory_combined_drift_changes_field_sum_Board_limits_and_visibility()
     {
         var expected = FixtureUiSnapshotFactory.Create("fixture-repo");
         var drifted = FixtureUiSnapshotFactory.CreateFieldSumDrift("fixture-repo");
@@ -943,10 +935,21 @@ public class ViewUiLogicTests
                 var limit = Assert.Single(actual.Ui.BoardColumnLimits!);
                 Assert.Equal("Alpha", limit.SingleSelectOptionName);
                 Assert.Equal(5, limit.Limit);
+                Assert.Equal(
+                    ["Alpha", "Gamma"],
+                    actual.Ui.VisibleColumns!.Select(column => column.SingleSelectOptionName));
+            }
+            else if (view.Name == "Fixture Iteration Board")
+            {
+                Assert.Equal(view.Ui.BoardColumnLimits, actual.Ui.BoardColumnLimits);
+                Assert.Equal(
+                    ["Sprint 0", "Sprint 2", "Sprint 3"],
+                    actual.Ui.VisibleColumns!.Select(column => column.IterationTitle));
             }
             else
             {
                 Assert.Equal(view.Ui.BoardColumnLimits, actual.Ui.BoardColumnLimits);
+                Assert.Equal(view.Ui.VisibleColumns, actual.Ui.VisibleColumns);
             }
 
             Assert.Equal(view.Ui.Roadmap?.StartField, actual.Ui.Roadmap?.StartField);
@@ -1312,6 +1315,243 @@ public class ViewUiLogicTests
             category.Category == "View" && category.Status == VerifyStatus.NotVerified);
     }
 
+    [Fact]
+    public void Checkbox_selection_comparison_is_order_insensitive()
+    {
+        string[] expected = ["Alpha", "Beta", "Gamma"];
+
+        Assert.True(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["Gamma", "Alpha", "Beta"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["Gamma", "Alpha"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["Gamma", "Alpha", "Delta"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["Alpha", "Beta", "Gamma", "Gamma"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["alpha", "Beta", "Gamma"]));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            null));
+        Assert.False(ViewUiImporter.CheckboxSelectionMatches(
+            expected,
+            ["Gamma", "Alpha", "beta"]));
+    }
+
+    [Fact]
+    public void Board_column_visibility_reconciliation_uses_logical_single_select_names()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+        };
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "source-alpha-id", Name = "Alpha", Color = "RED" },
+                new SingleSelectOptionSnapshot { Id = "source-beta-id", Name = "Beta", Color = "BLUE" },
+            ],
+        };
+
+        var plan = BoardColumnVisibilityUi.BuildReconciliationPlan(
+            view,
+            field,
+            [BoardColumn("Fixture Select", option: "Beta")]);
+
+        Assert.Empty(plan.Warnings);
+        Assert.Equal(["Beta"], plan.VisibleNames);
+    }
+
+    [Fact]
+    public void Board_column_visibility_reconciliation_uses_logical_iteration_titles()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Sprint"],
+        };
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Sprint",
+            DataType = "ITERATION",
+            IterationConfiguration = new IterationConfigurationSnapshot
+            {
+                Duration = 14,
+                StartDay = 1,
+                Iterations =
+                [
+                    new IterationSnapshot
+                    {
+                        Id = "source-sprint-id",
+                        Title = "Sprint 1",
+                        StartDate = "2026-08-31",
+                        Duration = 14,
+                    },
+                ],
+                CompletedIterations = [],
+            },
+        };
+
+        var plan = BoardColumnVisibilityUi.BuildReconciliationPlan(
+            view,
+            field,
+            [BoardColumn("Fixture Sprint", iteration: "Sprint 1")]);
+
+        Assert.Empty(plan.Warnings);
+        Assert.Equal(["Sprint 1"], plan.VisibleNames);
+    }
+
+    [Fact]
+    public void Board_column_visibility_apply_order_shows_columns_before_hiding_columns()
+    {
+        var changes = BoardColumnVisibilityUi.BuildApplyOrder(
+            ["Sprint 0", "Sprint 1", "Sprint 2", "Sprint 3", "Sprint 4"],
+            new HashSet<string>(["Sprint 0", "Sprint 2", "Sprint 3"], StringComparer.Ordinal));
+
+        Assert.Equal(
+            [
+                ("Sprint 0", true),
+                ("Sprint 2", true),
+                ("Sprint 3", true),
+                ("Sprint 1", false),
+                ("Sprint 4", false),
+            ],
+            changes.Select(change => (change.Name, change.ShouldBeVisible)));
+    }
+
+    [Fact]
+    public void Board_column_limit_preparation_reveals_every_logical_column()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+        };
+        var fields = new[]
+        {
+            new FieldSnapshot
+            {
+                Name = "Fixture Select",
+                DataType = "SINGLE_SELECT",
+                Options =
+                [
+                    new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                    new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+                    new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN" },
+                ],
+            },
+        };
+
+        var columns = BoardColumnVisibilityUi.GetAllColumns(view, fields);
+
+        Assert.Equal(
+            ["Alpha", "Beta", "Gamma"],
+            columns.Select(column => column.SingleSelectOptionName));
+    }
+
+    [Fact]
+    public void Board_column_visibility_preflight_detects_missing_hidden_values()
+    {
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED" },
+                new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE" },
+                new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN" },
+            ],
+        };
+
+        var missing = BoardColumnVisibilityUi.FindMissingValueNames(
+            field,
+            new HashSet<string>(["Alpha", "Beta"], StringComparer.Ordinal));
+
+        Assert.Equal(["Gamma"], missing);
+    }
+
+    [Fact]
+    public void Board_column_visibility_reconciliation_warns_for_missing_or_renamed_value()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+        };
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "target-option-id", Name = "Renamed", Color = "RED" },
+            ],
+        };
+
+        var plan = BoardColumnVisibilityUi.BuildReconciliationPlan(
+            view,
+            field,
+            [BoardColumn("Fixture Select", option: "Original")]);
+
+        var warning = Assert.Single(plan.Warnings);
+        Assert.Contains("'Original'", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("Renamed", plan.VisibleNames);
+    }
+
+    [Fact]
+    public void Board_column_visibility_comparison_is_order_insensitive_and_rejects_duplicates()
+    {
+        BoardColumnSnapshot[] expected =
+        [
+            BoardColumn("Fixture Select", option: "Alpha"),
+            BoardColumn("Fixture Select", option: "Beta"),
+        ];
+
+        Assert.True(BoardColumnVisibilityUi.SetEquals(
+            expected,
+            [BoardColumn("Fixture Select", option: "Beta"), BoardColumn("Fixture Select", option: "Alpha")]));
+        Assert.False(BoardColumnVisibilityUi.SetEquals(
+            expected,
+            [BoardColumn("Fixture Select", option: "Alpha"), BoardColumn("Fixture Select", option: "Alpha")]));
+        Assert.True(BoardColumnVisibilityUi.SetEquals(null, expected));
+        Assert.False(BoardColumnVisibilityUi.SetEquals(expected, []));
+    }
+
+    [Fact]
+    public void Board_column_visibility_reconciliation_rejects_duplicate_logical_values()
+    {
+        var view = View("Board", "BOARD_LAYOUT") with
+        {
+            VerticalGroupByFields = ["Fixture Select"],
+        };
+        var field = new FieldSnapshot
+        {
+            Name = "Fixture Select",
+            DataType = "SINGLE_SELECT",
+            Options =
+            [
+                new SingleSelectOptionSnapshot { Id = "alpha-id", Name = "Alpha", Color = "RED" },
+            ],
+        };
+
+        var plan = BoardColumnVisibilityUi.BuildReconciliationPlan(
+            view,
+            field,
+            [
+                BoardColumn("Fixture Select", option: "Alpha"),
+                BoardColumn("Fixture Select", option: "Alpha"),
+            ]);
+
+        Assert.Equal(["Alpha"], plan.VisibleNames);
+        Assert.Contains("duplicate visible Board column", Assert.Single(plan.Warnings), StringComparison.Ordinal);
+    }
+
     // ----- helpers -----
 
     private static ViewUiSnapshot Ui(string sliceBy) => new()
@@ -1340,6 +1580,17 @@ public class ViewUiLogicTests
             SingleSelectOptionName = option,
             IterationTitle = iteration,
             Limit = limit,
+        };
+
+    private static BoardColumnSnapshot BoardColumn(
+        string fieldName,
+        string? option = null,
+        string? iteration = null)
+        => new()
+        {
+            FieldName = fieldName,
+            SingleSelectOptionName = option,
+            IterationTitle = iteration,
         };
 
     private static SortByFieldSnapshot Sort(string field, string direction) => new() { Field = field, Direction = direction };

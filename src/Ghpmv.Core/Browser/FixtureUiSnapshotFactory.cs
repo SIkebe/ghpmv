@@ -38,8 +38,8 @@ public static class FixtureUiSnapshotFactory
     }
 
     /// <summary>
-    /// Creates the standard fixture UI snapshot with deliberate field-sum and Board
-    /// column-limit drift used by the browser E2E negative test.
+    /// Creates the standard fixture UI snapshot with deliberate field-sum, Board
+    /// column-limit, and Board column-visibility drift used by the browser E2E negative test.
     /// </summary>
     public static ProjectSnapshot CreateFieldSumDrift(string repositoryName = "fixture-repo")
     {
@@ -63,6 +63,43 @@ public static class FixtureUiSnapshotFactory
                                 FieldName = "Fixture Select",
                                 SingleSelectOptionName = "Alpha",
                                 Limit = 5,
+                            },
+                        ],
+                        VisibleColumns =
+                        [
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Select",
+                                SingleSelectOptionName = "Alpha",
+                            },
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Select",
+                                SingleSelectOptionName = "Gamma",
+                            },
+                        ],
+                    },
+                },
+                "Fixture Iteration Board" => view with
+                {
+                    Ui = view.Ui! with
+                    {
+                        VisibleColumns =
+                        [
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Sprint",
+                                IterationTitle = "Sprint 0",
+                            },
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Sprint",
+                                IterationTitle = "Sprint 2",
+                            },
+                            new BoardColumnSnapshot
+                            {
+                                FieldName = "Fixture Sprint",
+                                IterationTitle = "Sprint 3",
                             },
                         ],
                     },
@@ -170,6 +207,7 @@ public static class FixtureUiSnapshotFactory
                 new SingleSelectOptionSnapshot { Id = "alpha", Name = "Alpha", Color = "RED", Description = "First" },
                 new SingleSelectOptionSnapshot { Id = "beta", Name = "Beta", Color = "BLUE", Description = "Second" },
                 new SingleSelectOptionSnapshot { Id = "gamma", Name = "Gamma", Color = "GREEN", Description = "Third" },
+                new SingleSelectOptionSnapshot { Id = "delta", Name = "Delta", Color = "GRAY", Description = "Empty hidden column" },
             ],
             DefaultValue = new FieldDefaultValueSnapshot { SingleSelectOptionName = "Beta" },
         },
@@ -212,6 +250,13 @@ public static class FixtureUiSnapshotFactory
                         Id = "sprint-3",
                         Title = "Sprint 3",
                         StartDate = "2026-02-16",
+                        Duration = 14,
+                    },
+                    new IterationSnapshot
+                    {
+                        Id = "sprint-4",
+                        Title = "Sprint 4",
+                        StartDate = "2026-03-02",
                         Duration = 14,
                     },
                 ],
@@ -262,6 +307,19 @@ public static class FixtureUiSnapshotFactory
             Ui = new ViewUiSnapshot
             {
                 FieldSum = ["Fixture Number"],
+                VisibleColumns =
+                [
+                    new BoardColumnSnapshot
+                    {
+                        FieldName = "Fixture Select",
+                        SingleSelectOptionName = "Alpha",
+                    },
+                    new BoardColumnSnapshot
+                    {
+                        FieldName = "Fixture Select",
+                        SingleSelectOptionName = "Beta",
+                    },
+                ],
                 BoardColumnLimits =
                 [
                     new BoardColumnLimitSnapshot
@@ -359,6 +417,24 @@ public static class FixtureUiSnapshotFactory
             Ui = new ViewUiSnapshot
             {
                 FieldSum = [],
+                VisibleColumns =
+                [
+                    new BoardColumnSnapshot
+                    {
+                        FieldName = "Fixture Sprint",
+                        IterationTitle = "Sprint 0",
+                    },
+                    new BoardColumnSnapshot
+                    {
+                        FieldName = "Fixture Sprint",
+                        IterationTitle = "Sprint 1",
+                    },
+                    new BoardColumnSnapshot
+                    {
+                        FieldName = "Fixture Sprint",
+                        IterationTitle = "Sprint 3",
+                    },
+                ],
                 BoardColumnLimits =
                 [
                     new BoardColumnLimitSnapshot
