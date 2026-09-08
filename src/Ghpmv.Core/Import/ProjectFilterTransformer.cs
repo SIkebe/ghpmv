@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Text;
-using System.Text.RegularExpressions;
 using Ghpmv.Core.Snapshot;
 
 namespace Ghpmv.Core.Import;
@@ -367,7 +366,7 @@ public static class ProjectFilterTransformer
             : $"{filterWithoutVisibility} {visibilityFilter}";
     }
 
-    /// <summary>Removes one complete negative qualifier, including comma-separated quoted values.</summary>
+    /// <summary>Removes complete top-level negative qualifier tokens, including comma-separated quoted values.</summary>
     public static string? RemoveNegativeQualifier(string? filter, string qualifier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(qualifier);
@@ -376,11 +375,58 @@ public static class ProjectFilterTransformer
             return null;
         }
 
-        var atom = @"""(?:\\.|[^""\\])*""|[^\s,""]+";
-        var pattern = string.Create(
-            System.Globalization.CultureInfo.InvariantCulture,
-            $@"(?<!\S)-{Regex.Escape(qualifier)}:(?:{atom})(?:,(?:{atom}))*");
-        var matches = Regex.Matches(filter, pattern, RegexOptions.IgnoreCase);
+        var matches = new List<(int Start, int End)>();
+        var position = 0;
+        while (position < filter.Length)
+        {
+            if (filter[position] == '"')
+            {
+                position = FindQuotedValueEnd(filter, position);
+                continue;
+            }
+
+            var qualifierStart = position + 1;
+            if (filter[position] != '-'
+                || qualifierStart >= filter.Length
+                || !IsQualifierBoundary(filter, qualifierStart)
+                || !IsQualifierStart(filter[qualifierStart])
+                || !TryReadQualifierValue(
+                    filter,
+                    qualifierStart,
+                    out var candidate,
+                    out _,
+                    out var tokenEnd)
+                || !string.Equals(candidate, qualifier, StringComparison.OrdinalIgnoreCase))
+            {
+                position++;
+                continue;
+            }
+
+            while (tokenEnd < filter.Length && filter[tokenEnd] == ',')
+            {
+                var valueStart = tokenEnd + 1;
+                if (valueStart >= filter.Length
+                    || char.IsWhiteSpace(filter[valueStart])
+                    || filter[valueStart] is '(' or ')')
+                {
+                    break;
+                }
+
+                var valueEnd = filter[valueStart] == '"'
+                    ? FindQuotedValueEnd(filter, valueStart)
+                    : FindUnquotedValueEnd(filter, valueStart);
+                if (valueEnd == valueStart)
+                {
+                    break;
+                }
+
+                tokenEnd = valueEnd;
+            }
+
+            matches.Add((position, tokenEnd));
+            position = tokenEnd;
+        }
+
         if (matches.Count == 0)
         {
             return filter;
@@ -390,13 +436,32 @@ public static class ProjectFilterTransformer
         for (var index = matches.Count - 1; index >= 0; index--)
         {
             var match = matches[index];
-            var removeStart = match.Index;
+            var removeStart = match.Start;
+            var removeEnd = match.End;
+            var previousContent = removeStart - 1;
+            while (previousContent >= 0 && char.IsWhiteSpace(filter[previousContent]))
+            {
+                previousContent--;
+            }
+            var nextContent = removeEnd;
+            while (nextContent < filter.Length && char.IsWhiteSpace(filter[nextContent]))
+            {
+                nextContent++;
+            }
+            if (previousContent >= 0
+                && filter[previousContent] == '('
+                && nextContent < filter.Length
+                && filter[nextContent] == ')')
+            {
+                removeStart = previousContent;
+                removeEnd = nextContent + 1;
+            }
+
             while (removeStart > 0 && char.IsWhiteSpace(filter[removeStart - 1]))
             {
                 removeStart--;
             }
 
-            var removeEnd = match.Index + match.Length;
             while (removeEnd < filter.Length && char.IsWhiteSpace(filter[removeEnd]))
             {
                 removeEnd++;
