@@ -503,7 +503,6 @@ public sealed class ProjectImporter
             matches,
             cancellationToken,
             invokeBeforeWrite: !beforeWriteInvoked).ConfigureAwait(false);
-        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
         var result = await ApplySnapshotAsync(
             snapshot,
             ownerLogin,
@@ -698,6 +697,7 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
         if (_operationLog is not null)
         {
             _operationLog.CreatedProjectId = project.Id;

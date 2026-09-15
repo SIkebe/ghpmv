@@ -106,6 +106,55 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public async Task Created_project_is_reported_before_its_operation_log_is_persisted()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-target-").FullName;
+        using var handler = new StubHandler(
+            """{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+            """{"data":{"organization":{"id":"O_target"}}}""",
+            """{"data":{"createProjectV2":{"projectV2":{"id":"PVT_created","number":42,"title":"Roadmap","url":"https://github.com/orgs/target/projects/42","public":false}}}}""");
+        using var client = new GitHubGraphQLClient(
+            "dummy-token",
+            new Uri("https://example.test/graphql"),
+            handler,
+            delayAsync: null);
+        var resolvedProjectNumber = 0;
+        string? resolvedProjectUrl = null;
+        var importer = new ProjectImporter(client)
+        {
+            OperationLogDirectory = directory,
+            OnTargetProjectResolved = (number, url) =>
+            {
+                resolvedProjectNumber = number;
+                resolvedProjectUrl = url;
+                throw new InvalidOperationException("stop before operation-log persistence");
+            },
+        };
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportAsync(
+                    MinimalSnapshot("Roadmap"),
+                    "target",
+                    TestContext.Current.CancellationToken));
+
+            Assert.Equal("stop before operation-log persistence", exception.Message);
+            Assert.Equal(42, resolvedProjectNumber);
+            Assert.Equal("https://github.com/orgs/target/projects/42", resolvedProjectUrl);
+            var operationLog = await ProjectImportLog.LoadAsync(
+                directory,
+                TestContext.Current.CancellationToken);
+            Assert.NotNull(operationLog.PendingProject);
+            Assert.Null(operationLog.CreatedProjectId);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Conflict_update_authentication_failure_preserves_completed_state_and_sends_no_mutations()
     {
         const string response =
