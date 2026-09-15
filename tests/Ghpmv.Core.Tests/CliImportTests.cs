@@ -11,6 +11,72 @@ namespace Ghpmv.Core.Tests;
 public class CliImportTests
 {
     [Fact]
+    public async Task Import_invalid_snapshot_writes_a_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-invalid-snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "snapshot.json"),
+            "{}",
+            cancellationToken);
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("loading-snapshot", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.IO.InvalidDataException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_snapshot_access_denied_writes_a_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-denied-snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(directory, "snapshot.json"));
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("loading-snapshot", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.UnauthorizedAccessException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_reports_category_statuses_and_writes_consistent_json()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

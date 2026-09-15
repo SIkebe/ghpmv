@@ -798,7 +798,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException or KeyNotFoundException or System.Text.Json.JsonException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or InvalidDataException or UnauthorizedAccessException or FormatException or PlaywrightException or TimeoutException or ArgumentException or KeyNotFoundException or System.Text.Json.JsonException)
     {
         importFailure = exception;
         diagnostics.CaptureFailureStage();
