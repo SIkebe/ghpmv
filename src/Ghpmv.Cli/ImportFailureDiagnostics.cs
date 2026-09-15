@@ -19,6 +19,8 @@ internal sealed class ImportFailureDiagnostics
     private int? _targetProjectNumber;
     private string? _targetProjectUrl;
     private string _stage = "initializing";
+    private string? _failureStage;
+    private readonly List<ImportCleanupFailure> _cleanupFailures = [];
 
     public ImportFailureDiagnostics(
         string targetOwner,
@@ -52,9 +54,39 @@ internal sealed class ImportFailureDiagnostics
         }
     }
 
+    public void CaptureFailureStage()
+    {
+        lock (_sync)
+        {
+            _failureStage ??= _stage;
+        }
+    }
+
+    public void RecordCleanupFailure(string stage, Exception exception)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(stage);
+        ArgumentNullException.ThrowIfNull(exception);
+
+        lock (_sync)
+        {
+            _failureStage ??= stage;
+            _cleanupFailures.Add(new ImportCleanupFailure
+            {
+                Stage = stage,
+                Type = exception.GetType().FullName ?? exception.GetType().Name,
+                Message = FormatExceptionForReport(exception),
+            });
+        }
+    }
+
     public void WriteProgress(string message)
     {
-        Console.Error.WriteLine(message);
+        WriteProgress(message, message);
+    }
+
+    public void WriteProgress(string consoleMessage, string diagnosticMessage)
+    {
+        Console.Error.WriteLine(consoleMessage);
 
         lock (_sync)
         {
@@ -66,7 +98,7 @@ internal sealed class ImportFailureDiagnostics
             _progress.Enqueue(new ImportProgressEntry
             {
                 TimestampUtc = DateTimeOffset.UtcNow,
-                Message = message,
+                Message = SanitizeProgressMessage(diagnosticMessage),
             });
         }
     }
@@ -83,12 +115,14 @@ internal sealed class ImportFailureDiagnostics
         int? targetProjectNumber;
         string? targetProjectUrl;
         string stage;
+        ImportCleanupFailure[] cleanupFailures;
         lock (_sync)
         {
             progress = [.. _progress];
             targetProjectNumber = _targetProjectNumber;
             targetProjectUrl = _targetProjectUrl;
-            stage = _stage;
+            stage = _failureStage ?? _stage;
+            cleanupFailures = [.. _cleanupFailures];
         }
 
         var report = new ImportFailureReport
@@ -103,6 +137,7 @@ internal sealed class ImportFailureDiagnostics
             BrowserAutomationEnabled = _browserAutomationEnabled,
             Stage = stage,
             Progress = progress,
+            CleanupFailures = cleanupFailures,
             Exceptions = DescribeExceptions(exception),
         };
 
@@ -167,9 +202,7 @@ internal sealed class ImportFailureDiagnostics
         {
             Depth = depth,
             Type = exception.GetType().FullName ?? exception.GetType().Name,
-            Message = graphQlException is null
-                ? exception.Message
-                : "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+            Message = FormatExceptionForReport(exception),
             StackTrace = exception.StackTrace,
             ErrorType = graphQlException?.ErrorType,
             StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode),
@@ -186,6 +219,25 @@ internal sealed class ImportFailureDiagnostics
         {
             AddException(exception.InnerException, depth + 1, details);
         }
+    }
+
+    public static string FormatExceptionForReport(Exception exception) =>
+        exception switch
+        {
+            GitHubGraphQLException =>
+                "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+            AggregateException =>
+                "Multiple related failures occurred. See the nested exception entries for sanitized details.",
+            _ => exception.Message,
+        };
+
+    private static string SanitizeProgressMessage(string message)
+    {
+        const string marker = "GraphQL error:";
+        var markerIndex = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        return markerIndex < 0
+            ? message
+            : message[..markerIndex] + "GitHub GraphQL request failed.";
     }
 
     private static string? FormatStatusCode(HttpStatusCode? statusCode) =>
@@ -216,6 +268,8 @@ internal sealed record ImportFailureReport
 
     public required ImportProgressEntry[] Progress { get; init; }
 
+    public required ImportCleanupFailure[] CleanupFailures { get; init; }
+
     public required ImportExceptionDetail[] Exceptions { get; init; }
 }
 
@@ -239,6 +293,15 @@ internal sealed record ImportExceptionDetail
     public string? ErrorType { get; init; }
 
     public string? StatusCode { get; init; }
+}
+
+internal sealed record ImportCleanupFailure
+{
+    public required string Stage { get; init; }
+
+    public required string Type { get; init; }
+
+    public required string Message { get; init; }
 }
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]

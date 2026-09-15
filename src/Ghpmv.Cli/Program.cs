@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Ghpmv.Cli;
 using Ghpmv.Core;
@@ -569,6 +570,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             PendingItemProjectId = pendingItemProjectId,
         };
 
+        diagnostics.SetStage("importing-project");
         var result = projectNumber is { } number
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
             : await importer.ImportAsync(snapshot, org, cancellationToken);
@@ -800,11 +802,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException or KeyNotFoundException or System.Text.Json.JsonException)
     {
         importFailure = exception;
+        diagnostics.CaptureFailureStage();
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
     }
     finally
     {
+        var cleanupFailedWithoutPrimaryFailure = importFailure is null;
         if (templateWriteSession is { RestorationRequired: true })
         {
             try
@@ -813,9 +817,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             }
             catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or IOException)
             {
-                diagnostics.SetStage("restoring-template-state");
+                diagnostics.RecordCleanupFailure("restoring-template-state", exception);
                 diagnostics.WriteProgress(
-                    $"error: failed to restore the target project's template state: {exception.Message}");
+                    $"error: failed to restore the target project's template state: {exception.Message}",
+                    $"error: failed to restore the target project's template state: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
                 importFailure = importFailure is null
                     ? exception
                     : new AggregateException(
@@ -827,7 +832,23 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         if (session is not null)
         {
-            await session.DisposeAsync();
+            try
+            {
+                await session.DisposeAsync();
+            }
+            catch (Exception exception)
+            {
+                diagnostics.RecordCleanupFailure("disposing-browser-session", exception);
+                diagnostics.WriteProgress(
+                    $"error: failed to close the browser session: {exception.Message}",
+                    $"error: failed to close the browser session: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
+                importFailure = importFailure is null
+                    ? exception
+                    : new AggregateException(
+                        "Import failed and the browser session could not be closed.",
+                        importFailure,
+                        exception);
+            }
         }
 
         if (importFailure is not null && Directory.Exists(inDirectory))
@@ -848,6 +869,11 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 Console.Error.WriteLine(
                     $"warning: failed to write {ImportFailureDiagnostics.FileName}: {diagnosticException.Message}");
             }
+        }
+
+        if (cleanupFailedWithoutPrimaryFailure && importFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(importFailure).Throw();
         }
     }
 });
