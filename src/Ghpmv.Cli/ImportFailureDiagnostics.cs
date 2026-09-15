@@ -103,7 +103,7 @@ internal sealed class ImportFailureDiagnostics
             _progress.Enqueue(new ImportProgressEntry
             {
                 TimestampUtc = DateTimeOffset.UtcNow,
-                Message = SanitizeProgressMessage(message),
+                Message = SanitizePersistedMessage(message),
             });
         }
     }
@@ -253,10 +253,10 @@ internal sealed class ImportFailureDiagnostics
                 "GitHub GraphQL request failed. See the command's stderr output for the server response.",
             AggregateException =>
                 "Multiple related failures occurred. See the nested exception entries for sanitized details.",
-            _ => exception.Message,
+            _ => SanitizePersistedMessage(exception.Message),
         };
 
-    private static string SanitizeProgressMessage(string message)
+    private static string SanitizePersistedMessage(string message)
     {
         const string marker = "GraphQL error:";
         var markerIndex = message.IndexOf(marker, StringComparison.OrdinalIgnoreCase);

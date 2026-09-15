@@ -1544,8 +1544,11 @@ public sealed class ProjectImporter
             }
             catch (GitHubGraphQLException exception) when (IsPermissionFailure(exception))
             {
+                var failure = exception.ErrorType is null
+                    ? "GitHub GraphQL request failed"
+                    : $"GitHub GraphQL request failed ({exception.ErrorType})";
                 permissionFailures.Add(
-                    $"target Team '{resolution.TargetIdentity}' could not be read: {exception.Message}");
+                    $"target Team '{resolution.TargetIdentity}' could not be read: {failure}");
             }
             catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
             {

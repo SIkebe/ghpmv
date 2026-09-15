@@ -242,6 +242,37 @@ public sealed class ImportFailureDiagnosticsTests
         }
     }
 
+    [Fact]
+    public async Task Wrapped_graphql_response_is_removed_from_a_normal_exception_message()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = CreateDirectory();
+        var diagnostics = CreateDiagnostics();
+        var exception = new InvalidOperationException(
+            "Team mapping preflight failed for target/platform: " +
+            """GraphQL error: [{"type":"FORBIDDEN","message":"unique-sensitive-response"}]""");
+
+        try
+        {
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, ImportFailureDiagnostics.FileName),
+                cancellationToken);
+            Assert.DoesNotContain("unique-sensitive-response", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("[{\"type\":\"FORBIDDEN\"", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            Assert.Equal(
+                "Team mapping preflight failed for target/platform: GitHub GraphQL request failed.",
+                detail.GetProperty("message").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(null, null, false, true)]
     [InlineData(null, null, true, false)]
