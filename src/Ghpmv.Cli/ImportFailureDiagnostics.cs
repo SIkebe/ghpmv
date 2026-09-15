@@ -87,7 +87,11 @@ internal sealed class ImportFailureDiagnostics
     public void WriteProgress(string consoleMessage, string diagnosticMessage)
     {
         Console.Error.WriteLine(consoleMessage);
+        RecordProgress(diagnosticMessage);
+    }
 
+    internal void RecordProgress(string message)
+    {
         lock (_sync)
         {
             if (_progress.Count == MaximumProgressEntries)
@@ -98,7 +102,7 @@ internal sealed class ImportFailureDiagnostics
             _progress.Enqueue(new ImportProgressEntry
             {
                 TimestampUtc = DateTimeOffset.UtcNow,
-                Message = SanitizeProgressMessage(diagnosticMessage),
+                Message = SanitizeProgressMessage(message),
             });
         }
     }

@@ -1,7 +1,6 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
-using System.Runtime.ExceptionServices;
 using System.Text.Json;
 using Ghpmv.Cli;
 using Ghpmv.Core;
@@ -808,73 +807,16 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     }
     finally
     {
-        var cleanupFailedWithoutPrimaryFailure = importFailure is null;
-        if (templateWriteSession is { RestorationRequired: true })
-        {
-            try
-            {
-                await templateWriteSession.RestoreAsync(CancellationToken.None);
-            }
-            catch (Exception exception)
-            {
-                diagnostics.RecordCleanupFailure("restoring-template-state", exception);
-                diagnostics.WriteProgress(
-                    $"error: failed to restore the target project's template state: {exception.Message}",
-                    $"error: failed to restore the target project's template state: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
-                importFailure = importFailure is null
-                    ? exception
-                    : new AggregateException(
-                        "Import failed and the target project's template state could not be restored.",
-                        importFailure,
-                        exception);
-            }
-        }
-
-        if (session is not null)
-        {
-            try
-            {
-                await session.DisposeAsync();
-            }
-            catch (Exception exception)
-            {
-                diagnostics.RecordCleanupFailure("disposing-browser-session", exception);
-                diagnostics.WriteProgress(
-                    $"error: failed to close the browser session: {exception.Message}",
-                    $"error: failed to close the browser session: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
-                importFailure = importFailure is null
-                    ? exception
-                    : new AggregateException(
-                        "Import failed and the browser session could not be closed.",
-                        importFailure,
-                        exception);
-            }
-        }
-
-        if (importFailure is not null && Directory.Exists(inDirectory))
-        {
-            try
-            {
-                var diagnosticPath = await diagnostics.SaveFailureAsync(
-                    inDirectory,
-                    importFailure,
-                    CancellationToken.None);
-                Console.Error.WriteLine($"Detailed error log: {diagnosticPath}");
-            }
-            catch (Exception diagnosticException) when (
-                diagnosticException is IOException
-                    or UnauthorizedAccessException
-                    or System.Text.Json.JsonException)
-            {
-                Console.Error.WriteLine(
-                    $"warning: failed to write {ImportFailureDiagnostics.FileName}: {diagnosticException.Message}");
-            }
-        }
-
-        if (cleanupFailedWithoutPrimaryFailure && importFailure is not null)
-        {
-            ExceptionDispatchInfo.Capture(importFailure).Throw();
-        }
+        var failureBeforeCleanup = importFailure;
+        importFailure = await new ImportFailureFinalizer(diagnostics, inDirectory).CompleteAsync(
+            importFailure,
+            templateWriteSession is { RestorationRequired: true }
+                ? () => templateWriteSession.RestoreAsync(CancellationToken.None)
+                : null,
+            session is null
+                ? null
+                : () => session.DisposeAsync());
+        ImportFailureFinalizer.ThrowIfCleanupOnlyFailure(failureBeforeCleanup, importFailure);
     }
 });
 

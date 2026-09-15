@@ -117,6 +117,8 @@ public class CliImportTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-skip-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(SnapshotWithDownstreamContent(), directory, cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(ExistingProjectResponse);
         try
@@ -132,6 +134,11 @@ public class CliImportTests
             Assert.Contains("skipped without making changes", result.Error, StringComparison.Ordinal);
             Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", server.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(diagnosticPath));
+            Assert.Contains(
+                "previousFailure",
+                await File.ReadAllTextAsync(diagnosticPath, cancellationToken),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -154,6 +161,10 @@ public class CliImportTests
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("already exists", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("result=", result.Output, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("importing-project", diagnostic.RootElement.GetProperty("stage").GetString());
             var request = Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
         }
@@ -699,6 +710,8 @@ public class CliImportTests
             SnapshotWithTemplate(false) with { StatusUpdates = [] },
             directory,
             cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
@@ -714,6 +727,7 @@ public class CliImportTests
             Assert.Equal(5, server.RequestBodies.Count);
             Assert.True(IsUnmarkTemplateMutation(server.RequestBodies[^1]));
             Assert.DoesNotContain(server.RequestBodies, IsMarkTemplateMutation);
+            Assert.False(File.Exists(diagnosticPath));
         }
         finally
         {
@@ -731,6 +745,8 @@ public class CliImportTests
             snapshot with { Project = snapshot.Project with { Template = true } },
             directory,
             cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
@@ -751,11 +767,11 @@ public class CliImportTests
             Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
             Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
 
-            var diagnosticPath = Path.Combine(directory, "import-error.json");
             Assert.True(File.Exists(diagnosticPath));
             var diagnosticJson = await File.ReadAllTextAsync(
                 diagnosticPath,
                 cancellationToken);
+            Assert.DoesNotContain("previousFailure", diagnosticJson, StringComparison.Ordinal);
             Assert.DoesNotContain("Template restore is not permitted", diagnosticJson, StringComparison.Ordinal);
             using var diagnostic = JsonDocument.Parse(diagnosticJson);
             var root = diagnostic.RootElement;
