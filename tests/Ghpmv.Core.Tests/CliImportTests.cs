@@ -749,6 +749,54 @@ public class CliImportTests
                 request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+
+            var diagnosticPath = Path.Combine(directory, "import-error.json");
+            Assert.True(File.Exists(diagnosticPath));
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                diagnosticPath,
+                cancellationToken));
+            var root = diagnostic.RootElement;
+            Assert.Equal("import", root.GetProperty("command").GetString());
+            Assert.Equal("target", root.GetProperty("targetOwner").GetString());
+            Assert.Equal(42, root.GetProperty("targetProjectNumber").GetInt32());
+            Assert.Equal(
+                "https://github.com/orgs/target/projects/42",
+                root.GetProperty("targetProjectUrl").GetString());
+            Assert.Equal("restoring-template-state", root.GetProperty("stage").GetString());
+            Assert.False(root.GetProperty("browserAutomationEnabled").GetBoolean());
+            Assert.Contains(
+                root.GetProperty("progress").EnumerateArray(),
+                entry => entry.GetProperty("message").GetString() ==
+                    "Marking the target project as a template as the final import stage...");
+            Assert.Contains(
+                root.GetProperty("progress").EnumerateArray(),
+                entry => entry.GetProperty("message").GetString()!.StartsWith(
+                    "error: failed to restore the target project's template state:",
+                    StringComparison.Ordinal));
+            var exceptionDetails = root.GetProperty("exceptions").EnumerateArray().ToArray();
+            Assert.Equal(3, exceptionDetails.Length);
+            Assert.Equal("System.AggregateException", exceptionDetails[0].GetProperty("type").GetString());
+            Assert.All(
+                exceptionDetails[1..],
+                exceptionDetail => Assert.Equal(
+                    "Ghpmv.Core.GitHub.GitHubGraphQLException",
+                    exceptionDetail.GetProperty("type").GetString()));
+            Assert.Contains(
+                "template state could not be restored",
+                exceptionDetails[0].GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.All(
+                exceptionDetails[1..],
+                exceptionDetail =>
+                {
+                    Assert.Equal(
+                        "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                        exceptionDetail.GetProperty("message").GetString());
+                    Assert.False(string.IsNullOrWhiteSpace(
+                        exceptionDetail.GetProperty("stackTrace").GetString()));
+                    Assert.False(exceptionDetail.TryGetProperty("graphQlErrors", out _));
+                });
 
             // The finally-path retry reports the dedicated restore diagnostic.
             Assert.Contains(

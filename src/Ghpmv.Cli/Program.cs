@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Reflection;
 using System.Text.Json;
+using Ghpmv.Cli;
 using Ghpmv.Core;
 using Ghpmv.Core.Browser;
 using Ghpmv.Core.Export;
@@ -339,12 +340,19 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     using var rest = new GitHubRestClient(
         token,
         graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl));
-    client.OnRetry = Console.Error.WriteLine;
+    var diagnostics = new ImportFailureDiagnostics(
+        org,
+        ownerType.ToString().ToLowerInvariant(),
+        projectNumber,
+        enableBrowserAutomation);
+    client.OnRetry = diagnostics.WriteProgress;
     BrowserSession? session = null;
     ProjectTemplateWriteSession? templateWriteSession = null;
+    Exception? importFailure = null;
 
     try
     {
+        diagnostics.SetStage("loading-snapshot");
         var repoMappingPath = parseResult.GetValue(repoMappingOption);
         var userMappingPath = parseResult.GetValue(userMappingOption);
         var repoMapping = repoMappingPath is null
@@ -363,6 +371,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             : CsvMapping.Load(teamMappingPath);
 
         var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
+        diagnostics.SetStage("preflight");
         if (projectTitle is not null)
         {
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
@@ -390,24 +399,24 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 organizationMapping);
             foreach (var transform in filterTransforms)
             {
-                Console.Error.WriteLine(
+                diagnostics.WriteProgress(
                     $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
 
                 foreach (var identifier in transform.Result.Unresolved)
                 {
-                    Console.Error.WriteLine(
+                    diagnostics.WriteProgress(
                         $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
                 }
 
                 foreach (var identifier in transform.Result.Unchanged)
                 {
-                    Console.Error.WriteLine(
+                    diagnostics.WriteProgress(
                         $"Filter preflight {transform.Location}: mapping not required for {identifier.Qualifier} value '{identifier.Value}'");
                 }
 
                 foreach (var identifier in transform.Result.Unsupported)
                 {
-                    Console.Error.WriteLine(
+                    diagnostics.WriteProgress(
                         $"warning: Filter preflight {transform.Location}: unsupported qualifier '{identifier.Qualifier}' was left unchanged");
                 }
             }
@@ -416,7 +425,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             foreach (var repository in repositoryResolutions.Where(result =>
                          result.Resolution.Status != RepositoryResolutionStatus.Mapped))
             {
-                Console.Error.WriteLine(
+                diagnostics.WriteProgress(
                     $"warning: Filter preflight {repository.Location}: {repository.Resolution.Status.ToString().ToLowerInvariant()} Auto-add repository '{repository.Resolution.Source}'");
             }
 
@@ -513,7 +522,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 itemLog.ProjectId,
                 restorationWasPending: true,
                 PersistTemplateRestorationAsync,
-                Console.Error.WriteLine,
+                diagnostics.WriteProgress,
                 cancellationToken);
         }
 
@@ -554,7 +563,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             TeamMapping = teamMapping,
             BrowserViewEnrichmentPlanned = enableBrowserAutomation,
             BrowserFieldDefaultEnrichmentPlanned = enableBrowserAutomation,
-            OnProgress = Console.Error.WriteLine,
+            OnProgress = diagnostics.WriteProgress,
             BeforeWriteAsync = ValidateImportBeforeWriteAsync,
             OperationLogDirectory = inDirectory,
             PendingItemProjectId = pendingItemProjectId,
@@ -563,6 +572,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var result = projectNumber is { } number
             ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
             : await importer.ImportAsync(snapshot, org, cancellationToken);
+        diagnostics.SetTargetProject(result.ProjectNumber, result.Url);
         await PersistUnresolvedWarningsAsync(
             importer.Warnings.Count,
             itemWarningCount: 0,
@@ -571,7 +581,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         if (result.Outcome == ProjectImportOutcome.Skipped)
         {
-            Console.Error.WriteLine("Project already exists; skipped without making changes.");
+            diagnostics.WriteProgress("Project already exists; skipped without making changes.");
             Console.WriteLine(result.Url);
             Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
@@ -581,11 +591,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var fieldDefaultWarnings = 0;
         string? fieldDefaultSummary = null;
+        diagnostics.SetStage("importing-items");
         var itemImporter = new ItemImporter(client)
         {
             RepositoryMapping = repoMapping,
             UserMapping = userMapping,
-            OnProgress = Console.Error.WriteLine,
+            OnProgress = diagnostics.WriteProgress,
             ReapplyCompletedFieldValues = result.Outcome == ProjectImportOutcome.Updated,
         };
         ItemImportResult itemResult;
@@ -598,7 +609,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 {
                     var defaultImporter = new FieldDefaultUiImporter(session)
                     {
-                        OnProgress = Console.Error.WriteLine,
+                        OnProgress = diagnostics.WriteProgress,
                     };
                     await defaultImporter.ImportAsync(
                         desiredSnapshot,
@@ -610,7 +621,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                     {
                         foreach (var warning in defaultImporter.Warnings)
                         {
-                            Console.Error.WriteLine($"warning: {warning}");
+                            diagnostics.WriteProgress($"warning: {warning}");
                         }
                     }
 
@@ -628,7 +639,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             fieldDefaultSummary = sequence.Summary;
             if (sequence.DefaultsDeferred)
             {
-                Console.Error.WriteLine($"warning: {sequence.Warnings[0]}");
+                diagnostics.WriteProgress($"warning: {sequence.Warnings[0]}");
             }
         }
         else
@@ -649,6 +660,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         };
         if (snapshot.StatusUpdates is { Count: > 0 })
         {
+            diagnostics.SetStage("importing-status-updates");
             templateLog = await ImportLog.LoadAsync(inDirectory, cancellationToken)
                 ?? new ImportLog
                 {
@@ -662,13 +674,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                     result.ProjectId,
                     templateLog.TemplateRestorationRequired,
                     PersistTemplateRestorationAsync,
-                    Console.Error.WriteLine,
+                    diagnostics.WriteProgress,
                     cancellationToken);
             }
 
             var statusUpdateImporter = new StatusUpdateImporter(client)
             {
-                OnProgress = Console.Error.WriteLine,
+                OnProgress = diagnostics.WriteProgress,
             };
             statusUpdateResult = await statusUpdateImporter.ImportAsync(
                 snapshot,
@@ -682,6 +694,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         var workflowsImported = 0;
         if (enableBrowserAutomation)
         {
+            diagnostics.SetStage("importing-browser-enrichment");
             System.Diagnostics.Debug.Assert(session is not null);
             await PersistUnresolvedWarningsAsync(
                 importer.Warnings.Count + fieldDefaultWarnings,
@@ -691,7 +704,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var viewImporter = new ViewUiImporter(session, client)
             {
-                OnProgress = Console.Error.WriteLine,
+                OnProgress = diagnostics.WriteProgress,
             };
             await viewImporter.EnrichAsync(
                 snapshot,
@@ -702,7 +715,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 cancellationToken);
             foreach (var warning in viewImporter.Warnings)
             {
-                Console.Error.WriteLine($"warning: {warning}");
+                diagnostics.WriteProgress($"warning: {warning}");
             }
 
             viewWarnings += viewImporter.Warnings.Count;
@@ -717,12 +730,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 RepositoryMapping = repoMapping,
                 UserMapping = userMapping,
                 OrganizationMapping = organizationMapping,
-                OnProgress = Console.Error.WriteLine,
+                OnProgress = diagnostics.WriteProgress,
             };
             await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
             foreach (var warning in workflowImporter.Warnings)
             {
-                Console.Error.WriteLine($"warning: {warning}");
+                diagnostics.WriteProgress($"warning: {warning}");
             }
 
             workflowWarnings = workflowImporter.Warnings.Count;
@@ -736,15 +749,17 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
         if (templateWriteSession is not null)
         {
+            diagnostics.SetStage("finalizing-template-state");
             await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
         }
         else
         {
+            diagnostics.SetStage("finalizing-template-state");
             await ProjectTemplateWriteSession.SetFinalStateAsync(
                 client,
                 result.ProjectId,
                 snapshot.Project.Template,
-                Console.Error.WriteLine,
+                diagnostics.WriteProgress,
                 cancellationToken);
         }
 
@@ -762,6 +777,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
         }
 
+        diagnostics.DeletePreviousFailure(inDirectory);
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
@@ -781,8 +797,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         await NotifyUpdateAsync(updateCheck);
         return 0;
     }
-    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or FormatException or PlaywrightException or ArgumentException or System.Text.Json.JsonException)
+    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or FormatException or PlaywrightException or TimeoutException or ArgumentException or KeyNotFoundException or System.Text.Json.JsonException)
     {
+        importFailure = exception;
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
     }
@@ -796,13 +813,41 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             }
             catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or IOException)
             {
-                Console.Error.WriteLine($"error: failed to restore the target project's template state: {exception.Message}");
+                diagnostics.SetStage("restoring-template-state");
+                diagnostics.WriteProgress(
+                    $"error: failed to restore the target project's template state: {exception.Message}");
+                importFailure = importFailure is null
+                    ? exception
+                    : new AggregateException(
+                        "Import failed and the target project's template state could not be restored.",
+                        importFailure,
+                        exception);
             }
         }
 
         if (session is not null)
         {
             await session.DisposeAsync();
+        }
+
+        if (importFailure is not null && Directory.Exists(inDirectory))
+        {
+            try
+            {
+                var diagnosticPath = await diagnostics.SaveFailureAsync(
+                    inDirectory,
+                    importFailure,
+                    CancellationToken.None);
+                Console.Error.WriteLine($"Detailed error log: {diagnosticPath}");
+            }
+            catch (Exception diagnosticException) when (
+                diagnosticException is IOException
+                    or UnauthorizedAccessException
+                    or System.Text.Json.JsonException)
+            {
+                Console.Error.WriteLine(
+                    $"warning: failed to write {ImportFailureDiagnostics.FileName}: {diagnosticException.Message}");
+            }
         }
     }
 });
