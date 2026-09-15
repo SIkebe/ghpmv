@@ -815,7 +815,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             {
                 await templateWriteSession.RestoreAsync(CancellationToken.None);
             }
-            catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or IOException)
+            catch (Exception exception)
             {
                 diagnostics.RecordCleanupFailure("restoring-template-state", exception);
                 diagnostics.WriteProgress(
