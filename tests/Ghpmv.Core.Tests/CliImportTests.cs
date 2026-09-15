@@ -77,6 +77,33 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Failed_project_number_lookup_does_not_record_the_request_as_the_resolved_target()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-missing-project-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            """{"data":{"organization":{"projectV2":null}}}""");
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--project-number", "99");
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal(99, diagnostic.RootElement.GetProperty("requestedTargetProjectNumber").GetInt32());
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectNumber").ValueKind);
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectUrl").ValueKind);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_reports_category_statuses_and_writes_consistent_json()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

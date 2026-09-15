@@ -33,7 +33,6 @@ internal sealed class ImportFailureDiagnostics
         _ownerType = ownerType;
         _requestedTargetProjectNumber = requestedTargetProjectNumber;
         _browserAutomationEnabled = browserAutomationEnabled;
-        _targetProjectNumber = requestedTargetProjectNumber;
     }
 
     public void SetStage(string stage)
