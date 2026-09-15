@@ -69,6 +69,9 @@ public sealed class ProjectImporter
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>Invoked as soon as the target project is resolved, before project-stage writes.</summary>
+    public Action<int, string>? OnTargetProjectResolved { get; set; }
+
     /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
 
@@ -407,6 +410,7 @@ public sealed class ProjectImporter
                 _operationLog.CreatedProjectId = existing.Id;
             }
 
+            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
             if (_operationLog.ImportCompleted is true)
             {
                 _operationLog.HasUnresolvedWarnings = false;
@@ -444,6 +448,7 @@ public sealed class ProjectImporter
 
         if (existing is not null)
         {
+            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
             ValidatePendingItemProject(existing.Id);
             switch (OnConflict)
             {
@@ -498,6 +503,7 @@ public sealed class ProjectImporter
             matches,
             cancellationToken,
             invokeBeforeWrite: !beforeWriteInvoked).ConfigureAwait(false);
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
         var result = await ApplySnapshotAsync(
             snapshot,
             ownerLogin,
@@ -535,6 +541,7 @@ public sealed class ProjectImporter
         var project = await FindProjectByNumberAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
 
         if (_operationLog?.PendingProject is { } pendingProject)
         {

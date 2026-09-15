@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Import;
 
 namespace Ghpmv.Cli;
 
@@ -188,6 +189,16 @@ internal sealed class ImportFailureDiagnostics
         }
     }
 
+    public static bool CanDeletePreviousFailure(
+        ProjectImportLog projectLog,
+        bool hasCurrentWarnings)
+    {
+        ArgumentNullException.ThrowIfNull(projectLog);
+        return !hasCurrentWarnings
+            && projectLog.HasUnresolvedWarnings is not true
+            && (projectLog.CreatedProjectId is null || projectLog.ImportCompleted is true);
+    }
+
     private static ImportExceptionDetail[] DescribeExceptions(Exception exception)
     {
         var details = new List<ImportExceptionDetail>();
@@ -201,6 +212,7 @@ internal sealed class ImportFailureDiagnostics
         List<ImportExceptionDetail> details)
     {
         var graphQlException = exception as GitHubGraphQLException;
+        var ambiguousException = exception as AmbiguousMutationResultException;
         var httpException = exception as HttpRequestException;
         details.Add(new ImportExceptionDetail
         {
@@ -210,6 +222,13 @@ internal sealed class ImportFailureDiagnostics
             StackTrace = exception.StackTrace,
             ErrorType = graphQlException?.ErrorType,
             StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode),
+            OperationName = ambiguousException?.OperationName,
+            ClientMutationId = ambiguousException?.ClientMutationId,
+            AttemptedAtUtc = ambiguousException?.AttemptedAt,
+            Target = ambiguousException?.Target,
+            RecoveryHint = ambiguousException is null
+                ? null
+                : AmbiguousMutationResultException.RecoveryHint,
         });
 
         if (exception is AggregateException aggregateException)
@@ -228,6 +247,8 @@ internal sealed class ImportFailureDiagnostics
     public static string FormatExceptionForReport(Exception exception) =>
         exception switch
         {
+            AmbiguousMutationResultException =>
+                "Mutation result is ambiguous. Automatic retry was stopped to avoid duplicates.",
             GitHubGraphQLException =>
                 "GitHub GraphQL request failed. See the command's stderr output for the server response.",
             AggregateException =>
@@ -297,6 +318,16 @@ internal sealed record ImportExceptionDetail
     public string? ErrorType { get; init; }
 
     public string? StatusCode { get; init; }
+
+    public string? OperationName { get; init; }
+
+    public string? ClientMutationId { get; init; }
+
+    public DateTimeOffset? AttemptedAtUtc { get; init; }
+
+    public string? Target { get; init; }
+
+    public string? RecoveryHint { get; init; }
 }
 
 internal sealed record ImportCleanupFailure

@@ -242,6 +242,87 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Created_project_failure_records_target_before_metadata_writes_complete()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-created-target-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            EmptyProjectsResponse,
+            OwnerResponse,
+            CreateProjectResponse,
+            TemplateMutationErrorResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal(42, diagnostic.RootElement.GetProperty("targetProjectNumber").GetInt32());
+            Assert.Equal(
+                "https://github.com/orgs/target/projects/42",
+                diagnostic.RootElement.GetProperty("targetProjectUrl").GetString());
+            Assert.Equal("importing-project", diagnostic.RootElement.GetProperty("stage").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Warning_completed_import_preserves_previous_failure_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-warning-log-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Fields =
+            [
+                new FieldSnapshot
+                {
+                    Name = "Custom",
+                    DataType = "TEXT",
+                    DefaultValue = new FieldDefaultValueSnapshot { Text = "default" },
+                },
+            ],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
+        const string existingFieldResponse =
+            """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_custom","name":"Custom","dataType":"TEXT"}]}}}}""";
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            existingFieldResponse,
+            NonTemplateProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains(
+                "captured field defaults require browser automation",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.True(File.Exists(diagnosticPath));
+            Assert.Contains(
+                "previousFailure",
+                await File.ReadAllTextAsync(diagnosticPath, cancellationToken),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Browser_filter_mapping_preflight_fails_before_any_mutation_by_default()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

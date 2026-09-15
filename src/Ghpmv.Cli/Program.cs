@@ -564,6 +564,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             BrowserViewEnrichmentPlanned = enableBrowserAutomation,
             BrowserFieldDefaultEnrichmentPlanned = enableBrowserAutomation,
             OnProgress = diagnostics.WriteProgress,
+            OnTargetProjectResolved = diagnostics.SetTargetProject,
             BeforeWriteAsync = ValidateImportBeforeWriteAsync,
             OperationLogDirectory = inDirectory,
             PendingItemProjectId = pendingItemProjectId,
@@ -778,7 +779,15 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
         }
 
-        diagnostics.DeletePreviousFailure(inDirectory);
+        var hasCurrentWarnings = importer.Warnings.Count + fieldDefaultWarnings > 0
+            || itemResult.Warnings.Count > 0
+            || (enableBrowserAutomation && (viewWarnings > 0 || workflowWarnings > 0));
+        if (ImportFailureDiagnostics.CanDeletePreviousFailure(
+                completedProjectLog,
+                hasCurrentWarnings))
+        {
+            diagnostics.DeletePreviousFailure(inDirectory);
+        }
         Console.WriteLine(result.Url);
         Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
             $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
@@ -804,6 +813,12 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         diagnostics.CaptureFailureStage();
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
+    }
+    catch (Exception exception)
+    {
+        importFailure = exception;
+        diagnostics.CaptureFailureStage();
+        throw;
     }
     finally
     {

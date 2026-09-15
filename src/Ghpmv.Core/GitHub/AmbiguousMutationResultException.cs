@@ -6,6 +6,9 @@ namespace Ghpmv.Core.GitHub;
 /// </summary>
 public sealed class AmbiguousMutationResultException : GitHubGraphQLException
 {
+    public const string RecoveryHint =
+        "Inspect the target state, then rerun with the same snapshot and import log.";
+
     public AmbiguousMutationResultException(
         string operationName,
         string clientMutationId,
@@ -18,7 +21,7 @@ public sealed class AmbiguousMutationResultException : GitHubGraphQLException
             + $"Operation: {operationName}. Client mutation ID: {clientMutationId}. "
             + $"Attempted at: {attemptedAt:O}. "
             + $"Target: {target ?? "(not specified)"}. "
-            + $"Recovery: inspect the target state, then rerun with the same snapshot and import log. Detail: {detail}",
+            + $"Recovery: {RecoveryHint} Detail: {detail}",
             innerException!)
     {
         OperationName = operationName;

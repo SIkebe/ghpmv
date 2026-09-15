@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Ghpmv.Cli;
+using Ghpmv.Core.GitHub;
+using Ghpmv.Core.Import;
 
 namespace Ghpmv.Core.Tests;
 
@@ -167,6 +169,101 @@ public sealed class ImportFailureDiagnosticsTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData("aggregate")]
+    [InlineData("cancellation")]
+    public async Task Unhandled_primary_failure_is_not_replaced_by_cleanup_failure(string failureKind)
+    {
+        var directory = CreateDirectory();
+        var diagnostics = CreateDiagnostics();
+        diagnostics.SetStage("importing-items");
+        diagnostics.CaptureFailureStage();
+        Exception primary = failureKind == "aggregate"
+            ? new AggregateException("field update and archive restoration failed")
+            : new OperationCanceledException("cancelled");
+
+        try
+        {
+            var result = await new ImportFailureFinalizer(diagnostics, directory).CompleteAsync(
+                primary,
+                restoreTemplateAsync: null,
+                () => ValueTask.FromException(new IOException("browser close failed")));
+
+            var aggregate = Assert.IsType<AggregateException>(result);
+            Assert.Same(primary, aggregate.InnerExceptions[0]);
+            ImportFailureFinalizer.ThrowIfCleanupOnlyFailure(primary, result);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Ambiguous_mutation_preserves_safe_recovery_fields_without_raw_detail()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = CreateDirectory();
+        var diagnostics = CreateDiagnostics();
+        var attemptedAt = new DateTimeOffset(2026, 9, 15, 12, 0, 0, TimeSpan.Zero);
+        var exception = new AmbiguousMutationResultException(
+            "createProjectV2",
+            "safe-client-mutation-id",
+            attemptedAt,
+            "organization target / project Roadmap",
+            "raw server detail secret-value");
+
+        try
+        {
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, ImportFailureDiagnostics.FileName),
+                cancellationToken);
+            Assert.DoesNotContain("raw server detail", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-value", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            Assert.Equal("createProjectV2", detail.GetProperty("operationName").GetString());
+            Assert.Equal("safe-client-mutation-id", detail.GetProperty("clientMutationId").GetString());
+            Assert.Equal(attemptedAt, detail.GetProperty("attemptedAtUtc").GetDateTimeOffset());
+            Assert.Equal(
+                "organization target / project Roadmap",
+                detail.GetProperty("target").GetString());
+            Assert.Equal(
+                AmbiguousMutationResultException.RecoveryHint,
+                detail.GetProperty("recoveryHint").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, null, false, true)]
+    [InlineData(null, null, true, false)]
+    [InlineData("PVT_created", true, false, true)]
+    [InlineData("PVT_created", false, false, false)]
+    [InlineData("PVT_created", true, true, false)]
+    public void Previous_failure_is_deleted_only_after_a_clean_complete_import(
+        string? createdProjectId,
+        bool? importCompleted,
+        bool hasCurrentWarnings,
+        bool expected)
+    {
+        var log = new ProjectImportLog
+        {
+            CreatedProjectId = createdProjectId,
+            ImportCompleted = importCompleted,
+            HasUnresolvedWarnings = hasCurrentWarnings ? true : false,
+        };
+
+        Assert.Equal(
+            expected,
+            ImportFailureDiagnostics.CanDeletePreviousFailure(log, hasCurrentWarnings));
     }
 
     private static ImportFailureDiagnostics CreateDiagnostics() =>
