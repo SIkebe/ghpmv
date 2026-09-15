@@ -368,6 +368,10 @@ public class CliImportTests
             var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(importLog);
             Assert.False(importLog.TemplateRestorationRequired);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("preflight", diagnostic.RootElement.GetProperty("stage").GetString());
         }
         finally
         {

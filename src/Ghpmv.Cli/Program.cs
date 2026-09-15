@@ -453,6 +453,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 return;
             }
 
+            diagnostics.SetStage("preflight");
             if (enableBrowserAutomation)
             {
                 ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
@@ -472,6 +473,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             }
 
             importPreflightCompleted = true;
+            diagnostics.SetStage("importing-project");
         }
 
         var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
