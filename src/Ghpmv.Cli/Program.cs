@@ -353,6 +353,9 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     try
     {
         diagnostics.SetStage("loading-snapshot");
+        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
+
+        diagnostics.SetStage("preflight");
         var repoMappingPath = parseResult.GetValue(repoMappingOption);
         var userMappingPath = parseResult.GetValue(userMappingOption);
         var repoMapping = repoMappingPath is null
@@ -370,8 +373,6 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
             ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
             : CsvMapping.Load(teamMappingPath);
 
-        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
-        diagnostics.SetStage("preflight");
         if (projectTitle is not null)
         {
             snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };

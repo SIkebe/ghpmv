@@ -77,6 +77,37 @@ public class CliImportTests
     }
 
     [Fact]
+    public async Task Import_invalid_mapping_writes_a_preflight_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-invalid-mapping-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+        var mappingPath = Path.Combine(directory, "repository-mapping.csv");
+        await File.WriteAllTextAsync(mappingPath, "invalid-header\n", cancellationToken);
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--repo-mapping", mappingPath);
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("preflight", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.FormatException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Failed_project_number_lookup_does_not_record_the_request_as_the_resolved_target()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

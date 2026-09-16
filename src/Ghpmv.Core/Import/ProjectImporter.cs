@@ -1490,6 +1490,7 @@ public sealed class ProjectImporter
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var permissionFailures = new List<string>();
+        var permissionExceptions = new List<GitHubGraphQLException>();
         var resolved = new List<ResolvedTeamLink>();
 
         if (project is { ViewerCanManageAccess: false })
@@ -1549,6 +1550,7 @@ public sealed class ProjectImporter
                     : $"GitHub GraphQL request failed ({exception.ErrorType})";
                 permissionFailures.Add(
                     $"target Team '{resolution.TargetIdentity}' could not be read: {failure}");
+                permissionExceptions.Add(exception);
             }
             catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
             {
@@ -1574,8 +1576,15 @@ public sealed class ProjectImporter
                 parts.Add("permission: " + string.Join("; ", permissionFailures));
             }
 
-            throw new InvalidOperationException(
-                "Team mapping preflight failed before any project write (" + string.Join(" | ", parts) + ").");
+            var message =
+                "Team mapping preflight failed before any project write (" + string.Join(" | ", parts) + ").";
+            throw permissionExceptions.Count == 0
+                ? new InvalidOperationException(message)
+                : new InvalidOperationException(
+                    message,
+                    new AggregateException(
+                        "One or more Team permission checks failed.",
+                        permissionExceptions));
         }
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,

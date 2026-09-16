@@ -273,6 +273,49 @@ public sealed class ImportFailureDiagnosticsTests
         }
     }
 
+    [Fact]
+    public async Task Nested_team_permission_failure_preserves_graphql_metadata_without_raw_response()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = CreateDirectory();
+        var diagnostics = CreateDiagnostics();
+        var graphQlFailure = new GitHubGraphQLException(
+            """GraphQL error: [{"type":"FORBIDDEN","message":"unique-sensitive-response"}]""")
+        {
+            ErrorsJson = """[{"type":"FORBIDDEN","message":"unique-sensitive-response"}]""",
+            ErrorType = "FORBIDDEN",
+            StatusCode = System.Net.HttpStatusCode.Forbidden,
+        };
+        var exception = new InvalidOperationException(
+            "Team mapping preflight failed before any project write " +
+            "(permission: target Team 'target/platform' could not be read: " +
+            "GitHub GraphQL request failed (FORBIDDEN)).",
+            new AggregateException("One or more Team permission checks failed.", graphQlFailure));
+
+        try
+        {
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, ImportFailureDiagnostics.FileName),
+                cancellationToken);
+            Assert.DoesNotContain("unique-sensitive-response", json, StringComparison.Ordinal);
+            Assert.DoesNotContain("GraphQL error:", json, StringComparison.Ordinal);
+            Assert.Contains("target/platform", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var graphQlDetail = Assert.Single(
+                report.RootElement.GetProperty("exceptions").EnumerateArray(),
+                detail => detail.GetProperty("type").GetString() ==
+                    typeof(GitHubGraphQLException).FullName);
+            Assert.Equal("FORBIDDEN", graphQlDetail.GetProperty("errorType").GetString());
+            Assert.Equal("403 Forbidden", graphQlDetail.GetProperty("statusCode").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(null, null, false, true)]
     [InlineData(null, null, true, false)]

@@ -263,6 +263,10 @@ public class TeamLinkImportTests
                 StringComparison.Ordinal);
             Assert.DoesNotContain("unique-sensitive-response", exception.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("GraphQL error:", exception.Message, StringComparison.Ordinal);
+            var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+            var graphQlFailure = Assert.IsType<GitHubGraphQLException>(Assert.Single(aggregate.InnerExceptions));
+            Assert.Equal("FORBIDDEN", graphQlFailure.ErrorType);
+            Assert.Contains("unique-sensitive-response", graphQlFailure.ErrorsJson, StringComparison.Ordinal);
             Assert.Equal(0, handler.MutationCount);
         }
         finally
