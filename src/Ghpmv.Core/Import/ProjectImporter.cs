@@ -69,6 +69,9 @@ public sealed class ProjectImporter
     /// <summary>Invoked with a human-readable progress message at each import stage.</summary>
     public Action<string>? OnProgress { get; set; }
 
+    /// <summary>Invoked as soon as the target project is resolved, before project-stage writes.</summary>
+    public Action<int, string>? OnTargetProjectResolved { get; set; }
+
     /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
 
@@ -407,6 +410,7 @@ public sealed class ProjectImporter
                 _operationLog.CreatedProjectId = existing.Id;
             }
 
+            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
             if (_operationLog.ImportCompleted is true)
             {
                 _operationLog.HasUnresolvedWarnings = false;
@@ -444,6 +448,7 @@ public sealed class ProjectImporter
 
         if (existing is not null)
         {
+            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
             ValidatePendingItemProject(existing.Id);
             switch (OnConflict)
             {
@@ -535,6 +540,7 @@ public sealed class ProjectImporter
         var project = await FindProjectByNumberAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
 
         if (_operationLog?.PendingProject is { } pendingProject)
         {
@@ -691,6 +697,7 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
         if (_operationLog is not null)
         {
             _operationLog.CreatedProjectId = project.Id;
@@ -1483,6 +1490,7 @@ public sealed class ProjectImporter
             .Distinct(StringComparer.Ordinal)
             .ToList();
         var permissionFailures = new List<string>();
+        var permissionExceptions = new List<GitHubGraphQLException>();
         var resolved = new List<ResolvedTeamLink>();
 
         if (project is { ViewerCanManageAccess: false })
@@ -1537,8 +1545,12 @@ public sealed class ProjectImporter
             }
             catch (GitHubGraphQLException exception) when (IsPermissionFailure(exception))
             {
+                var failure = exception.ErrorType is null
+                    ? "GitHub GraphQL request failed"
+                    : $"GitHub GraphQL request failed ({exception.ErrorType})";
                 permissionFailures.Add(
-                    $"target Team '{resolution.TargetIdentity}' could not be read: {exception.Message}");
+                    $"target Team '{resolution.TargetIdentity}' could not be read: {failure}");
+                permissionExceptions.Add(exception);
             }
             catch (GitHubGraphQLException exception) when (exception.ErrorType == "NOT_FOUND")
             {
@@ -1564,8 +1576,15 @@ public sealed class ProjectImporter
                 parts.Add("permission: " + string.Join("; ", permissionFailures));
             }
 
-            throw new InvalidOperationException(
-                "Team mapping preflight failed before any project write (" + string.Join(" | ", parts) + ").");
+            var message =
+                "Team mapping preflight failed before any project write (" + string.Join(" | ", parts) + ").";
+            throw permissionExceptions.Count == 0
+                ? new InvalidOperationException(message)
+                : new InvalidOperationException(
+                    message,
+                    new AggregateException(
+                        "One or more Team permission checks failed.",
+                        permissionExceptions));
         }
 
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,

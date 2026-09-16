@@ -241,6 +241,41 @@ public class TeamLinkImportTests
     }
 
     [Fact]
+    public async Task Team_read_permission_failure_does_not_embed_the_graphql_response()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
+        try
+        {
+            using var handler = new TeamImportHandler(teamReadForbidden: true);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportIntoAsync(
+                    Snapshot(new LinkedTeamSnapshot { Organization = "source", Slug = "platform", Name = "Platform" }),
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains(
+                "target Team 'target/platform' could not be read: GitHub GraphQL request failed (FORBIDDEN)",
+                exception.Message,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("unique-sensitive-response", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("GraphQL error:", exception.Message, StringComparison.Ordinal);
+            var aggregate = Assert.IsType<AggregateException>(exception.InnerException);
+            var graphQlFailure = Assert.IsType<GitHubGraphQLException>(Assert.Single(aggregate.InnerExceptions));
+            Assert.Equal("FORBIDDEN", graphQlFailure.ErrorType);
+            Assert.Contains("unique-sensitive-response", graphQlFailure.ErrorsJson, StringComparison.Ordinal);
+            Assert.Equal(0, handler.MutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task User_owned_import_ignores_team_links()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-team-import-").FullName;
@@ -295,6 +330,7 @@ public class TeamLinkImportTests
         bool viewerCanUpdate = true,
         bool viewerCanManageAccess = true,
         bool viewerCanAdministerTeam = true,
+        bool teamReadForbidden = false,
         string ownerField = "organization") : HttpMessageHandler
     {
         private bool _linked;
@@ -334,7 +370,9 @@ public class TeamLinkImportTests
             else if (query.Contains("team(slug:", StringComparison.Ordinal))
             {
                 TeamResolutionCount++;
-                response = teamExists
+                response = teamReadForbidden
+                    ? """{"errors":[{"type":"FORBIDDEN","message":"unique-sensitive-response"}]}"""
+                    : teamExists
                     ? "{\"data\":{\"organization\":{\"team\":{\"id\":\"T_target\",\"name\":\"Engineering\",\"slug\":\"engineering\",\"viewerCanAdminister\":" + viewerCanAdministerTeam.ToString().ToLowerInvariant() + ",\"organization\":{\"login\":\"target\"}}}}}"
                     : """{"data":{"organization":{"team":null}}}""";
             }

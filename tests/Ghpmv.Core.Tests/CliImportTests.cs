@@ -11,6 +11,130 @@ namespace Ghpmv.Core.Tests;
 public class CliImportTests
 {
     [Fact]
+    public async Task Import_invalid_snapshot_writes_a_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-invalid-snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "snapshot.json"),
+            "{}",
+            cancellationToken);
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("loading-snapshot", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.IO.InvalidDataException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_snapshot_access_denied_writes_a_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-denied-snapshot-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(directory, "snapshot.json"));
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("loading-snapshot", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.UnauthorizedAccessException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_invalid_mapping_writes_a_preflight_diagnostic_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-invalid-mapping-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+        var mappingPath = Path.Combine(directory, "repository-mapping.csv");
+        await File.WriteAllTextAsync(mappingPath, "invalid-header\n", cancellationToken);
+
+        using var server = new GraphQlStubServer();
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--repo-mapping", mappingPath);
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("preflight", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Contains(
+                diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
+                exception => exception.GetProperty("type").GetString() ==
+                    "System.FormatException");
+            Assert.Empty(server.RequestBodies);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Failed_project_number_lookup_does_not_record_the_request_as_the_resolved_target()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-missing-project-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            """{"data":{"organization":{"projectV2":null}}}""");
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--project-number", "99");
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal(99, diagnostic.RootElement.GetProperty("requestedTargetProjectNumber").GetInt32());
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectNumber").ValueKind);
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectUrl").ValueKind);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Verify_reports_category_statuses_and_writes_consistent_json()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -117,6 +241,8 @@ public class CliImportTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-skip-" + Guid.NewGuid().ToString("N"));
         await SnapshotFile.SaveAsync(SnapshotWithDownstreamContent(), directory, cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(ExistingProjectResponse);
         try
@@ -132,6 +258,11 @@ public class CliImportTests
             Assert.Contains("skipped without making changes", result.Error, StringComparison.Ordinal);
             Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", server.RequestBodies[0], StringComparison.OrdinalIgnoreCase);
+            Assert.True(File.Exists(diagnosticPath));
+            Assert.Contains(
+                "previousFailure",
+                await File.ReadAllTextAsync(diagnosticPath, cancellationToken),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -154,10 +285,95 @@ public class CliImportTests
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("already exists", result.Error, StringComparison.Ordinal);
             Assert.DoesNotContain("result=", result.Output, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("importing-project", diagnostic.RootElement.GetProperty("stage").GetString());
             var request = Assert.Single(server.RequestBodies);
             Assert.DoesNotContain("mutation", request, StringComparison.OrdinalIgnoreCase);
         }
 
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Created_project_failure_records_target_before_metadata_writes_complete()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-created-target-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+
+        using var server = new GraphQlStubServer(
+            EmptyProjectsResponse,
+            OwnerResponse,
+            CreateProjectResponse,
+            TemplateMutationErrorResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server);
+
+            Assert.Equal(1, result.ExitCode);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal(42, diagnostic.RootElement.GetProperty("targetProjectNumber").GetInt32());
+            Assert.Equal(
+                "https://github.com/orgs/target/projects/42",
+                diagnostic.RootElement.GetProperty("targetProjectUrl").GetString());
+            Assert.Equal("importing-project", diagnostic.RootElement.GetProperty("stage").GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Warning_completed_import_preserves_previous_failure_report()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Path.GetTempPath(), "ghpmv-cli-warning-log-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Fields =
+            [
+                new FieldSnapshot
+                {
+                    Name = "Custom",
+                    DataType = "TEXT",
+                    DefaultValue = new FieldDefaultValueSnapshot { Text = "default" },
+                },
+            ],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
+        const string existingFieldResponse =
+            """{"data":{"node":{"fields":{"nodes":[{"__typename":"ProjectV2Field","id":"PVTF_custom","name":"Custom","dataType":"TEXT"}]}}}}""";
+
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            UpdateProjectResponse,
+            existingFieldResponse,
+            NonTemplateProjectResponse);
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--on-conflict", "update");
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains(
+                "captured field defaults require browser automation",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.True(File.Exists(diagnosticPath));
+            Assert.Contains(
+                "previousFailure",
+                await File.ReadAllTextAsync(diagnosticPath, cancellationToken),
+                StringComparison.Ordinal);
+        }
         finally
         {
             Directory.Delete(directory, recursive: true);
@@ -210,6 +426,10 @@ public class CliImportTests
             var importLog = await ImportLog.LoadAsync(directory, cancellationToken);
             Assert.NotNull(importLog);
             Assert.False(importLog.TemplateRestorationRequired);
+            using var diagnostic = JsonDocument.Parse(await File.ReadAllTextAsync(
+                Path.Combine(directory, "import-error.json"),
+                cancellationToken));
+            Assert.Equal("preflight", diagnostic.RootElement.GetProperty("stage").GetString());
         }
         finally
         {
@@ -699,6 +919,8 @@ public class CliImportTests
             SnapshotWithTemplate(false) with { StatusUpdates = [] },
             directory,
             cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
@@ -714,6 +936,7 @@ public class CliImportTests
             Assert.Equal(5, server.RequestBodies.Count);
             Assert.True(IsUnmarkTemplateMutation(server.RequestBodies[^1]));
             Assert.DoesNotContain(server.RequestBodies, IsMarkTemplateMutation);
+            Assert.False(File.Exists(diagnosticPath));
         }
         finally
         {
@@ -731,6 +954,8 @@ public class CliImportTests
             snapshot with { Project = snapshot.Project with { Template = true } },
             directory,
             cancellationToken);
+        var diagnosticPath = Path.Combine(directory, "import-error.json");
+        await File.WriteAllTextAsync(diagnosticPath, """{"previousFailure":true}""", cancellationToken);
 
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
@@ -749,6 +974,61 @@ public class CliImportTests
                 request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
             Assert.Equal(1, result.ExitCode);
             Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
+
+            Assert.True(File.Exists(diagnosticPath));
+            var diagnosticJson = await File.ReadAllTextAsync(
+                diagnosticPath,
+                cancellationToken);
+            Assert.DoesNotContain("previousFailure", diagnosticJson, StringComparison.Ordinal);
+            Assert.DoesNotContain("Template restore is not permitted", diagnosticJson, StringComparison.Ordinal);
+            using var diagnostic = JsonDocument.Parse(diagnosticJson);
+            var root = diagnostic.RootElement;
+            Assert.Equal("import", root.GetProperty("command").GetString());
+            Assert.Equal("target", root.GetProperty("targetOwner").GetString());
+            Assert.Equal(42, root.GetProperty("targetProjectNumber").GetInt32());
+            Assert.Equal(
+                "https://github.com/orgs/target/projects/42",
+                root.GetProperty("targetProjectUrl").GetString());
+            Assert.Equal("finalizing-template-state", root.GetProperty("stage").GetString());
+            Assert.False(root.GetProperty("browserAutomationEnabled").GetBoolean());
+            Assert.Contains(
+                root.GetProperty("progress").EnumerateArray(),
+                entry => entry.GetProperty("message").GetString() ==
+                    "Marking the target project as a template as the final import stage...");
+            Assert.Contains(
+                root.GetProperty("progress").EnumerateArray(),
+                entry => entry.GetProperty("message").GetString()!.StartsWith(
+                    "error: failed to restore the target project's template state:",
+                    StringComparison.Ordinal));
+            var cleanupFailure = Assert.Single(root.GetProperty("cleanupFailures").EnumerateArray());
+            Assert.Equal("restoring-template-state", cleanupFailure.GetProperty("stage").GetString());
+            Assert.Equal(
+                "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                cleanupFailure.GetProperty("message").GetString());
+            var exceptionDetails = root.GetProperty("exceptions").EnumerateArray().ToArray();
+            Assert.Equal(3, exceptionDetails.Length);
+            Assert.Equal("System.AggregateException", exceptionDetails[0].GetProperty("type").GetString());
+            Assert.All(
+                exceptionDetails[1..],
+                exceptionDetail => Assert.Equal(
+                    "Ghpmv.Core.GitHub.GitHubGraphQLException",
+                    exceptionDetail.GetProperty("type").GetString()));
+            Assert.Contains(
+                "Multiple related failures occurred",
+                exceptionDetails[0].GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.All(
+                exceptionDetails[1..],
+                exceptionDetail =>
+                {
+                    Assert.Equal(
+                        "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                        exceptionDetail.GetProperty("message").GetString());
+                    Assert.False(string.IsNullOrWhiteSpace(
+                        exceptionDetail.GetProperty("stackTrace").GetString()));
+                    Assert.False(exceptionDetail.TryGetProperty("graphQlErrors", out _));
+                });
 
             // The finally-path retry reports the dedicated restore diagnostic.
             Assert.Contains(
