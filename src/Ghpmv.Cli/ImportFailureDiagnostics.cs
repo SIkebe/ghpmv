@@ -219,8 +219,11 @@ internal sealed class ImportFailureDiagnostics
             Type = exception.GetType().FullName ?? exception.GetType().Name,
             Message = FormatExceptionForReport(exception),
             StackTrace = exception.StackTrace,
-            ErrorType = graphQlException?.ErrorType,
+            ErrorType = GraphQLDiagnosticSanitizer.ErrorType(graphQlException?.ErrorType),
             StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode),
+            RequestId = GraphQLDiagnosticSanitizer.RequestId(graphQlException?.RequestId),
+            FailureReason = graphQlException?.FailureReason,
+            GraphQlErrors = graphQlException?.GraphQlErrors ?? [],
             OperationName = ambiguousException?.OperationName,
             ClientMutationId = ambiguousException?.ClientMutationId,
             AttemptedAtUtc = ambiguousException?.AttemptedAt,
@@ -317,6 +320,12 @@ internal sealed record ImportExceptionDetail
     public string? ErrorType { get; init; }
 
     public string? StatusCode { get; init; }
+
+    public string? RequestId { get; init; }
+
+    public string? FailureReason { get; init; }
+
+    public IReadOnlyList<GraphQLErrorDiagnostic> GraphQlErrors { get; init; } = [];
 
     public string? OperationName { get; init; }
 

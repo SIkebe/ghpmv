@@ -28,6 +28,14 @@ public class GitHubGraphQLException : Exception
     /// <summary>The "type" of the first GraphQL error (e.g. NOT_FOUND), if any.</summary>
     public string? ErrorType { get; init; }
 
-    /// <summary>The HTTP status code of the failing response, if the failure was HTTP-level.</summary>
+    /// <summary>The HTTP status code of the failing response, including HTTP 200 GraphQL errors.</summary>
     public HttpStatusCode? StatusCode { get; init; }
+
+    public string? RequestId { get; init; }
+
+    /// <summary>A locally defined reason, independent of the untrusted server message.</summary>
+    public string? FailureReason { get; init; }
+
+    /// <summary>Safe projections of server errors; raw response data must not be persisted.</summary>
+    public IReadOnlyList<GraphQLErrorDiagnostic> GraphQlErrors { get; init; } = [];
 }

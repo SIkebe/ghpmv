@@ -285,6 +285,17 @@ public sealed class ImportFailureDiagnosticsTests
             ErrorsJson = """[{"type":"FORBIDDEN","message":"unique-sensitive-response"}]""",
             ErrorType = "FORBIDDEN",
             StatusCode = System.Net.HttpStatusCode.Forbidden,
+            RequestId = "ABCD:1234",
+            FailureReason = "graphql-error",
+            GraphQlErrors =
+            [
+                new()
+                {
+                    Type = "FORBIDDEN",
+                    Message = "GitHub reported that the resource is not accessible.",
+                    Path = ["organization", "team"],
+                },
+            ],
         };
         var exception = new InvalidOperationException(
             "Team mapping preflight failed before any project write " +
@@ -309,6 +320,13 @@ public sealed class ImportFailureDiagnosticsTests
                     typeof(GitHubGraphQLException).FullName);
             Assert.Equal("FORBIDDEN", graphQlDetail.GetProperty("errorType").GetString());
             Assert.Equal("403 Forbidden", graphQlDetail.GetProperty("statusCode").GetString());
+            Assert.Equal("ABCD:1234", graphQlDetail.GetProperty("requestId").GetString());
+            Assert.Equal("graphql-error", graphQlDetail.GetProperty("failureReason").GetString());
+            var error = Assert.Single(graphQlDetail.GetProperty("graphQlErrors").EnumerateArray());
+            Assert.Equal("GitHub reported that the resource is not accessible.", error.GetProperty("message").GetString());
+            Assert.Equal(
+                ["organization", "team"],
+                error.GetProperty("path").EnumerateArray().Select(segment => segment.GetString()));
         }
         finally
         {
