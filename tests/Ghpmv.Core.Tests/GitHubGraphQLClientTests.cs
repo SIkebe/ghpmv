@@ -808,6 +808,39 @@ public class GitHubGraphQLClientTests
         }
     }
 
+    [Fact]
+    public async Task Escaped_block_literal_values_do_not_reach_persisted_error_paths()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-block-literal-diagnostics-").FullName;
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK,
+            """{"data":{"user":null},"errors":[{"type":"FORBIDDEN","message":"Resource not accessible","path":["user","privateBlockValue","id"]}]}"""));
+        using var client = CreateClient(handler, []);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+                client.QueryAsync(
+                    """"query { user(login: """prefix \""" privateBlockValue""") { id } }"""",
+                    cancellationToken: cancellationToken));
+            var diagnostics = new Ghpmv.Cli.ImportFailureDiagnostics("target", "organization", null, false);
+
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, Ghpmv.Cli.ImportFailureDiagnostics.FileName), cancellationToken);
+            Assert.DoesNotContain("privateBlockValue", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            var error = Assert.Single(detail.GetProperty("graphQlErrors").EnumerateArray());
+            Assert.Equal(["user", "[redacted]", "id"],
+                error.GetProperty("path").EnumerateArray().Select(segment => segment.GetString()));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static HttpResponseMessage JsonResponse(HttpStatusCode statusCode, string body)
         => new(statusCode) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 

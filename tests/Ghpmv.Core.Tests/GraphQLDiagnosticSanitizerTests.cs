@@ -30,6 +30,36 @@ public sealed class GraphQLDiagnosticSanitizerTests
     }
 
     [Theory]
+    [InlineData("query { repository(name: \"sensitiveTail")]
+    [InlineData("query { repository(name: \"prefix \\\" sensitiveTail")]
+    [InlineData("query { repository(name: \"\"\"sensitiveTail")]
+    [InlineData("query { repository(name: \"\"\"prefix \\\"\"\" sensitiveTail")]
+    public void Unterminated_literals_never_contribute_path_identifiers(string query)
+    {
+        using var document = JsonDocument.Parse("""[{"path":["repository","sensitiveTail"]}]""");
+        var error = Assert.Single(GraphQLDiagnosticSanitizer.Errors(document.RootElement, query));
+        Assert.Equal(["repository", "[redacted]"], error.Path);
+    }
+
+    [Fact]
+    public void Escaped_block_delimiters_do_not_expose_literals_and_preserve_following_aliases()
+    {
+        const string query = """"
+            query {
+              repository(name: """prefix \""" firstPrivateValue \\\""" secondPrivateValue""",
+                         owner: "prefix \" quotedPrivateValue") {
+                selected: id
+              }
+            }
+            """";
+        using var document = JsonDocument.Parse("""
+            [{"path":["repository","firstPrivateValue","secondPrivateValue","quotedPrivateValue","selected","id"]}]
+            """);
+        var error = Assert.Single(GraphQLDiagnosticSanitizer.Errors(document.RootElement, query));
+        Assert.Equal(["repository", "[redacted]", "[redacted]", "[redacted]", "selected", "id"], error.Path);
+    }
+
+    [Theory]
     [InlineData("null")]
     [InlineData("{}")]
     [InlineData("\"secret\"")]

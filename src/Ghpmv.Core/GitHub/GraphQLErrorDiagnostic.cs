@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace Ghpmv.Core.GitHub;
 
@@ -13,7 +12,7 @@ public sealed record GraphQLErrorDiagnostic
     public required IReadOnlyList<string> Path { get; init; }
 }
 
-public static partial class GraphQLDiagnosticSanitizer
+public static class GraphQLDiagnosticSanitizer
 {
     private const string Redacted = "[redacted]";
 
@@ -42,10 +41,7 @@ public static partial class GraphQLDiagnosticSanitizer
         }
 
         // Only identifiers from the query document, never input values, may survive in a path.
-        var identifiers = QueryTokens().Matches(query)
-            .Where(match => match.Groups[1].Success)
-            .Select(match => match.Groups[1].Value)
-            .ToHashSet(StringComparer.Ordinal);
+        var identifiers = QueryIdentifiers(query);
         return errors.EnumerateArray().Select(error => new GraphQLErrorDiagnostic
         {
             Type = ErrorType(GetString(error, "type")),
@@ -96,6 +92,76 @@ public static partial class GraphQLDiagnosticSanitizer
         return "Server message redacted (unrecognized format).";
     }
 
-    [GeneratedRegex("\"\"\"[\\s\\S]*?\"\"\"|\"(?:\\\\.|[^\"\\\\])*\"|#[^\\r\\n]*|([_A-Za-z][_0-9A-Za-z]*)", RegexOptions.CultureInvariant)]
-    private static partial Regex QueryTokens();
+    private static HashSet<string> QueryIdentifiers(string query)
+    {
+        var identifiers = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < query.Length;)
+        {
+            if (query[index] == '#')
+            {
+                while (index < query.Length && query[index] is not ('\r' or '\n'))
+                {
+                    index++;
+                }
+            }
+            else if (query[index] == '"')
+            {
+                SkipString(query.AsSpan(), ref index);
+            }
+            else if (char.IsAsciiLetter(query[index]) || query[index] == '_')
+            {
+                var start = index++;
+                while (index < query.Length && (char.IsAsciiLetterOrDigit(query[index]) || query[index] == '_'))
+                {
+                    index++;
+                }
+
+                identifiers.Add(query[start..index]);
+            }
+            else
+            {
+                index++;
+            }
+        }
+
+        return identifiers;
+    }
+
+    private static void SkipString(ReadOnlySpan<char> query, ref int index)
+    {
+        var block = query[index..].StartsWith("\"\"\"", StringComparison.Ordinal);
+        index += block ? 3 : 1;
+        // Unterminated literals consume the remainder rather than exposing their contents as names.
+        while (index < query.Length)
+        {
+            if (block)
+            {
+                if (query[index..].StartsWith("\\\"\"\"", StringComparison.Ordinal))
+                {
+                    index += 4;
+                }
+                else if (query[index..].StartsWith("\"\"\"", StringComparison.Ordinal))
+                {
+                    index += 3;
+                    return;
+                }
+                else
+                {
+                    index++;
+                }
+            }
+            else
+            {
+                var character = query[index++];
+                if (character == '\\' && index < query.Length)
+                {
+                    index++;
+                }
+                else if (character == '"')
+                {
+                    return;
+                }
+            }
+        }
+    }
 }
