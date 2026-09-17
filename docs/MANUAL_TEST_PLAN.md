@@ -118,6 +118,8 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 - Project `gpm-fixture`
 - Organization Project template 属性（`setup --fixture` の全 API fixture 作成後に template 化）
 - custom fields(Text / Number / Date / Single-select / Multi-select (`Fixture Areas`) / Iteration) と organization multi-select Issue Field (`Fixture Teams`)
+- Iteration 正常系: 既存の14日周期 `Fixture Sprint` に加え、`Fixture Sprint Schedule` は1日・7日・21日の期間と休止期間を含む。3つの draft がそれぞれの Iteration を参照する。既存の Board / Roadmap 用 Sprint は変更しない
+- 空の Iteration 正常系: `Fixture Sprint Uninitialized` は期間0・曜日0の未初期化状態、`Fixture Sprint Empty` は期間14日・月曜日開始で Iteration 一覧が空の状態を維持する
 - browser-only field defaults: `Fixture Text=既定値 🌏`、`Fixture Number=-7`、`Fixture Number 2=0`、`Fixture Select=Beta`（Date は対象外）
 - draft items、Issue item、PR item、archived draft、assigned draft
 - linked repository
@@ -127,6 +129,8 @@ EMU / SAML / OIDC backed organization の場合は、PAT と browser session の
 Team link の手動 E2E では共有 Team を変更せず、source/target の各 organization にこのテスト専用 Team を作成してください。source fixture には `--fixture-team <source-team-slug>` を渡します。target Team は同じ slug、または renamed mapping を確認する別 slug にします。
 
 Views の作成と name / layout / filter / visible fields は GraphQL API で設定します。標準 fixture には API 未対応の View 設定、非自明な `Fixture Roadmap → View 1 → Fixture Board → Fixture Iteration Board → Fixture Empty Sums → Fixture Roadmap Dates Hidden` の tab order、Workflows も含まれるため、`ghpmv setup --fixture-ui` は API View import の後に C# の Playwright layer で補完します。手動で UI をぽちぽち濃くする必要はありません。
+
+Iteration の追加検証も、この標準 fixture と既存の export → import → verify を再利用する。export 済み snapshot に未初期化・初期化済みの空設定・可変期間が含まれることを確認し、同じ target Project の Field 比較で既定期間・開始曜日・各 Iteration の日付と期間を検証する。独立した feature scenario、追加 target、繰り返しの round trip は作らない。不正な期間の拒否は、API を呼ばない単体テストで検証する。fixture とテストには合成データだけを使用する。
 
 ---
 
