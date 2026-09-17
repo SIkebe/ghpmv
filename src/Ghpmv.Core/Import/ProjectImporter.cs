@@ -720,6 +720,48 @@ public sealed class ProjectImporter
                 $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
                 "GitHub requires at least one option when creating the field and ignores empty option updates.");
         }
+
+        foreach (var field in snapshot.Fields.Where(field =>
+                     field.IssueField is null
+                     && string.Equals(field.DataType, "ITERATION", StringComparison.Ordinal)))
+        {
+            if (field.IterationConfiguration is { } configuration)
+            {
+                ValidateIterationConfiguration(field.Name, configuration);
+            }
+        }
+    }
+
+    private static bool IsUninitializedIterationConfiguration(IterationConfigurationSnapshot configuration) =>
+        configuration is { Duration: 0, StartDay: 0, Iterations.Count: 0, CompletedIterations.Count: 0 };
+
+    private static void ValidateIterationConfiguration(string fieldName, IterationConfigurationSnapshot configuration)
+    {
+        if (configuration.Iterations is null || configuration.CompletedIterations is null)
+        {
+            throw new InvalidDataException($"Iteration field '{fieldName}' must provide active and completed iteration lists.");
+        }
+
+        if (IsUninitializedIterationConfiguration(configuration))
+        {
+            return;
+        }
+
+        if (configuration.Duration <= 0)
+        {
+            throw new InvalidDataException(
+                $"Iteration field '{fieldName}' must have a positive default duration unless it is uninitialized (duration 0, start day 0, and no iterations).");
+        }
+
+        if (configuration.StartDay is < 1 or > 7)
+        {
+            throw new InvalidDataException($"Iteration field '{fieldName}' must have a start day from 1 (Monday) to 7 (Sunday).");
+        }
+
+        if (configuration.Iterations.Concat(configuration.CompletedIterations).Any(iteration => iteration is null || iteration.Duration <= 0))
+        {
+            throw new InvalidDataException($"Iteration field '{fieldName}' must have a positive duration for every active and completed iteration.");
+        }
     }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)
@@ -2392,8 +2434,19 @@ public sealed class ProjectImporter
     /// recreated in chronological order; the API accepts past start dates and reclassifies
     /// them as completed on read (verified by PoC against the real API).
     /// </summary>
-    private object BuildIterationConfigurationInput(string fieldName, IterationConfigurationSnapshot configuration)
+    internal object? BuildIterationConfigurationInput(
+        string fieldName,
+        IterationConfigurationSnapshot configuration,
+        DateOnly? referenceDate = null)
     {
+        ValidateIterationConfiguration(fieldName, configuration);
+        if (IsUninitializedIterationConfiguration(configuration))
+        {
+            // GitHub exports this state as zeros, but rejects those zeros as explicit creation inputs.
+            OnProgress?.Invoke($"Field '{fieldName}': preserving uninitialized iteration configuration.");
+            return null;
+        }
+
         // completedIterations are returned newest-first by the API; order everything chronologically.
         var ordered = configuration.CompletedIterations
             .Concat(configuration.Iterations)
@@ -2406,9 +2459,11 @@ public sealed class ProjectImporter
                 $"Field '{fieldName}': recreating {configuration.CompletedIterations.Count} completed iterations as past-dated iterations."));
         }
 
+        var today = referenceDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        var daysSinceStartDay = ((int)today.DayOfWeek - configuration.StartDay + 7) % 7;
         var startDate = ordered.Count > 0
             ? ordered[0].StartDate
-            : DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            : today.AddDays(-daysSinceStartDay).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return new
         {
