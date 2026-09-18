@@ -13,6 +13,70 @@ public sealed class SensitiveApiDiagnosticsTests
         {"errors":[{"type":"FORBIDDEN","message":"Resource not accessible SYNTHETIC-RESPONSE-SECRET","extensions":{"secret":"SYNTHETIC-RESPONSE-SECRET"},"path":["viewer","SYNTHETIC-RESPONSE-SECRET"]}]}
         """;
 
+    [Fact]
+    public async Task Large_malicious_graphql_arrays_produce_a_bounded_redacted_import_report()
+    {
+        const string privateEnum = "SYNTHETIC_PRIVATE_ENUM";
+        var responseName = new string('x', 128);
+        var path = Enumerable.Range(0, 256).Select(index => index switch
+        {
+            1 => privateEnum,
+            2 => Secret,
+            255 => "SYNTHETIC_PRIVATE_TAIL",
+            _ => responseName,
+        }).ToArray();
+        var body = JsonSerializer.Serialize(new
+        {
+            errors = Enumerable.Range(0, 256).Select(_ => new
+            {
+                type = "FORBIDDEN",
+                message = $"Resource not accessible {Secret}",
+                path,
+                extensions = new { secret = Secret },
+            }),
+        });
+        var directory = Path.Combine(Directory.GetCurrentDirectory(), "bounded-diagnostics-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var handler = new StubHandler(Response(HttpStatusCode.OK, body));
+            using var client = new GitHubGraphQLClient("SYNTHETIC-TOKEN", null, handler, (_, _) => Task.CompletedTask);
+            var query = $"query($syntheticInput: SyntheticInput = {{ syntheticInputField: {privateEnum} }}) {{ {responseName} }}";
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+                client.QueryAsync(query, cancellationToken: TestContext.Current.CancellationToken));
+            var diagnostics = new ImportFailureDiagnostics("synthetic", "organization", null, false);
+            await diagnostics.SaveFailureAsync(directory, exception, TestContext.Current.CancellationToken);
+            var report = await File.ReadAllTextAsync(
+                Path.Combine(directory, ImportFailureDiagnostics.FileName), TestContext.Current.CancellationToken);
+
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(body) > 4_000_000);
+            Assert.True(System.Text.Encoding.UTF8.GetByteCount(report) < 90_000);
+            Assert.DoesNotContain(Secret, report, StringComparison.Ordinal);
+            Assert.DoesNotContain(privateEnum, report, StringComparison.Ordinal);
+            Assert.DoesNotContain("SYNTHETIC_PRIVATE_TAIL", report, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(report);
+            var detail = Assert.Single(document.RootElement.GetProperty("exceptions").EnumerateArray());
+            var errors = detail.GetProperty("graphQlErrors");
+            Assert.Equal(17, errors.GetArrayLength());
+            for (var index = 0; index < 16; index++)
+            {
+                var retainedPath = errors[index].GetProperty("path");
+                Assert.Equal(33, retainedPath.GetArrayLength());
+                Assert.Equal(responseName, retainedPath[0].GetString());
+                Assert.Equal("[redacted]", retainedPath[1].GetString());
+                Assert.Equal("[redacted]", retainedPath[2].GetString());
+                Assert.Equal("[path truncated]", retainedPath[32].GetString());
+            }
+
+            Assert.Equal("Additional GraphQL errors truncated.", errors[16].GetProperty("message").GetString());
+            Assert.Empty(Directory.GetFiles(directory, "ghpmv-sensitive-api-*"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

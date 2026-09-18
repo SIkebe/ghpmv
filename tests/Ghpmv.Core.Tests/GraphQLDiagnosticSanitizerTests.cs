@@ -46,7 +46,10 @@ public sealed class GraphQLDiagnosticSanitizerTests
             "privateMutation", "change", "input", "privateSubscription",
         ];
         AssertPaths(query, retained, retained);
-        AssertPaths(query, redacted, redacted.Select(_ => "[redacted]").ToArray());
+        foreach (var chunk in redacted.Chunk(GraphQLDiagnosticSanitizer.MaximumPathSegments))
+        {
+            AssertPaths(query, chunk, chunk.Select(_ => "[redacted]").ToArray());
+        }
     }
 
     [Theory]
@@ -230,6 +233,127 @@ public sealed class GraphQLDiagnosticSanitizerTests
     [InlineData("", "[redacted]")]
     public void Request_ids_are_allowlisted(string? input, string? expected) =>
         Assert.Equal(expected, GraphQLDiagnosticSanitizer.RequestId(input));
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(15)]
+    [InlineData(16)]
+    [InlineData(17)]
+    [InlineData(1_000)]
+    public void Error_count_is_bounded_with_order_and_explicit_truncation(int count)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(
+            Enumerable.Range(0, count).Select(index => new { type = "FORBIDDEN", path = new[] { index } })));
+        var errors = GraphQLDiagnosticSanitizer.Errors(document.RootElement, "{ selected }");
+        Assert.Equal(Math.Min(count, 17), errors.Count);
+        for (var index = 0; index < Math.Min(count, 16); index++)
+        {
+            Assert.Equal("FORBIDDEN", errors[index].Type);
+            Assert.Equal([index.ToString(System.Globalization.CultureInfo.InvariantCulture)], errors[index].Path);
+        }
+
+        if (count > 16)
+        {
+            Assert.Equal("Additional GraphQL errors truncated.", errors[16].Message);
+            Assert.Null(errors[16].Type);
+            Assert.Empty(errors[16].Path);
+        }
+        else
+        {
+            Assert.DoesNotContain(errors, error => error.Message == GraphQLDiagnosticSanitizer.ErrorsTruncated);
+        }
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(31)]
+    [InlineData(32)]
+    [InlineData(33)]
+    [InlineData(1_000)]
+    public void Path_count_is_bounded_with_order_and_explicit_truncation(int count)
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new[]
+        {
+            new { path = Enumerable.Range(0, count).Select(index => (object)(index % 2 == 0 ? "selected" : index)) },
+        }));
+        var path = Assert.Single(GraphQLDiagnosticSanitizer.Errors(document.RootElement, "{ selected }")).Path;
+        Assert.Equal(Math.Min(count, 33), path.Count);
+        for (var index = 0; index < Math.Min(count, 32); index++)
+        {
+            Assert.Equal(index % 2 == 0 ? "selected" : index.ToString(System.Globalization.CultureInfo.InvariantCulture), path[index]);
+        }
+
+        if (count > 32)
+        {
+            Assert.Equal("[path truncated]", path[32]);
+        }
+        else
+        {
+            Assert.DoesNotContain(GraphQLDiagnosticSanitizer.PathTruncated, path);
+        }
+    }
+
+    [Fact]
+    public void Malformed_entries_count_towards_caps_without_hiding_the_retained_suffix()
+    {
+        var malformedErrors = string.Join(',', Enumerable.Repeat("null", 15));
+        using var errorsDocument = JsonDocument.Parse("[" + malformedErrors
+            + """,{"type":"FORBIDDEN","path":["selected"]},{"type":"UNPROCESSABLE"}]""");
+        var errors = GraphQLDiagnosticSanitizer.Errors(errorsDocument.RootElement, "{ selected }");
+        Assert.Equal(17, errors.Count);
+        Assert.All(errors.Take(15), error => Assert.Empty(error.Path));
+        Assert.Equal("FORBIDDEN", errors[15].Type);
+        Assert.Equal(["selected"], errors[15].Path);
+        Assert.Equal(GraphQLDiagnosticSanitizer.ErrorsTruncated, errors[16].Message);
+
+        var malformedPaths = string.Join(',', Enumerable.Repeat("{}", 31));
+        using var pathsDocument = JsonDocument.Parse("""[{"path":[""" + malformedPaths + ""","selected","privateTail"]}]""");
+        var path = Assert.Single(GraphQLDiagnosticSanitizer.Errors(pathsDocument.RootElement, "{ selected }")).Path;
+        Assert.Equal(33, path.Count);
+        Assert.All(path.Take(31), segment => Assert.Equal("[redacted]", segment));
+        Assert.Equal("selected", path[31]);
+        Assert.Equal(GraphQLDiagnosticSanitizer.PathTruncated, path[32]);
+    }
+
+    [Fact]
+    public void Error_and_path_iteration_stop_after_a_single_unread_lookahead()
+    {
+        using var errorDocument = JsonDocument.Parse("""{"path":["selected"]}""");
+        var errors = GraphQLDiagnosticSanitizer.Errors(
+            PrefixWithUnreadableTail(errorDocument.RootElement, 16), "{ selected }");
+        Assert.Equal(17, errors.Count);
+        Assert.Equal(GraphQLDiagnosticSanitizer.ErrorsTruncated, errors[16].Message);
+
+        using var pathDocument = JsonDocument.Parse("\"selected\"");
+        var path = GraphQLDiagnosticSanitizer.SanitizePath(
+            PrefixWithUnreadableTail(pathDocument.RootElement, 32), new(StringComparer.Ordinal) { "selected" });
+        Assert.Equal(33, path.Count);
+        Assert.Equal(GraphQLDiagnosticSanitizer.PathTruncated, path[32]);
+    }
+
+    [Fact]
+    public void Path_identifier_length_is_bounded_even_if_the_allowlist_is_supplied_directly()
+    {
+        var name = new string('x', 129);
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new[] { name }));
+        Assert.Equal(["[redacted]"], GraphQLDiagnosticSanitizer.SanitizePath(
+            document.RootElement.EnumerateArray(), new(StringComparer.Ordinal) { name }));
+    }
+
+    private static IEnumerable<JsonElement> PrefixWithUnreadableTail(JsonElement element, int count)
+    {
+        using var document = JsonDocument.Parse("{}");
+        var unreadable = document.RootElement;
+        document.Dispose();
+        for (var index = 0; index < count; index++)
+        {
+            yield return element;
+        }
+
+        // A disposed element proves the lookahead is not inspected or sanitized.
+        yield return unreadable;
+        throw new InvalidOperationException("Enumeration continued beyond the bounded prefix and lookahead.");
+    }
 
     private static void AssertPaths(string query, string[] input, string[] expected)
     {

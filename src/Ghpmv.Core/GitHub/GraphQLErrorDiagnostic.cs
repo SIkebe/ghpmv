@@ -15,6 +15,10 @@ public sealed record GraphQLErrorDiagnostic
 public static class GraphQLDiagnosticSanitizer
 {
     private const string Redacted = "[redacted]";
+    internal const int MaximumErrors = 16;
+    internal const int MaximumPathSegments = 32;
+    internal const string ErrorsTruncated = "Additional GraphQL errors truncated.";
+    internal const string PathTruncated = "[path truncated]";
 
     public static string OperationName(string value) => value switch
     {
@@ -54,23 +58,58 @@ public static class GraphQLDiagnosticSanitizer
             return [new() { Type = null, Message = "Malformed GraphQL errors value.", Path = [] }];
         }
 
+        return Errors(errors.EnumerateArray(), query);
+    }
+
+    internal static IReadOnlyList<GraphQLErrorDiagnostic> Errors(IEnumerable<JsonElement> errors, string query)
+    {
         // Only field response names, never names from input syntax, may survive in a path.
         var identifiers = GraphQLResponseNames.Parse(query);
-        return errors.EnumerateArray().Select(error => new GraphQLErrorDiagnostic
+        var result = new List<GraphQLErrorDiagnostic>(MaximumErrors + 1);
+        foreach (var error in errors)
         {
-            Type = ErrorType(GetString(error, "type")),
-            Message = SafeMessage(GetString(error, "message")),
-            Path = error.ValueKind == JsonValueKind.Object
-                && error.TryGetProperty("path", out var path)
-                && path.ValueKind == JsonValueKind.Array
-                    ? path.EnumerateArray().Select(segment =>
-                        segment.ValueKind == JsonValueKind.String && identifiers.Contains(segment.GetString()!)
-                            ? segment.GetString()!
-                            : segment.ValueKind == JsonValueKind.Number && segment.TryGetInt32(out var index) && index >= 0
-                                ? index.ToString(CultureInfo.InvariantCulture)
-                                : Redacted).ToArray()
-                    : [],
-        }).ToArray();
+            if (result.Count == MaximumErrors)
+            {
+                result.Add(new() { Type = null, Message = ErrorsTruncated, Path = [] });
+                break;
+            }
+
+            result.Add(new()
+            {
+                Type = ErrorType(GetString(error, "type")),
+                Message = SafeMessage(GetString(error, "message")),
+                Path = error.ValueKind == JsonValueKind.Object
+                    && error.TryGetProperty("path", out var path)
+                    && path.ValueKind == JsonValueKind.Array
+                        ? SanitizePath(path.EnumerateArray(), identifiers)
+                        : [],
+            });
+        }
+
+        return result;
+    }
+
+    internal static IReadOnlyList<string> SanitizePath(IEnumerable<JsonElement> path, HashSet<string> identifiers)
+    {
+        var result = new List<string>(MaximumPathSegments + 1);
+        foreach (var segment in path)
+        {
+            if (result.Count == MaximumPathSegments)
+            {
+                result.Add(PathTruncated);
+                break;
+            }
+
+            result.Add(segment.ValueKind == JsonValueKind.String
+                && segment.GetString() is { Length: <= GraphQLResponseNames.MaximumNameLength } name
+                && identifiers.Contains(name)
+                    ? name
+                    : segment.ValueKind == JsonValueKind.Number && segment.TryGetInt32(out var index) && index >= 0
+                        ? index.ToString(CultureInfo.InvariantCulture)
+                        : Redacted);
+        }
+
+        return result;
     }
 
     internal static string? GetString(JsonElement element, string property) =>
@@ -105,5 +144,4 @@ public static class GraphQLDiagnosticSanitizer
 
         return "Server message redacted (unrecognized format).";
     }
-
 }
