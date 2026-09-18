@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Explicitly enabled raw API failure diagnostics contain sensitive data.
+ghpmv-sensitive-api-*.jsonl
+
 # Local manual migration test artifacts
 .manual-test/
 

@@ -1204,9 +1204,11 @@ public class ProjectImporterLogicTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Empty_uninitialized_iteration_round_trips_to_a_null_creation_input(bool configurationCaptured)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Empty_uninitialized_iteration_round_trips_to_a_null_creation_input(bool configurationCaptured, bool failCreation)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-uninitialized-iteration-").FullName;
         try
@@ -1232,7 +1234,7 @@ public class ProjectImporterLogicTests
                 """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Regression fixture","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
                 """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
                 """{"data":{"node":{"fields":{"nodes":[]}}}}""",
-                """
+                failCreation ? """{"errors":[{"type":"BAD_USER_INPUT","message":"SYNTHETIC-ITERATION-SECRET"}]}""" : """
                 {"data":{"createProjectV2Field":{"projectV2Field":{
                   "__typename":"ProjectV2IterationField","id":"PVTF_sprint","name":"Probe Sprint","dataType":"ITERATION",
                   "configuration":{"duration":0,"startDay":0,"iterations":[],"completedIterations":[]}
@@ -1240,6 +1242,19 @@ public class ProjectImporterLogicTests
                 """);
             using var client = new GitHubGraphQLClient("dummy-token", new Uri("https://example.test/graphql"), handler, null);
             var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            if (failCreation)
+            {
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+                    () => importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken));
+                Assert.Equal("BAD_USER_INPUT", exception.ErrorType);
+                Assert.Contains("Iteration input: validated", exception.Message, StringComparison.Ordinal);
+                Assert.Contains("active count: 0; completed count: 0", exception.InputValidation, StringComparison.Ordinal);
+                Assert.Contains("configuration omitted from mutation: True", exception.InputValidation, StringComparison.Ordinal);
+                Assert.DoesNotContain("SYNTHETIC-ITERATION-SECRET", exception.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("Probe Sprint", exception.Message, StringComparison.Ordinal);
+                return;
+            }
 
             var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
 

@@ -191,18 +191,28 @@ public class ItemImporterResumeTests
     }
 
     [Theory]
-    [InlineData("field")]
-    [InlineData("position")]
-    [InlineData("archive")]
-    public async Task Failed_stage_resumes_without_recreating_item(string failedStage)
+    [InlineData("field", false)]
+    [InlineData("position", false)]
+    [InlineData("archive", false)]
+    [InlineData("field", true)]
+    [InlineData("position", true)]
+    [InlineData("archive", true)]
+    public async Task Failed_stage_resumes_without_recreating_item(string failedStage, bool sensitiveDiagnostics)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-stage-resume-").FullName;
         try
         {
+            const string sentinel = "SYNTHETIC-STAGE-SECRET";
+            var progress = new List<string>();
+            using var sink = new SensitiveApiDiagnostics(directory, progress.Add);
             using var handler = new StageResumeHandler(failedStage);
-            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask)
+            {
+                SensitiveDiagnostics = sensitiveDiagnostics ? sink : null,
+            };
             var importer = CreateImporter(client);
+            importer.OnProgress = progress.Add;
             var snapshot = CreateStageSnapshot(archived: failedStage == "archive", withField: failedStage == "field");
             var target = Target with
             {
@@ -215,17 +225,23 @@ public class ItemImporterResumeTests
             {
                 var first = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
                 Assert.Single(first.Warnings);
+                Assert.DoesNotContain(sentinel, string.Join('\n', first.Warnings), StringComparison.Ordinal);
             }
             else
             {
-                await Assert.ThrowsAsync<GitHubGraphQLException>(
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
                     () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+                Assert.DoesNotContain(sentinel, exception.ToString(), StringComparison.Ordinal);
             }
 
             var interrupted = await ImportLog.LoadAsync(directory, cancellationToken);
             var interruptedState = Assert.Single(interrupted!.ItemStates).Value;
             Assert.Equal("PVTI_new", interruptedState.TargetItemId);
             Assert.NotNull(interruptedState.LastError);
+            Assert.DoesNotContain(sentinel, interruptedState.LastError, StringComparison.Ordinal);
+            Assert.Contains("FORBIDDEN", interruptedState.LastError, StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, await File.ReadAllTextAsync(Path.Combine(directory, "import-log.json"), cancellationToken), StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, string.Join('\n', progress), StringComparison.Ordinal);
 
             var resumedResult = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
 
@@ -253,6 +269,12 @@ public class ItemImporterResumeTests
             Assert.Equal(0, completeResult.Resumed);
             Assert.Equal(1, completeResult.AlreadyComplete);
             Assert.Equal(0, completeResult.Skipped);
+            sink.Dispose();
+            Assert.Equal(sensitiveDiagnostics, File.Exists(sink.FilePath));
+            if (sensitiveDiagnostics)
+            {
+                Assert.Contains(sentinel, await File.ReadAllTextAsync(sink.FilePath, cancellationToken), StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -944,7 +966,7 @@ public class ItemImporterResumeTests
             => string.Equals(failedStage, stage, StringComparison.Ordinal) && count == failureAttempt;
 
         private static HttpResponseMessage Error()
-            => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure"}]}""");
+            => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure SYNTHETIC-STAGE-SECRET","extensions":{"private":"SYNTHETIC-STAGE-SECRET"}}]}""");
 
         private static HttpResponseMessage Json(string body)
             => new(HttpStatusCode.OK)

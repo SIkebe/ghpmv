@@ -114,7 +114,7 @@ public sealed class ProjectTemplateWriteSession
         {
             await session.SetTemplateAsync(mark: false, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception unmarkException) when (unmarkException is GitHubGraphQLException or OperationCanceledException)
+        catch (Exception unmarkException) when (unmarkException is GitHubGraphQLException or OperationCanceledException or IOException)
         {
             try
             {
@@ -127,7 +127,7 @@ public sealed class ProjectTemplateWriteSession
                     await persistRestorationStateAsync(false, CancellationToken.None).ConfigureAwait(false);
                 }
             }
-            catch (Exception restoreException) when (restoreException is GitHubGraphQLException or OperationCanceledException)
+            catch (Exception restoreException) when (restoreException is GitHubGraphQLException or OperationCanceledException or IOException)
             {
                 throw new InvalidOperationException(
                     $"Could not confirm or restore template state for target project '{projectId}'. Inspect the target before resuming.",

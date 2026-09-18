@@ -223,6 +223,9 @@ internal sealed class ImportFailureDiagnostics
             StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode),
             RequestId = GraphQLDiagnosticSanitizer.RequestId(graphQlException?.RequestId),
             FailureReason = graphQlException?.FailureReason,
+            OperationKind = graphQlException?.OperationKind,
+            RetryCount = graphQlException?.RetryCount,
+            InputValidation = graphQlException?.InputValidation,
             GraphQlErrors = graphQlException?.GraphQlErrors ?? [],
             OperationName = ambiguousException?.OperationName,
             ClientMutationId = ambiguousException?.ClientMutationId,
@@ -251,8 +254,8 @@ internal sealed class ImportFailureDiagnostics
         {
             AmbiguousMutationResultException =>
                 "Mutation result is ambiguous. Automatic retry was stopped to avoid duplicates.",
-            GitHubGraphQLException =>
-                "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+            GitHubGraphQLException graphQl =>
+                $"GitHub GraphQL request failed (HTTP {FormatStatusCode(graphQl.StatusCode) ?? "unavailable"}, code {GraphQLDiagnosticSanitizer.ErrorType(graphQl.ErrorType) ?? "unknown"}, request ID {GraphQLDiagnosticSanitizer.RequestId(graphQl.RequestId) ?? "unavailable"}, retries {graphQl.RetryCount}).",
             AggregateException =>
                 "Multiple related failures occurred. See the nested exception entries for sanitized details.",
             _ => SanitizePersistedMessage(exception.Message),
@@ -324,6 +327,12 @@ internal sealed record ImportExceptionDetail
     public string? RequestId { get; init; }
 
     public string? FailureReason { get; init; }
+
+    public string? OperationKind { get; init; }
+
+    public int? RetryCount { get; init; }
+
+    public string? InputValidation { get; init; }
 
     public IReadOnlyList<GraphQLErrorDiagnostic> GraphQlErrors { get; init; } = [];
 

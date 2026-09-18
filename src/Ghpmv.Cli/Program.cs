@@ -79,6 +79,10 @@ var noUpdateCheckOption = new Option<bool>("--no-update-check")
 {
     Description = "Skip the update check against GitHub Releases (also disabled by the GHPMV_NO_UPDATE_CHECK environment variable).",
 };
+var allowSensitiveDiagnosticsOption = new Option<bool>("--allow-sensitive-diagnostics")
+{
+    Description = "For this invocation only, save failed API response bodies to a unique ghpmv-sensitive-api-<id>.jsonl in the current directory (created only on failure). Sensitive; review before sharing. Ordinary API errors stay sanitized.",
+};
 
 var exportCommand = new Command("export", "Export one project (or all projects of an owner) from the source to JSON snapshots.")
 {
@@ -93,10 +97,14 @@ var exportCommand = new Command("export", "Export one project (or all projects o
     browserProfileOption,
     browserBaseUrlOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 exportCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine)
+        : null;
     var org = parseResult.GetValue(orgOption)!;
     var projectNumber = parseResult.GetValue(projectOption);
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
@@ -116,7 +124,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { SensitiveDiagnostics = sensitiveDiagnostics };
     client.OnRetry = Console.Error.WriteLine;
     var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
@@ -289,6 +297,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     browserProfileOption,
     browserBaseUrlOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 importCommand.Validators.Add(result =>
@@ -311,6 +320,9 @@ importCommand.Validators.Add(result =>
 
 importCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine)
+        : null;
     var org = parseResult.GetValue(importOrgOption)!;
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
     var inDirectory = parseResult.GetValue(inOption)!;
@@ -336,10 +348,13 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { SensitiveDiagnostics = sensitiveDiagnostics };
     using var rest = new GitHubRestClient(
         token,
-        graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl));
+        graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl))
+    {
+        SensitiveDiagnostics = sensitiveDiagnostics,
+    };
     var diagnostics = new ImportFailureDiagnostics(
         org,
         ownerType.ToString().ToLowerInvariant(),
@@ -931,10 +946,14 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     reportJsonOption,
     verifyCategoriesOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine)
+        : null;
     var org = parseResult.GetValue(verifyOrgOption)!;
     var projectNumber = parseResult.GetValue(verifyProjectOption);
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
@@ -956,7 +975,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { SensitiveDiagnostics = sensitiveDiagnostics };
     client.OnRetry = Console.Error.WriteLine;
 
     try
@@ -1360,8 +1379,12 @@ setupCommand.Validators.Add(result =>
     }
 });
 
+setupCommand.Options.Add(allowSensitiveDiagnosticsOption);
 setupCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine)
+        : null;
     if (!parseResult.GetValue(browsersOption)
         && !parseResult.GetValue(fixtureOption)
         && !parseResult.GetValue(fixtureUiOption)
@@ -1411,7 +1434,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var observer = new FieldDefaultFixtureObserver(client)
             {
@@ -1461,7 +1484,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1587,7 +1610,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1636,7 +1659,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1694,7 +1717,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1845,7 +1868,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1932,9 +1955,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var baseUrl = parseResult.GetValue(setupApiBaseUrlOption);
         var graphQlBaseUri = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
+        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
         graphQl.OnRetry = Console.Error.WriteLine;
-        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
+        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri)) { SensitiveDiagnostics = sensitiveDiagnostics };
         var fixturePreflightCompleted = false;
         async Task ValidateFixtureBeforeWriteAsync(CancellationToken ct)
         {
@@ -2093,7 +2116,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
         await using var fixtureUiSessionScope = fixtureUiSession;
-        using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
+        using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri) { SensitiveDiagnostics = sensitiveDiagnostics };
         fixtureUiClient.OnRetry = Console.Error.WriteLine;
         if (authenticatedFixtureUiSession is null)
         {

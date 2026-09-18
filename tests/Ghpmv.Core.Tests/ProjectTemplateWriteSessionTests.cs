@@ -66,9 +66,12 @@ public class ProjectTemplateWriteSessionTests
                 onProgress: null,
                 TestContext.Current.CancellationToken));
 
-        Assert.Equal(
+        Assert.StartsWith(
             "GraphQL success response did not contain the expected 'unmarkProjectV2AsTemplate' result.",
-            exception.Message);
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("mutation", exception.OperationKind);
+        Assert.Equal(3, exception.RetryCount);
         Assert.Equal(4, handler.UnmarkCount);
         Assert.Equal(1, handler.MarkCount);
         Assert.Contains("markProjectV2AsTemplate", handler.RequestBodies[^1], StringComparison.Ordinal);
@@ -115,6 +118,70 @@ public class ProjectTemplateWriteSessionTests
         await resumedSession.RestoreAsync(TestContext.Current.CancellationToken);
         Assert.Equal(1, resumedHandler.MarkCount);
         Assert.False(persistedRestorationRequired);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Diagnostic_write_failure_after_unmark_attempts_restoration_and_preserves_pending_state_if_it_fails(
+        bool restorationFails)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-template-diagnostics-").FullName;
+        try
+        {
+            var persistedStates = new List<bool>();
+            var warnings = new List<string>();
+            using var diagnostics = new SensitiveApiDiagnostics(Path.Combine(directory, "missing"), warnings.Add);
+            using var handler = new TemplateHandler(template: true)
+            {
+                UnmarkResponseIsError = true,
+                MarkResponseIsError = restorationFails,
+            };
+            using var client = new GitHubGraphQLClient("token", null, handler, static (_, _) => Task.CompletedTask)
+            {
+                SensitiveDiagnostics = diagnostics,
+            };
+            Task PersistAsync(bool required, CancellationToken _)
+            {
+                persistedStates.Add(required);
+                return Task.CompletedTask;
+            }
+            Task<ProjectTemplateWriteSession> PrepareAsync() => ProjectTemplateWriteSession.PrepareAsync(
+                client,
+                ProjectId,
+                restorationWasPending: false,
+                PersistAsync,
+                onProgress: null,
+                TestContext.Current.CancellationToken);
+
+            if (restorationFails)
+            {
+                var exception = await Assert.ThrowsAsync<InvalidOperationException>(PrepareAsync);
+                var failures = Assert.IsType<AggregateException>(exception.InnerException);
+                Assert.Equal(2, failures.InnerExceptions.Count);
+                Assert.All(failures.InnerExceptions, failure => Assert.IsType<IOException>(failure));
+                Assert.Equal([true], persistedStates);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<IOException>(PrepareAsync);
+                Assert.Equal([true, false], persistedStates);
+            }
+
+            Assert.Equal(!restorationFails, handler.IsTemplate);
+            Assert.Equal(1, handler.UnmarkCount);
+            Assert.Equal(1, handler.MarkCount);
+            Assert.Equal(3, handler.RequestBodies.Count);
+            Assert.Contains("markProjectV2AsTemplate", handler.RequestBodies[^1], StringComparison.Ordinal);
+            Assert.DoesNotContain("unmarkProjectV2AsTemplate", handler.RequestBodies[^1], StringComparison.Ordinal);
+            Assert.Contains(warnings, message => message.Contains("could not be written", StringComparison.Ordinal));
+            Assert.DoesNotContain(warnings, message => message.Contains("SYNTHETIC-ERROR-BODY", StringComparison.Ordinal));
+            Assert.False(File.Exists(diagnostics.FilePath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -293,9 +360,12 @@ public class ProjectTemplateWriteSessionTests
 
         // requiredResultPath: "projectV2.id" — a payload without it is never accepted
         // as success, no matter how many times it is retried.
-        Assert.Equal(
+        Assert.StartsWith(
             "GraphQL success response did not contain the expected 'markProjectV2AsTemplate' result.",
-            exception.Message);
+            exception.Message,
+            StringComparison.Ordinal);
+        Assert.Equal("mutation", exception.OperationKind);
+        Assert.Equal(3, exception.RetryCount);
         Assert.Equal(4, incompleteHandler.MarkCount);
     }
 
@@ -409,6 +479,8 @@ public class ProjectTemplateWriteSessionTests
 
     private sealed class TemplateHandler(bool template) : HttpMessageHandler
     {
+        public bool IsTemplate { get; private set; } = template;
+
         public bool NodeMissing { get; init; }
 
         public bool FailFirstMarkTransiently { get; init; }
@@ -416,6 +488,10 @@ public class ProjectTemplateWriteSessionTests
         public bool MarkPayloadIncomplete { get; init; }
 
         public bool UnmarkPayloadIncomplete { get; init; }
+
+        public bool UnmarkResponseIsError { get; init; }
+
+        public bool MarkResponseIsError { get; init; }
 
         public List<string> RequestBodies { get; } = [];
 
@@ -433,6 +509,12 @@ public class ProjectTemplateWriteSessionTests
             if (body.Contains("unmarkProjectV2AsTemplate", StringComparison.Ordinal))
             {
                 UnmarkCount++;
+                IsTemplate = false;
+                if (UnmarkResponseIsError)
+                {
+                    return Json("""{"errors":[{"type":"UNPROCESSABLE","message":"SYNTHETIC-ERROR-BODY"}]}""");
+                }
+
                 if (UnmarkPayloadIncomplete)
                 {
                     return Json("""{"data":{"unmarkProjectV2AsTemplate":{"projectV2":null}}}""");
@@ -444,6 +526,12 @@ public class ProjectTemplateWriteSessionTests
             if (body.Contains("markProjectV2AsTemplate", StringComparison.Ordinal))
             {
                 MarkCount++;
+                if (MarkResponseIsError)
+                {
+                    return Json("""{"errors":[{"type":"UNPROCESSABLE","message":"SYNTHETIC-ERROR-BODY"}]}""");
+                }
+
+                IsTemplate = true;
                 if (MarkPayloadIncomplete)
                 {
                     return Json("""{"data":{"markProjectV2AsTemplate":{"projectV2":null}}}""");
@@ -464,7 +552,7 @@ public class ProjectTemplateWriteSessionTests
 
             return Json(
                 "{\"data\":{\"node\":{\"id\":\"PVT_target\",\"template\":" +
-                (template ? "true" : "false") + "}}}");
+                (IsTemplate ? "true" : "false") + "}}}");
         }
 
         private static HttpResponseMessage Json(string body)

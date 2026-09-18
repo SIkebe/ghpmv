@@ -16,6 +16,20 @@ public static class GraphQLDiagnosticSanitizer
 {
     private const string Redacted = "[redacted]";
 
+    public static string OperationName(string value) => value switch
+    {
+        "createProjectV2" or "updateProjectV2" or "deleteProjectV2"
+            or "createProjectV2Field" or "updateProjectV2Field"
+            or "createIssueField" or "updateIssueField" or "createProjectV2IssueField"
+            or "setIssueFieldValue" or "addProjectV2ItemById" or "addProjectV2DraftIssue"
+            or "updateProjectV2ItemFieldValue" or "updateProjectV2ItemPosition"
+            or "archiveProjectV2Item" or "unarchiveProjectV2Item" or "deleteProjectV2Item"
+            or "updateProjectV2Collaborators" or "linkProjectV2ToTeam" or "linkProjectV2ToRepository"
+            or "markProjectV2AsTemplate" or "unmarkProjectV2AsTemplate"
+            or "createProjectV2View" or "updateProjectV2View" or "createProjectV2StatusUpdate" => value,
+        _ => "mutation",
+    };
+
     public static string? ErrorType(string? value) => value switch
     {
         null => null,

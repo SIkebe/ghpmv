@@ -410,7 +410,7 @@ public class GitHubGraphQLClientTests
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, handler.Attempts);
-        Assert.Equal("createThing", exception.OperationName);
+        Assert.Equal("mutation", exception.OperationName);
         Assert.Equal("target-project", exception.Target);
         Assert.NotEmpty(exception.ClientMutationId);
         Assert.Null(exception.StatusCode);

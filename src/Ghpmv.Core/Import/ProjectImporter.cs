@@ -727,7 +727,7 @@ public sealed class ProjectImporter
         {
             if (field.IterationConfiguration is { } configuration)
             {
-                ValidateIterationConfiguration(field.Name, configuration);
+                ValidateIterationConfiguration(configuration);
             }
         }
     }
@@ -735,11 +735,11 @@ public sealed class ProjectImporter
     private static bool IsUninitializedIterationConfiguration(IterationConfigurationSnapshot configuration) =>
         configuration is { Duration: 0, StartDay: 0, Iterations.Count: 0, CompletedIterations.Count: 0 };
 
-    private static void ValidateIterationConfiguration(string fieldName, IterationConfigurationSnapshot configuration)
+    private static void ValidateIterationConfiguration(IterationConfigurationSnapshot configuration)
     {
         if (configuration.Iterations is null || configuration.CompletedIterations is null)
         {
-            throw new InvalidDataException($"Iteration field '{fieldName}' must provide active and completed iteration lists.");
+            throw new InvalidDataException("Iteration field must provide active and completed iteration lists.");
         }
 
         if (IsUninitializedIterationConfiguration(configuration))
@@ -750,17 +750,17 @@ public sealed class ProjectImporter
         if (configuration.Duration <= 0)
         {
             throw new InvalidDataException(
-                $"Iteration field '{fieldName}' must have a positive default duration unless it is uninitialized (duration 0, start day 0, and no iterations).");
+                "Iteration field must have a positive default duration unless it is uninitialized (duration 0, start day 0, and no iterations).");
         }
 
         if (configuration.StartDay is < 1 or > 7)
         {
-            throw new InvalidDataException($"Iteration field '{fieldName}' must have a start day from 1 (Monday) to 7 (Sunday).");
+            throw new InvalidDataException("Iteration field must have a start day from 1 (Monday) to 7 (Sunday).");
         }
 
         if (configuration.Iterations.Concat(configuration.CompletedIterations).Any(iteration => iteration is null || iteration.Duration <= 0))
         {
-            throw new InvalidDataException($"Iteration field '{fieldName}' must have a positive duration for every active and completed iteration.");
+            throw new InvalidDataException("Iteration field must have a positive duration for every active and completed iteration.");
         }
     }
 
@@ -2157,24 +2157,34 @@ public sealed class ProjectImporter
         string clientMutationId,
         CancellationToken cancellationToken)
     {
-        return await _client.MutationAsync(
-            "createProjectV2Field",
-            CreateFieldMutation,
-            new
-            {
-                projectId,
-                name = field.Name,
-                dataType = field.DataType,
-                options = field.DataType == "SINGLE_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
-                multiSelectOptions = field.DataType == "MULTI_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
-                iterationConfiguration = field.DataType == "ITERATION" && field.IterationConfiguration is { } configuration
-                    ? BuildIterationConfigurationInput(field.Name, configuration)
-                    : null,
-            },
-            target: projectId,
-            clientMutationId: clientMutationId,
-            requiredResultPath: "projectV2Field.id",
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await _client.MutationAsync(
+                "createProjectV2Field",
+                CreateFieldMutation,
+                new
+                {
+                    projectId,
+                    name = field.Name,
+                    dataType = field.DataType,
+                    options = field.DataType == "SINGLE_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
+                    multiSelectOptions = field.DataType == "MULTI_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
+                    iterationConfiguration = field.DataType == "ITERATION" && field.IterationConfiguration is { } configuration
+                        ? BuildIterationConfigurationInput(field.Name, configuration)
+                        : null,
+                },
+                target: projectId,
+                clientMutationId: clientMutationId,
+                requiredResultPath: "projectV2Field.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitHubGraphQLException exception) when (field.DataType == "ITERATION")
+        {
+            var configuration = field.IterationConfiguration;
+            exception.InputValidation = string.Create(CultureInfo.InvariantCulture,
+                $"Iteration input: validated; configuration supplied: {configuration is not null}; active count: {configuration?.Iterations.Count ?? 0}; completed count: {configuration?.CompletedIterations.Count ?? 0}; configuration omitted from mutation: {configuration is null || IsUninitializedIterationConfiguration(configuration)}.");
+            throw;
+        }
     }
 
     private async Task LoadOperationLogAsync(CancellationToken cancellationToken)
@@ -2439,7 +2449,7 @@ public sealed class ProjectImporter
         IterationConfigurationSnapshot configuration,
         DateOnly? referenceDate = null)
     {
-        ValidateIterationConfiguration(fieldName, configuration);
+        ValidateIterationConfiguration(configuration);
         if (IsUninitializedIterationConfiguration(configuration))
         {
             // GitHub exports this state as zeros, but rejects those zeros as explicit creation inputs.

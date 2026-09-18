@@ -10,6 +10,107 @@ namespace Ghpmv.Core.Tests;
 
 public class CliImportTests
 {
+    [Theory]
+    [InlineData("export")]
+    [InlineData("import")]
+    [InlineData("verify")]
+    public async Task Sensitive_diagnostics_require_each_invocation_to_opt_in_and_never_reach_stderr(string command)
+    {
+        const string sentinel = "SYNTHETIC-CLI-RESPONSE-SECRET";
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-diagnostics-test-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+        try
+        {
+            var expectedFileCount = 0;
+            foreach (var enabled in new[] { false, true, false })
+            {
+                using var server = new GraphQlStubServer(
+                    """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-CLI-RESPONSE-SECRET","extensions":{"private":"SYNTHETIC-CLI-RESPONSE-SECRET"}}]}""");
+                var arguments = new List<string>
+                {
+                    command, "--org", "synthetic", "--token", "synthetic-token", "--no-update-check",
+                    command == "export" ? "--base-url" : "--target-base-url", server.GraphQlUrl,
+                };
+                if (command == "export")
+                {
+                    arguments.AddRange(["--project", "1", "--out", directory]);
+                }
+                else
+                {
+                    arguments.AddRange(["--in", directory]);
+                    if (command == "verify")
+                    {
+                        arguments.AddRange(["--project", "1"]);
+                    }
+                }
+                if (enabled)
+                {
+                    arguments.Add("--allow-sensitive-diagnostics");
+                    expectedFileCount++;
+                }
+
+                var result = await RunIsolatedCliAsync(directory, arguments);
+                Assert.Equal(1, result.ExitCode);
+                Assert.DoesNotContain(sentinel, result.Error + result.Output, StringComparison.Ordinal);
+                Assert.Contains("FORBIDDEN", result.Error, StringComparison.Ordinal);
+                Assert.Equal(enabled, result.Error.Contains("SENSITIVE API diagnostics", StringComparison.Ordinal));
+                var files = Directory.GetFiles(directory, "ghpmv-sensitive-api-*.jsonl");
+                Assert.Equal(expectedFileCount, files.Length);
+                if (enabled)
+                {
+                    Assert.Contains(Path.GetFullPath(files[0]), result.Error, StringComparison.Ordinal);
+                    Assert.Contains(sentinel, await File.ReadAllTextAsync(files[0], cancellationToken), StringComparison.Ordinal);
+                }
+                if (command == "import")
+                {
+                    Assert.DoesNotContain(sentinel, await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), cancellationToken), StringComparison.Ordinal);
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("export")]
+    [InlineData("import")]
+    [InlineData("verify")]
+    [InlineData("setup")]
+    public async Task Api_commands_expose_sensitive_diagnostics_help_without_enabling_it(string command)
+    {
+        var result = await RunIsolatedCliAsync(Environment.CurrentDirectory, [command, "--help"]);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("--allow-sensitive-diagnostics", result.Output, StringComparison.Ordinal);
+        Assert.Empty(result.Error);
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunIsolatedCliAsync(string directory, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = directory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        // Neither plausible environment spelling is an opt-in mechanism.
+        startInfo.Environment["GHPMV_ALLOW_SENSITIVE_DIAGNOSTICS"] = "true";
+        startInfo.Environment["ALLOW_SENSITIVE_DIAGNOSTICS"] = "true";
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "ghpmv.dll"));
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start synthetic CLI test.");
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        return (process.ExitCode, await output, await error);
+    }
+
     [Fact]
     public async Task Import_invalid_snapshot_writes_a_diagnostic_report()
     {
@@ -973,7 +1074,8 @@ public class CliImportTests
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
             Assert.Equal(1, result.ExitCode);
-            Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.Contains("FORBIDDEN", result.Error, StringComparison.Ordinal);
             Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
 
             Assert.True(File.Exists(diagnosticPath));
@@ -1004,7 +1106,7 @@ public class CliImportTests
             var cleanupFailure = Assert.Single(root.GetProperty("cleanupFailures").EnumerateArray());
             Assert.Equal("restoring-template-state", cleanupFailure.GetProperty("stage").GetString());
             Assert.Equal(
-                "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                "GitHub GraphQL request failed (HTTP 200 OK, code FORBIDDEN, request ID unavailable, retries 0).",
                 cleanupFailure.GetProperty("message").GetString());
             var exceptionDetails = root.GetProperty("exceptions").EnumerateArray().ToArray();
             Assert.Equal(3, exceptionDetails.Length);
@@ -1023,11 +1125,11 @@ public class CliImportTests
                 exceptionDetail =>
                 {
                     Assert.Equal(
-                        "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                        "GitHub GraphQL request failed (HTTP 200 OK, code FORBIDDEN, request ID unavailable, retries 0).",
                         exceptionDetail.GetProperty("message").GetString());
                     Assert.False(string.IsNullOrWhiteSpace(
                         exceptionDetail.GetProperty("stackTrace").GetString()));
-                    Assert.False(exceptionDetail.TryGetProperty("graphQlErrors", out _));
+                    Assert.Single(exceptionDetail.GetProperty("graphQlErrors").EnumerateArray());
                 });
 
             // The finally-path retry reports the dedicated restore diagnostic.

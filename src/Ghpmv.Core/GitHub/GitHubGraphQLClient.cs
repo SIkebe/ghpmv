@@ -42,6 +42,9 @@ public sealed class GitHubGraphQLClient : IDisposable
     /// <summary>Invoked with a human-readable message before every rate-limit/retry wait.</summary>
     public Action<string>? OnRetry { get; set; }
 
+    /// <summary>Optional invocation-owned sink. The caller must dispose it.</summary>
+    public SensitiveApiDiagnostics? SensitiveDiagnostics { get; init; }
+
     /// <summary>
     /// Normalizes a GraphQL API base URL given on the command line: accepts both
     /// "https://api.TENANT.ghe.com" and "https://api.TENANT.ghe.com/graphql" (with or
@@ -127,10 +130,11 @@ public sealed class GitHubGraphQLClient : IDisposable
         var temporaryConflictRetries = 0;
         var incompleteResultRetries = 0;
         var internalErrorRetries = 0;
+        var attempt = 0;
 
         while (true)
         {
-            using var response = await ExecuteAsync(payload, mutation, cancellationToken).ConfigureAwait(false);
+            using var response = await ExecuteAsync(payload, mutation, () => attempt++, cancellationToken).ConfigureAwait(false);
             var document = response.Document;
 
             if (document.RootElement.ValueKind != JsonValueKind.Object
@@ -151,7 +155,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                         "GitHub returned a success response without the expected mutation result.",
                         "missing-mutation-result",
                         statusCode: response.StatusCode,
-                        requestId: response.RequestId);
+                        requestId: response.RequestId,
+                        retryCount: attempt - 1);
                 }
 
                 if (mutation is { RetryPolicy: MutationRetryPolicy.Idempotent }
@@ -169,14 +174,17 @@ public sealed class GitHubGraphQLClient : IDisposable
                 throw new GitHubGraphQLException(
                     mutation is null
                         ? "GraphQL success response did not contain an object-valued data property."
-                        : $"GraphQL success response did not contain the expected '{mutation.OperationName}' result.")
+                        : $"GraphQL success response did not contain the expected '{GraphQLDiagnosticSanitizer.OperationName(mutation.OperationName)}' result.")
                 {
                     StatusCode = response.StatusCode,
                     RequestId = response.RequestId,
                     FailureReason = "missing-result",
+                    OperationKind = mutation is null ? "query" : "mutation",
+                    RetryCount = attempt - 1,
                 };
             }
 
+            CaptureFailure(mutation, response.StatusCode, response.RequestId, attempt - 1, response.Body);
             var errorsJson = errors.GetRawText();
             var errorType = errors.ValueKind == JsonValueKind.Array && errors.GetArrayLength() > 0
                 ? GraphQLDiagnosticSanitizer.GetString(errors[0], "type")
@@ -194,7 +202,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                     requestId: response.RequestId,
                     errorsJson: errorsJson,
                     errorType: errorType,
-                    diagnostics: diagnostics);
+                    diagnostics: diagnostics,
+                    retryCount: attempt - 1);
             }
 
             // Projects V2 mutations occasionally fail with UNPROCESSABLE
@@ -223,7 +232,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                     requestId: response.RequestId,
                     errorsJson: errorsJson,
                     errorType: errorType,
-                    diagnostics: diagnostics);
+                    diagnostics: diagnostics,
+                    retryCount: attempt - 1);
             }
 
             if (retryInternalErrors
@@ -240,14 +250,20 @@ public sealed class GitHubGraphQLClient : IDisposable
                 continue;
             }
 
-            throw new GitHubGraphQLException($"GraphQL error: {errorsJson}")
+            var operationKind = mutation is null ? "query" : "mutation";
+            var safeType = GraphQLDiagnosticSanitizer.ErrorType(errorType);
+            throw new GitHubGraphQLException(
+                $"GitHub GraphQL {operationKind} failed. "
+                + string.Join(" ", diagnostics.Select(error => error.Message).Distinct(StringComparer.Ordinal)))
             {
                 ErrorsJson = errorsJson,
-                ErrorType = errorType,
+                ErrorType = safeType,
                 StatusCode = response.StatusCode,
                 RequestId = response.RequestId,
                 FailureReason = "graphql-error",
                 GraphQlErrors = diagnostics,
+                OperationKind = operationKind,
+                RetryCount = attempt - 1,
             };
         }
     }
@@ -311,6 +327,7 @@ public sealed class GitHubGraphQLClient : IDisposable
     private async Task<GraphQLResponse> ExecuteAsync(
         string payload,
         MutationContext? mutation,
+        Func<int> nextAttempt,
         CancellationToken cancellationToken)
     {
         var secondaryRateLimitRetries = 0;
@@ -324,6 +341,7 @@ public sealed class GitHubGraphQLClient : IDisposable
 
         while (true)
         {
+            var retryCount = nextAttempt();
             using var request = CreateRequest();
             HttpResponseMessage? response = null;
             string body;
@@ -334,7 +352,7 @@ public sealed class GitHubGraphQLClient : IDisposable
                 status = response.StatusCode;
                 body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             }
-            catch (HttpRequestException exception)
+            catch (HttpRequestException)
             {
                 var responseStatus = response?.StatusCode;
                 var responseRequestId = GetRequestId(response);
@@ -342,46 +360,49 @@ public sealed class GitHubGraphQLClient : IDisposable
                 if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
                 {
                     throw CreateAmbiguousMutationException(
-                        mutation, exception.Message, "transport-failure", exception, responseStatus, responseRequestId);
+                        mutation, "GitHub transport failed.", "transport-failure", statusCode: responseStatus, requestId: responseRequestId, retryCount: retryCount);
                 }
 
                 if (serverErrorRetries >= MaxServerErrorRetries)
                 {
                     throw new GitHubGraphQLException(
-                        $"Network error persisted after {MaxServerErrorRetries} retries: {exception.Message}")
+                        $"Network error persisted after {MaxServerErrorRetries} retries.")
                     {
                         StatusCode = responseStatus,
                         RequestId = responseRequestId,
                         FailureReason = "transport-failure",
+                        OperationKind = mutation is null ? "query" : "mutation",
+                        RetryCount = retryCount,
                     };
                 }
 
                 var networkBackoff = GetBackoff(serverErrorRetries);
                 serverErrorRetries++;
                 await NotifyAndDelayAsync(
-                    string.Create(CultureInfo.InvariantCulture, $"Network error ({exception.Message}); backing off {networkBackoff.TotalSeconds:0}s (attempt {serverErrorRetries}/{MaxServerErrorRetries})."),
+                    string.Create(CultureInfo.InvariantCulture, $"Network error; backing off {networkBackoff.TotalSeconds:0}s (attempt {serverErrorRetries}/{MaxServerErrorRetries})."),
                     networkBackoff,
                     cancellationToken).ConfigureAwait(false);
                 continue;
             }
-            catch (OperationCanceledException exception) when (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+            catch (OperationCanceledException) when (mutation is { RetryPolicy: MutationRetryPolicy.Create })
             {
                 var responseStatus = response?.StatusCode;
                 var responseRequestId = GetRequestId(response);
                 response?.Dispose();
                 throw CreateAmbiguousMutationException(
-                    mutation, exception.Message, "request-cancelled-or-timed-out", exception, responseStatus, responseRequestId);
+                    mutation, "GitHub request was cancelled or timed out.", "request-cancelled-or-timed-out", statusCode: responseStatus, requestId: responseRequestId, retryCount: retryCount);
             }
-            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 response?.Dispose();
                 if (serverErrorRetries >= MaxServerErrorRetries)
                 {
                     throw new GitHubGraphQLException(
-                        $"Request timeout persisted after {MaxServerErrorRetries} retries: {exception.Message}",
-                        exception)
+                        $"Request timeout persisted after {MaxServerErrorRetries} retries.")
                     {
                         FailureReason = "request-timeout",
+                        OperationKind = mutation is null ? "query" : "mutation",
+                        RetryCount = retryCount,
                     };
                 }
 
@@ -392,6 +413,11 @@ public sealed class GitHubGraphQLClient : IDisposable
                     timeoutBackoff,
                     cancellationToken).ConfigureAwait(false);
                 continue;
+            }
+            catch (OperationCanceledException)
+            {
+                response?.Dispose();
+                throw new OperationCanceledException("GitHub request cancelled.", cancellationToken);
             }
 
             using var _ = response;
@@ -408,9 +434,9 @@ public sealed class GitHubGraphQLClient : IDisposable
 
                 try
                 {
-                    return new GraphQLResponse(JsonDocument.Parse(body), status, requestId);
+                    return new GraphQLResponse(JsonDocument.Parse(body), status, requestId, body);
                 }
-                catch (JsonException exception)
+                catch (JsonException)
                 {
                     if (mutation is { RetryPolicy: MutationRetryPolicy.Create })
                     {
@@ -418,20 +444,21 @@ public sealed class GitHubGraphQLClient : IDisposable
                             mutation,
                             "GitHub returned an incomplete or malformed success response.",
                             "malformed-response",
-                            exception,
-                            status,
-                            requestId);
+                            statusCode: status,
+                            requestId: requestId,
+                            retryCount: retryCount);
                     }
 
                     if (serverErrorRetries >= MaxServerErrorRetries)
                     {
                         throw new GitHubGraphQLException(
-                            $"Malformed success response persisted after {MaxServerErrorRetries} retries.",
-                            exception)
+                            $"Malformed success response persisted after {MaxServerErrorRetries} retries.")
                         {
                             StatusCode = status,
                             RequestId = requestId,
                             FailureReason = "malformed-response",
+                            OperationKind = mutation is null ? "query" : "mutation",
+                            RetryCount = retryCount,
                         };
                     }
 
@@ -444,6 +471,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                     continue;
                 }
             }
+
+            CaptureFailure(mutation, status, requestId, retryCount, body);
 
             // (a) 403/429 with an explicit Retry-After header.
             if (status is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests
@@ -467,6 +496,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                         StatusCode = status,
                         RequestId = requestId,
                         FailureReason = "secondary-rate-limit-exhausted",
+                        OperationKind = mutation is null ? "query" : "mutation",
+                        RetryCount = retryCount,
                     };
                 }
 
@@ -489,7 +520,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                         string.Create(CultureInfo.InvariantCulture, $"GitHub returned HTTP {(int)status} ({status})."),
                         "http-server-error",
                         statusCode: status,
-                        requestId: requestId);
+                        requestId: requestId,
+                        retryCount: retryCount);
                 }
 
                 if (serverErrorRetries >= MaxServerErrorRetries)
@@ -499,6 +531,8 @@ public sealed class GitHubGraphQLClient : IDisposable
                         StatusCode = status,
                         RequestId = requestId,
                         FailureReason = "http-server-error",
+                        OperationKind = mutation is null ? "query" : "mutation",
+                        RetryCount = retryCount,
                     };
                 }
 
@@ -512,12 +546,31 @@ public sealed class GitHubGraphQLClient : IDisposable
             }
 
             // Non-retryable HTTP failure (401, 404, ...).
-            throw new GitHubGraphQLException($"GraphQL request failed with HTTP {(int)status} ({status}).")
+            throw new GitHubGraphQLException($"GraphQL request failed with HTTP {(int)status}.")
             {
                 StatusCode = status,
                 RequestId = requestId,
                 FailureReason = "http-error",
+                OperationKind = mutation is null ? "query" : "mutation",
+                RetryCount = retryCount,
             };
+        }
+    }
+
+    private void CaptureFailure(MutationContext? mutation, HttpStatusCode status, string? requestId, int retryCount, string body)
+    {
+        try
+        {
+            SensitiveDiagnostics?.Record(
+                mutation is null ? ApiOperation.GraphQlQuery : ApiOperation.GraphQlMutation,
+                status, requestId, retryCount, body);
+        }
+        catch (IOException exception) when (mutation is { RetryPolicy: MutationRetryPolicy.Create })
+        {
+            // A diagnostic I/O failure must not clear the durable pending create operation.
+            throw CreateAmbiguousMutationException(
+                mutation, "Sensitive API diagnostics could not be saved; inspect target state before retrying.",
+                "sensitive-diagnostic-write-failure", exception, status, requestId, retryCount: retryCount);
         }
     }
 
@@ -607,7 +660,8 @@ public sealed class GitHubGraphQLClient : IDisposable
         string? requestId = null,
         string? errorsJson = null,
         string? errorType = null,
-        IReadOnlyList<GraphQLErrorDiagnostic>? diagnostics = null)
+        IReadOnlyList<GraphQLErrorDiagnostic>? diagnostics = null,
+        int retryCount = 0)
         => new(
             mutation.OperationName,
             mutation.ClientMutationId,
@@ -619,12 +673,14 @@ public sealed class GitHubGraphQLClient : IDisposable
             StatusCode = statusCode,
             RequestId = requestId,
             FailureReason = failureReason,
+            OperationKind = "mutation",
+            RetryCount = retryCount,
             ErrorsJson = errorsJson,
-            ErrorType = errorType,
+            ErrorType = GraphQLDiagnosticSanitizer.ErrorType(errorType),
             GraphQlErrors = diagnostics ?? [],
         };
 
-    private sealed record GraphQLResponse(JsonDocument Document, HttpStatusCode StatusCode, string? RequestId) : IDisposable
+    private sealed record GraphQLResponse(JsonDocument Document, HttpStatusCode StatusCode, string? RequestId, string Body) : IDisposable
     {
         public void Dispose() => Document.Dispose();
     }

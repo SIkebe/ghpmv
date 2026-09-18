@@ -148,6 +148,11 @@ public sealed class ProjectExporter
                 ErrorsJson = exception.ErrorsJson,
                 ErrorType = exception.ErrorType,
                 StatusCode = exception.StatusCode,
+                RequestId = exception.RequestId,
+                FailureReason = exception.FailureReason,
+                GraphQlErrors = exception.GraphQlErrors,
+                OperationKind = exception.OperationKind,
+                RetryCount = exception.RetryCount,
             };
         }
 

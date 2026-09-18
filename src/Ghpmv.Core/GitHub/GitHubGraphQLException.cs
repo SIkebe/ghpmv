@@ -1,4 +1,5 @@
 using System.Net;
+using System.Globalization;
 
 namespace Ghpmv.Core.GitHub;
 
@@ -22,8 +23,8 @@ public class GitHubGraphQLException : Exception
     {
     }
 
-    /// <summary>Raw JSON of the "errors" array returned by the GraphQL endpoint, if any.</summary>
-    public string? ErrorsJson { get; init; }
+    /// <summary>Raw errors used only for internal classification, never diagnostic serialization.</summary>
+    internal string? ErrorsJson { get; init; }
 
     /// <summary>The "type" of the first GraphQL error (e.g. NOT_FOUND), if any.</summary>
     public string? ErrorType { get; init; }
@@ -35,6 +36,24 @@ public class GitHubGraphQLException : Exception
 
     /// <summary>A locally defined reason, independent of the untrusted server message.</summary>
     public string? FailureReason { get; init; }
+
+    public string? OperationKind { get; init; }
+
+    public int RetryCount { get; init; }
+
+    public string? InputValidation { get; internal set; }
+
+    public override string Message
+    {
+        get
+        {
+            var context = FailureReason is null
+                ? string.Empty
+                : string.Create(CultureInfo.InvariantCulture,
+                    $" (operation {(OperationKind is "query" or "mutation" ? OperationKind : "unknown")}, HTTP {(StatusCode is { } status ? ((int)status).ToString(CultureInfo.InvariantCulture) : "unavailable")}, code {GraphQLDiagnosticSanitizer.ErrorType(ErrorType) ?? "unknown"}, request ID {GraphQLDiagnosticSanitizer.RequestId(RequestId) ?? "unavailable"}, retries {RetryCount}).");
+            return base.Message + context + (InputValidation is null ? string.Empty : $" {InputValidation}");
+        }
+    }
 
     /// <summary>Safe projections of server errors; raw response data must not be persisted.</summary>
     public IReadOnlyList<GraphQLErrorDiagnostic> GraphQlErrors { get; init; } = [];
