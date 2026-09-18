@@ -54,8 +54,8 @@ public static class GraphQLDiagnosticSanitizer
             return [new() { Type = null, Message = "Malformed GraphQL errors value.", Path = [] }];
         }
 
-        // Only identifiers from the query document, never input values, may survive in a path.
-        var identifiers = QueryIdentifiers(query);
+        // Only field response names, never names from input syntax, may survive in a path.
+        var identifiers = GraphQLResponseNames.Parse(query);
         return errors.EnumerateArray().Select(error => new GraphQLErrorDiagnostic
         {
             Type = ErrorType(GetString(error, "type")),
@@ -106,76 +106,4 @@ public static class GraphQLDiagnosticSanitizer
         return "Server message redacted (unrecognized format).";
     }
 
-    private static HashSet<string> QueryIdentifiers(string query)
-    {
-        var identifiers = new HashSet<string>(StringComparer.Ordinal);
-        for (var index = 0; index < query.Length;)
-        {
-            if (query[index] == '#')
-            {
-                while (index < query.Length && query[index] is not ('\r' or '\n'))
-                {
-                    index++;
-                }
-            }
-            else if (query[index] == '"')
-            {
-                SkipString(query.AsSpan(), ref index);
-            }
-            else if (char.IsAsciiLetter(query[index]) || query[index] == '_')
-            {
-                var start = index++;
-                while (index < query.Length && (char.IsAsciiLetterOrDigit(query[index]) || query[index] == '_'))
-                {
-                    index++;
-                }
-
-                identifiers.Add(query[start..index]);
-            }
-            else
-            {
-                index++;
-            }
-        }
-
-        return identifiers;
-    }
-
-    private static void SkipString(ReadOnlySpan<char> query, ref int index)
-    {
-        var block = query[index..].StartsWith("\"\"\"", StringComparison.Ordinal);
-        index += block ? 3 : 1;
-        // Unterminated literals consume the remainder rather than exposing their contents as names.
-        while (index < query.Length)
-        {
-            if (block)
-            {
-                if (query[index..].StartsWith("\\\"\"\"", StringComparison.Ordinal))
-                {
-                    index += 4;
-                }
-                else if (query[index..].StartsWith("\"\"\"", StringComparison.Ordinal))
-                {
-                    index += 3;
-                    return;
-                }
-                else
-                {
-                    index++;
-                }
-            }
-            else
-            {
-                var character = query[index++];
-                if (character == '\\' && index < query.Length)
-                {
-                    index++;
-                }
-                else if (character == '"')
-                {
-                    return;
-                }
-            }
-        }
-    }
 }
