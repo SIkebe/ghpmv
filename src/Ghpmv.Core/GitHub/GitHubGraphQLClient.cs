@@ -42,6 +42,8 @@ public sealed class GitHubGraphQLClient : IDisposable
     /// <summary>Invoked with a human-readable message before every rate-limit/retry wait.</summary>
     public Action<string>? OnRetry { get; set; }
 
+    public string EndpointHost => _httpClient.BaseAddress!.Host;
+
     /// <summary>Optional invocation-owned sink. The caller must dispose it.</summary>
     public SensitiveApiDiagnostics? SensitiveDiagnostics { get; init; }
 
@@ -108,19 +110,43 @@ public sealed class GitHubGraphQLClient : IDisposable
         string? requiredResultPath = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(mutation);
-        ArgumentException.ThrowIfNullOrWhiteSpace(requiredResultPath);
+        try
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(operationName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(mutation);
+            ArgumentException.ThrowIfNullOrWhiteSpace(requiredResultPath);
 
-        clientMutationId ??= Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-        var variableMap = ToVariableMap(variables);
-        variableMap["clientMutationId"] = clientMutationId;
-        var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
-        var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy, requiredResultPath);
-        return await ExecuteOperationAsync(payload, mutation, context, retryInternalErrors: true, cancellationToken).ConfigureAwait(false);
+            clientMutationId ??= Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+            var variableMap = ToVariableMap(variables);
+            variableMap["clientMutationId"] = clientMutationId;
+            var payload = JsonSerializer.Serialize(new { query = mutation, variables = variableMap });
+            var context = new MutationContext(operationName, clientMutationId, DateTimeOffset.UtcNow, target, retryPolicy, requiredResultPath);
+            return await ExecuteOperationAsync(payload, mutation, context, retryInternalErrors: true, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (Ghpmv.Core.Import.MigrationDiagnostics.Capture(exception, operationName))
+        {
+            throw;
+        }
     }
 
     private async Task<JsonElement> ExecuteOperationAsync(
+        string payload,
+        string query,
+        MutationContext? mutation,
+        bool retryInternalErrors,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ExecuteOperationCoreAsync(payload, query, mutation, retryInternalErrors, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (Ghpmv.Core.Import.MigrationDiagnostics.Capture(exception, mutation?.OperationName ?? "query"))
+        {
+            throw;
+        }
+    }
+
+    private async Task<JsonElement> ExecuteOperationCoreAsync(
         string payload,
         string query,
         MutationContext? mutation,

@@ -13,6 +13,9 @@ public sealed record ProjectSnapshot
 
     public required ProjectInfoSnapshot Project { get; init; }
 
+    /// <summary>Optional export provenance for migration diagnostics; absent in older snapshots.</summary>
+    public Ghpmv.Core.Import.MigrationProjectIdentity? Source { get; init; }
+
     public required IReadOnlyList<FieldSnapshot> Fields { get; init; }
 
     public required IReadOnlyList<ViewSnapshot> Views { get; init; }

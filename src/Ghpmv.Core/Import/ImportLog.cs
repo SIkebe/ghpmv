@@ -23,7 +23,7 @@ public sealed record ImportLog
     /// <summary>Node ID of the target project this log belongs to.</summary>
     public required string ProjectId { get; init; }
 
-    /// <summary>SHA-256 fingerprint of the complete source snapshot.</summary>
+    /// <summary>SHA-256 fingerprint of the migration payload, excluding diagnostic provenance.</summary>
     public string? SourceSnapshotFingerprint { get; init; }
 
     /// <summary>Source item position (as an invariant string) → target item node id.</summary>
@@ -199,7 +199,7 @@ public sealed record ImportLog
     public static string ComputeSnapshotFingerprint(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, SnapshotJsonContext.Default.ProjectSnapshot);
+        var json = JsonSerializer.SerializeToUtf8Bytes(snapshot with { Source = null }, SnapshotJsonContext.Default.ProjectSnapshot);
         return Convert.ToHexString(SHA256.HashData(json));
     }
 }
@@ -221,6 +221,14 @@ public sealed record ImportItemState
     public string? PositionError { get; set; }
 
     public string? ArchiveError { get; set; }
+
+    public MigrationDiagnosticContext? FieldValuesErrorContext { get; set; }
+
+    public MigrationDiagnosticContext? PositionErrorContext { get; set; }
+
+    public MigrationDiagnosticContext? ArchiveErrorContext { get; set; }
+
+    public List<MigrationDiagnosticContext>? FieldValueFailures { get; set; }
 
     [JsonIgnore]
     public string? LastError => FieldValuesError ?? PositionError ?? ArchiveError;

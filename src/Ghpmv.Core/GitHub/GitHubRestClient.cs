@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
@@ -9,6 +10,7 @@ namespace Ghpmv.Core.GitHub;
 public sealed class GitHubRestClient : IDisposable
 {
     private static readonly Uri DefaultBaseUri = new("https://api.github.com/");
+    private static readonly ConditionalWeakTable<HttpRequestException, GitHubRestFailureDiagnostic> Failures = new();
 
     private readonly HttpClient _httpClient;
 
@@ -33,6 +35,9 @@ public sealed class GitHubRestClient : IDisposable
     /// <summary>Optional invocation-owned sink. The caller must dispose it.</summary>
     public SensitiveApiDiagnostics? SensitiveDiagnostics { get; init; }
 
+    public static GitHubRestFailureDiagnostic? GetFailureDiagnostic(HttpRequestException exception) =>
+        Failures.TryGetValue(exception, out var diagnostic) ? diagnostic : null;
+
     public static Uri ToRestBaseUri(Uri graphQlEndpoint)
     {
         ArgumentNullException.ThrowIfNull(graphQlEndpoint);
@@ -56,7 +61,7 @@ public sealed class GitHubRestClient : IDisposable
     public async Task<JsonElement?> GetAsync(string path, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, ApiOperation.RestGet, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             await CaptureFailureAsync(response, ApiOperation.RestGet, cancellationToken).ConfigureAwait(false);
@@ -69,14 +74,14 @@ public sealed class GitHubRestClient : IDisposable
     public async Task<JsonElement> PostAsync(string path, object body, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = CreateJsonContent(body) };
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, ApiOperation.RestPost, cancellationToken).ConfigureAwait(false);
         return await ReadJsonAsync(response, ApiOperation.RestPost, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<JsonElement> PutAsync(string path, object body, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Put, path) { Content = CreateJsonContent(body) };
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, ApiOperation.RestPut, cancellationToken).ConfigureAwait(false);
         return await ReadJsonAsync(response, ApiOperation.RestPut, cancellationToken).ConfigureAwait(false);
     }
 
@@ -89,7 +94,7 @@ public sealed class GitHubRestClient : IDisposable
             Content = new StringContent("{}", Encoding.UTF8, "application/json"),
         };
         request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2026-03-10");
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, ApiOperation.RestValidationProbe, cancellationToken).ConfigureAwait(false);
         var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         CaptureFailure(response, ApiOperation.RestValidationProbe, text);
         response.Headers.TryGetValues("X-Accepted-GitHub-Permissions", out var acceptedPermissions);
@@ -107,7 +112,7 @@ public sealed class GitHubRestClient : IDisposable
     public async Task DeleteAsync(string path, CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Delete, path);
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await SendAsync(request, ApiOperation.RestDelete, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             await CaptureFailureAsync(response, ApiOperation.RestDelete, cancellationToken).ConfigureAwait(false);
@@ -122,7 +127,7 @@ public sealed class GitHubRestClient : IDisposable
     private static StringContent CreateJsonContent(object body)
         => new(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
 
-    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, ApiOperation operation, CancellationToken cancellationToken)
     {
         try
         {
@@ -130,11 +135,11 @@ public sealed class GitHubRestClient : IDisposable
         }
         catch (HttpRequestException exception)
         {
-            throw new HttpRequestException("GitHub REST transport failed.", null, exception.StatusCode);
+            throw Failure("GitHub REST transport failed.", operation, exception.StatusCode, null, "transport-failure");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new HttpRequestException("GitHub REST request timed out.");
+            throw Failure("GitHub REST request timed out.", operation, null, null, "request-timeout");
         }
         catch (OperationCanceledException)
         {
@@ -146,6 +151,18 @@ public sealed class GitHubRestClient : IDisposable
         response.Headers.TryGetValues("X-GitHub-Request-Id", out var values)
             ? GraphQLDiagnosticSanitizer.RequestId(values.FirstOrDefault())
             : null;
+
+    private static HttpRequestException Failure(
+        string message,
+        ApiOperation operation,
+        HttpStatusCode? statusCode,
+        string? requestId,
+        string failureReason)
+    {
+        var exception = new HttpRequestException(message, null, statusCode);
+        Failures.Add(exception, new(operation.ToString(), GraphQLDiagnosticSanitizer.RequestId(requestId), 0, failureReason));
+        return exception;
+    }
 
     private void CaptureFailure(HttpResponseMessage response, ApiOperation operation, string body)
     {
@@ -169,10 +186,12 @@ public sealed class GitHubRestClient : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             CaptureFailure(response, operation, text);
-            throw new HttpRequestException(
+            throw Failure(
                 $"GitHub REST error {(int)response.StatusCode} (operation {operation}, request ID {GetRequestId(response) ?? "unavailable"}, retries 0).",
-                null,
-                response.StatusCode);
+                operation,
+                response.StatusCode,
+                GetRequestId(response),
+                "http-error");
         }
 
         if (string.IsNullOrWhiteSpace(text))
@@ -187,10 +206,16 @@ public sealed class GitHubRestClient : IDisposable
         }
         catch (JsonException)
         {
-            throw new HttpRequestException("GitHub REST returned malformed JSON.", null, response.StatusCode);
+            throw Failure("GitHub REST returned malformed JSON.", operation, response.StatusCode, GetRequestId(response), "malformed-response");
         }
     }
 }
+
+public sealed record GitHubRestFailureDiagnostic(
+    string Operation,
+    string? RequestId,
+    int RetryCount,
+    string FailureReason);
 
 public sealed record GitHubRestProbeResponse(
     HttpStatusCode StatusCode,
