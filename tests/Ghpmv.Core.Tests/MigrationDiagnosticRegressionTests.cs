@@ -48,16 +48,22 @@ public sealed class MigrationDiagnosticRegressionTests
             Assert.Equal("Team", context.Element?.Kind);
             Assert.Equal("destination/team", context.Element?.Name);
             Assert.Equal("source", context.Source?.Owner);
+            Assert.Equal("preflight-linked-team", context.Operation);
             var output = new List<string>();
             diagnostics.WriteFailure(exception, output.Add);
             Assert.Contains(output, line => line.Contains("target: destination / Project 42", StringComparison.Ordinal));
             Assert.Contains(output, line => line.Contains("PVT_known", StringComparison.Ordinal));
+            Assert.Contains("operation: preflight-linked-team", output);
             await diagnostics.SaveFailureAsync(directory, exception, TestContext.Current.CancellationToken);
             using var report = JsonDocument.Parse(await File.ReadAllTextAsync(
                 Path.Combine(directory, ImportFailureDiagnostics.FileName), TestContext.Current.CancellationToken));
             var target = report.RootElement.GetProperty("context").GetProperty("target");
             Assert.Equal("PVT_known", target.GetProperty("id").GetString());
             Assert.Equal(42, target.GetProperty("number").GetInt32());
+            Assert.Equal("preflight-linked-team", report.RootElement.GetProperty("context").GetProperty("operation").GetString());
+            var apiFailure = report.RootElement.GetProperty("exceptions").EnumerateArray()
+                .Single(detail => detail.GetProperty("type").GetString() == typeof(GitHubGraphQLException).FullName);
+            Assert.Equal("query", apiFailure.GetProperty("operationKind").GetString());
             Assert.DoesNotContain("SYNTHETIC-RAW-BODY", report.RootElement.GetRawText(), StringComparison.Ordinal);
             Assert.Equal(2, handler.RequestCount);
         }
@@ -65,6 +71,27 @@ public sealed class MigrationDiagnosticRegressionTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    [InlineData("preflight-linked-team", false)]
+    [InlineData("preflight-linked-team", true)]
+    public async Task Query_failures_preserve_scoped_operation_or_use_query_when_unspecified(string? operation, bool withoutInternalRetry)
+    {
+        using var scope = MigrationDiagnostics.Begin(new() { Operation = operation });
+        using var handler = new TeamPreflightHandler();
+        using var client = new GitHubGraphQLClient("token", null, handler, static (_, _) => Task.CompletedTask);
+        const string query = "query { organization(login: \"synthetic\") { team(slug: \"synthetic\") { id } } }";
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => withoutInternalRetry
+            ? client.QueryWithoutInternalErrorRetryAsync(query, null, TestContext.Current.CancellationToken)
+            : client.QueryAsync(query, cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(operation ?? "query", MigrationDiagnostics.Get(exception)?.Operation);
+        Assert.Equal("query", exception.OperationKind);
+        Assert.Equal("FORBIDDEN", exception.ErrorType);
+        Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]

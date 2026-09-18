@@ -140,7 +140,8 @@ public sealed class GitHubGraphQLClient : IDisposable
         {
             return await ExecuteOperationCoreAsync(payload, query, mutation, retryInternalErrors, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (Ghpmv.Core.Import.MigrationDiagnostics.Capture(exception, mutation?.OperationName ?? "query"))
+        catch (Exception exception) when (Ghpmv.Core.Import.MigrationDiagnostics.Capture(
+            exception, mutation?.OperationName ?? Ghpmv.Core.Import.MigrationDiagnostics.Current?.Operation ?? "query"))
         {
             throw;
         }
