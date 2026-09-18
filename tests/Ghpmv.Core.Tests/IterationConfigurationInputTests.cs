@@ -145,6 +145,50 @@ public sealed class IterationConfigurationInputTests
         Assert.Equal(3, iteration.GetProperty("duration").GetInt32());
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("2026-02-29")]
+    [InlineData("2026-13-01")]
+    [InlineData("2026-09-31")]
+    [InlineData("2026-9-14")]
+    [InlineData("2026/09/14")]
+    [InlineData(" 2026-09-14")]
+    [InlineData("2026-09-14 ")]
+    [InlineData("2026-09-14T00:00:00Z")]
+    [InlineData("SYNTHETIC-INVALID-DATE")]
+    public void Every_active_and_completed_start_date_requires_exact_valid_calendar_date(string? date)
+    {
+        using var client = new GitHubGraphQLClient("test-token");
+        var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
+        var valid = Iteration("valid", "2026-01-05", 7);
+        // Deserialization can supply null despite the persisted contract's non-nullable property.
+        var invalid = valid with { StartDate = date! };
+        foreach (var configuration in new[]
+        {
+            Configuration(7, 1) with { Iterations = [invalid, valid] },
+            Configuration(7, 1) with { Iterations = [valid, invalid] },
+            Configuration(7, 1) with { CompletedIterations = [invalid, valid] },
+            Configuration(7, 1) with { CompletedIterations = [valid, invalid] },
+        })
+        {
+            var exception = Assert.Throws<InvalidDataException>(() =>
+                importer.BuildIterationConfigurationInput("Probe Sprint", configuration));
+            Assert.Equal("Iteration field must have a valid yyyy-MM-dd start date for every active and completed iteration.",
+                exception.Message);
+        }
+    }
+
+    [Fact]
+    public void Valid_leap_day_is_preserved_in_the_schedule()
+    {
+        using var client = new GitHubGraphQLClient("test-token");
+        var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
+        var input = JsonSerializer.SerializeToElement(importer.BuildIterationConfigurationInput(
+            "Probe Sprint", Configuration(7, 1) with { Iterations = [Iteration("leap", "2024-02-29", 7)] }));
+        Assert.Equal("2024-02-29", Assert.Single(input.GetProperty("iterations").EnumerateArray()).GetProperty("startDate").GetString());
+    }
+
     private static IterationConfigurationSnapshot Configuration(int duration, int startDay) => new()
     {
         Duration = duration,

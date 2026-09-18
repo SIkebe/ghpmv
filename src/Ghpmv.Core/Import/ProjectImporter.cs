@@ -784,6 +784,14 @@ public sealed class ProjectImporter
         {
             throw new InvalidDataException("Iteration field must have a positive duration for every active and completed iteration.");
         }
+
+        if (configuration.Iterations.Concat(configuration.CompletedIterations).Any(iteration =>
+                !DateOnly.TryParseExact(iteration.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out _)))
+        {
+            throw new InvalidDataException(
+                "Iteration field must have a valid yyyy-MM-dd start date for every active and completed iteration.");
+        }
     }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)

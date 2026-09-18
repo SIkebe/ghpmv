@@ -178,7 +178,7 @@ Creating a new project emits `result=created`. The result line also includes the
 
 ### Recovering from an ambiguous mutation result
 
-Uninitialized Iteration fields (duration `0`, start day `0`, and no active or completed iterations) are recreated without explicit configuration, preserving their unset state rather than inventing a schedule. Initialized fields with an empty iteration list retain their configured start weekday. Other nonpositive durations or invalid start weekdays fail validation before any Project write. This fix does not discard pending operations from earlier failed imports; the reconciliation rules below still apply.
+Uninitialized Iteration fields (duration `0`, start day `0`, and no active or completed iterations) are recreated without explicit configuration, preserving their unset state rather than inventing a schedule. Initialized fields with an empty iteration list retain their configured start weekday. Other nonpositive durations or invalid start weekdays fail validation before any Project write. Every active and completed iteration start date is also validated as an exact, valid yyyy-MM-dd calendar date before any API call; invalid values are not echoed in diagnostic messages. This fix does not discard pending operations from earlier failed imports; the reconciliation rules below still apply.
 
 Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `ghpmv` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
 
