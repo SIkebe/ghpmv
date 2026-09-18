@@ -121,7 +121,9 @@ public class CliImportTests
             var messages = new List<string>();
             var importer = new ProjectImporter(client)
             {
-                OperationLogDirectory = directory, OnConflict = ConflictAction.Update, OnProgress = messages.Add,
+                OperationLogDirectory = directory,
+                OnConflict = ConflictAction.Update,
+                OnProgress = messages.Add,
             };
             var result = await importer.ImportAsync(snapshot, "target", TestContext.Current.CancellationToken);
             Assert.Equal(42, result.ProjectNumber);
@@ -219,6 +221,7 @@ public class CliImportTests
         try
         {
             var expectedFileCount = 0;
+            var runIds = new HashSet<string>(StringComparer.Ordinal);
             foreach (var enabled in new[] { false, true, false })
             {
                 using var server = new GraphQlStubServer(
@@ -260,7 +263,28 @@ public class CliImportTests
                 }
                 if (command == "import")
                 {
-                    Assert.DoesNotContain(sentinel, await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), cancellationToken), StringComparison.Ordinal);
+                    var json = await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), cancellationToken);
+                    Assert.DoesNotContain(sentinel, json, StringComparison.Ordinal);
+                    using var report = JsonDocument.Parse(json);
+                    var root = report.RootElement;
+                    var runId = root.GetProperty("runId").GetString()!;
+                    Assert.True(runIds.Add(runId));
+                    Assert.Contains($"runId: {runId}", result.Error, StringComparison.Ordinal);
+                    var detail = Assert.Single(root.GetProperty("exceptions").EnumerateArray());
+                    Assert.Equal(runId, detail.GetProperty("runId").GetString());
+                    Assert.Contains($"attemptId: {detail.GetProperty("attemptId").GetString()}", result.Error, StringComparison.Ordinal);
+                    Assert.Equal(enabled ? "captured" : "disabled", detail.GetProperty("sensitiveResponseCapture").GetString());
+                    if (enabled)
+                    {
+                        Assert.Equal(Path.GetFullPath(files[0]), root.GetProperty("sensitiveDiagnosticsFile").GetString());
+                        using var raw = JsonDocument.Parse(await File.ReadAllTextAsync(files[0], cancellationToken));
+                        Assert.Equal(runId, raw.RootElement.GetProperty("runId").GetString());
+                        Assert.Equal(detail.GetProperty("attemptId").GetString(), raw.RootElement.GetProperty("attemptId").GetString());
+                    }
+                    else
+                    {
+                        Assert.Equal(JsonValueKind.Null, root.GetProperty("sensitiveDiagnosticsFile").ValueKind);
+                    }
                 }
             }
         }
@@ -305,6 +329,82 @@ public class CliImportTests
         var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         await process.WaitForExitAsync(TestContext.Current.CancellationToken);
         return (process.ExitCode, await output, await error);
+    }
+
+    [Fact]
+    public async Task Import_invocation_shares_correlation_across_rest_preflight_and_graphql_with_separate_report_directory()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-correlation-" + Guid.NewGuid().ToString("N"));
+        var reportDirectory = Path.Combine(directory, "snapshot");
+        await SnapshotFile.SaveAsync(MinimalSnapshot() with
+        {
+            Fields = [new FieldSnapshot
+            {
+                Name = "Synthetic issue field", DataType = "TEXT",
+                IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+            }],
+        }, reportDirectory, TestContext.Current.CancellationToken);
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            """{"message":"Validation Failed SYNTHETIC-PROBE-SECRET"}""",
+            """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-GRAPHQL-SECRET"}]}""")
+        {
+            ResponseStatusCodes = [200, 422, 200],
+        };
+        try
+        {
+            var result = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "synthetic", "--in", reportDirectory, "--token", "synthetic-token",
+                "--target-base-url", server.GraphQlUrl, "--on-conflict", "update", "--allow-sensitive-diagnostics", "--no-update-check",
+            ]);
+            Assert.Equal(1, result.ExitCode);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(reportDirectory, "import-error.json"), TestContext.Current.CancellationToken));
+            var rawPath = Assert.Single(Directory.GetFiles(directory, "ghpmv-sensitive-api-*.jsonl"));
+            Assert.Equal(rawPath, report.RootElement.GetProperty("sensitiveDiagnosticsFile").GetString());
+            var lines = await File.ReadAllLinesAsync(rawPath, TestContext.Current.CancellationToken);
+            Assert.Equal(2, lines.Length);
+            using var probe = JsonDocument.Parse(lines[0]);
+            using var graph = JsonDocument.Parse(lines[1]);
+            var runId = report.RootElement.GetProperty("runId").GetString();
+            Assert.Equal(runId, probe.RootElement.GetProperty("runId").GetString());
+            Assert.Equal(runId, graph.RootElement.GetProperty("runId").GetString());
+            Assert.Equal("RestValidationProbe", probe.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("GraphQlMutation", graph.RootElement.GetProperty("operation").GetString());
+            Assert.NotEqual(probe.RootElement.GetProperty("attemptId").GetString(), graph.RootElement.GetProperty("attemptId").GetString());
+            var exception = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            Assert.Equal(graph.RootElement.GetProperty("attemptId").GetString(), exception.GetProperty("attemptId").GetString());
+            Assert.DoesNotContain("SYNTHETIC-", result.Error + result.Output + report.RootElement.GetRawText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Local_only_import_failure_with_opt_in_does_not_claim_a_sensitive_file()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-local-correlation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var result = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "synthetic", "--in", directory, "--token", " ", "--allow-sensitive-diagnostics", "--no-update-check",
+            ]);
+            Assert.Equal(1, result.ExitCode);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), TestContext.Current.CancellationToken));
+            Assert.True(Guid.TryParseExact(report.RootElement.GetProperty("runId").GetString(), "N", out _));
+            Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("sensitiveDiagnosticsFile").ValueKind);
+            Assert.Equal("not-created", report.RootElement.GetProperty("sensitiveDiagnosticsState").GetString());
+            Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("exceptions")[0].GetProperty("attemptId").ValueKind);
+            Assert.Empty(Directory.GetFiles(directory, "ghpmv-sensitive-api-*"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
     }
 
     [Fact]
@@ -1700,6 +1800,7 @@ public class CliImportTests
         }
 
         public string GraphQlUrl { get; }
+        public int[]? ResponseStatusCodes { get; init; }
 
         public List<string> RequestBodies { get; } = [];
 
@@ -1738,6 +1839,7 @@ public class CliImportTests
                 var responseIndex = Math.Min(RequestBodies.Count - 1, _responses.Length - 1);
                 var response = Encoding.UTF8.GetBytes(_responses[responseIndex]);
                 context.Response.ContentType = "application/json";
+                if (ResponseStatusCodes is { } statuses) context.Response.StatusCode = statuses[Math.Min(responseIndex, statuses.Length - 1)];
                 context.Response.ContentLength64 = response.Length;
                 await context.Response.OutputStream.WriteAsync(response, cancellationToken);
                 context.Response.Close();

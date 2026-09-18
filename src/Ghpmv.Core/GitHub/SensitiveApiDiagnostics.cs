@@ -18,23 +18,48 @@ public sealed class SensitiveApiDiagnostics : IDisposable
     private bool _failed;
 
     public SensitiveApiDiagnostics(string directory, Action<string> warning)
+        : this(directory, warning, null)
+    {
+    }
+
+    public SensitiveApiDiagnostics(string directory, Action<string> warning, ApiDiagnosticSession? session)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentNullException.ThrowIfNull(warning);
         FilePath = Path.GetFullPath(Path.Combine(directory, $"ghpmv-sensitive-api-{Guid.NewGuid():N}.jsonl"));
         _warning = warning;
+        Session = session ?? new ApiDiagnosticSession();
+        if (Session.SensitiveDiagnostics is not null)
+        {
+            throw new ArgumentException("A diagnostic session can own only one sensitive sink.", nameof(session));
+        }
+        Session.SensitiveDiagnostics = this;
     }
 
     public string FilePath { get; }
-
-    internal void Record(ApiOperation operation, HttpStatusCode status, string? requestId, int retryCount, string body)
+    public ApiDiagnosticSession Session { get; }
+    internal Func<string, FileStreamOptions, FileStream> OpenFile { get; init; } = static (path, options) => new(path, options);
+    internal string? CreatedFilePath { get { lock (_sync) return _stream is null ? null : FilePath; } }
+    internal string CaptureState
     {
+        get { lock (_sync) return _failed ? (_stream is null ? "unavailable" : "partial") : (_stream is null ? "not-created" : "available"); }
+    }
+
+    internal void Record(ApiOperation operation, HttpStatusCode status, string? requestId, int retryCount, string body,
+        ApiRequestAttempt? attempt = null)
+    {
+        attempt ??= Session.BeginAttempt();
         lock (_sync)
         {
-            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_disposed)
+            {
+                attempt.SensitiveResponseCapture = "failed";
+                throw ApiDiagnosticSession.Attach(new ObjectDisposedException(nameof(SensitiveApiDiagnostics)), attempt);
+            }
             if (_failed)
             {
-                throw WriteFailure();
+                attempt.SensitiveResponseCapture = "failed";
+                throw ApiDiagnosticSession.Attach(WriteFailure(attempt), attempt);
             }
 
             try
@@ -54,7 +79,7 @@ public sealed class SensitiveApiDiagnostics : IDisposable
                         options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
                     }
 
-                    _stream = new FileStream(FilePath, options);
+                    _stream = OpenFile(FilePath, options);
                 }
 
                 var length = Math.Min(body.Length, MaximumBodyCharacters);
@@ -65,6 +90,8 @@ public sealed class SensitiveApiDiagnostics : IDisposable
 
                 var entry = new SensitiveApiResponse
                 {
+                    RunId = attempt.RunId,
+                    AttemptId = attempt.AttemptId,
                     TimestampUtc = DateTimeOffset.UtcNow,
                     Operation = operation.ToString(),
                     StatusCode = (int)status,
@@ -77,18 +104,24 @@ public sealed class SensitiveApiDiagnostics : IDisposable
                 JsonSerializer.Serialize(_stream, entry, SensitiveApiJsonContext.Default.SensitiveApiResponse);
                 _stream.WriteByte((byte)'\n');
                 _stream.Flush(flushToDisk: true);
+                attempt.SensitiveResponseCapture = "captured";
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
                 _failed = true;
-                throw WriteFailure();
+                attempt.SensitiveResponseCapture = "failed";
+                throw ApiDiagnosticSession.Attach(WriteFailure(attempt), attempt);
             }
         }
     }
 
-    private IOException WriteFailure()
+    private IOException WriteFailure(ApiRequestAttempt? attempt = null)
     {
         var message = $"Sensitive API diagnostic file could not be written: {FilePath}. No response body was redirected to ordinary logs. The file may be incomplete; inspect target state before retrying mutations.";
+        if (attempt is not null)
+        {
+            message += $" (runId {attempt.RunId}, attemptId {attempt.AttemptId}, sensitiveResponseCapture {attempt.SensitiveResponseCapture})";
+        }
         _warning($"error: {message}");
         return new IOException(message);
     }
@@ -109,6 +142,7 @@ public sealed class SensitiveApiDiagnostics : IDisposable
             }
             catch (IOException)
             {
+                _failed = true;
                 throw WriteFailure();
             }
         }
@@ -128,6 +162,8 @@ internal enum ApiOperation
 
 internal sealed record SensitiveApiResponse
 {
+    public required string RunId { get; init; }
+    public required string AttemptId { get; init; }
     public required DateTimeOffset TimestampUtc { get; init; }
     public required string Operation { get; init; }
     public required int StatusCode { get; init; }

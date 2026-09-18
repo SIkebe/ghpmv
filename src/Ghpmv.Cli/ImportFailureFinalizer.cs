@@ -16,7 +16,8 @@ internal sealed class ImportFailureFinalizer(
     public async Task<Exception?> CompleteAsync(
         Exception? importFailure,
         Func<Task>? restoreTemplateAsync,
-        Func<ValueTask>? disposeBrowserAsync)
+        Func<ValueTask>? disposeBrowserAsync,
+        Action? disposeApiDiagnostics = null)
     {
         if (importFailure is not null)
         {
@@ -64,6 +65,20 @@ internal sealed class ImportFailureFinalizer(
                     importFailure,
                     exception,
                     "Import failed and the browser session could not be closed.");
+            }
+        }
+
+        if (disposeApiDiagnostics is not null)
+        {
+            try
+            {
+                disposeApiDiagnostics();
+            }
+            catch (Exception exception)
+            {
+                diagnostics.RecordCleanupFailure("disposing-api-diagnostics", exception);
+                diagnostics.WriteFailure(exception, _writeError);
+                importFailure = Combine(importFailure, exception, "Sensitive API diagnostics could not be closed.");
             }
         }
 

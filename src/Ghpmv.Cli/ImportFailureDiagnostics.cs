@@ -28,6 +28,7 @@ internal sealed class ImportFailureDiagnostics : IDisposable
     private string? _targetId;
     private string? _targetHost;
     private IDisposable? _scope;
+    private readonly ApiDiagnosticSession _apiDiagnostics;
 
     public void SetSnapshot(ProjectSnapshot snapshot, string? requestedTitle = null)
     {
@@ -77,6 +78,14 @@ internal sealed class ImportFailureDiagnostics : IDisposable
         if (transport?.StatusCode is { } status) write($"httpStatus: {status}");
         if (transport?.ErrorType is { } errorType) write($"errorCode: {errorType}");
         if (transport?.RequestId is { } requestId) write($"requestId: {requestId}");
+        write($"runId: {_apiDiagnostics.RunId}");
+        if (details.FirstOrDefault(detail => detail.AttemptId is not null) is { } correlated)
+        {
+            write($"attemptId: {correlated.AttemptId}");
+            write($"sensitiveResponseCapture: {correlated.SensitiveResponseCapture}");
+        }
+        if (_apiDiagnostics.SensitiveDiagnosticsFile is { } file) write($"sensitiveDiagnosticsFile: {file}");
+        write($"sensitiveDiagnosticsState: {_apiDiagnostics.SensitiveDiagnosticsState}");
         if (details.FirstOrDefault(detail => detail.RecoveryHint is not null)?.RecoveryHint is { } hint) write(hint);
     }
 
@@ -94,12 +103,14 @@ internal sealed class ImportFailureDiagnostics : IDisposable
         string targetOwner,
         string ownerType,
         int? requestedTargetProjectNumber,
-        bool browserAutomationEnabled)
+        bool browserAutomationEnabled,
+        ApiDiagnosticSession? apiDiagnostics = null)
     {
         _targetOwner = targetOwner;
         _ownerType = ownerType;
         _requestedTargetProjectNumber = requestedTargetProjectNumber;
         _browserAutomationEnabled = browserAutomationEnabled;
+        _apiDiagnostics = apiDiagnostics ?? new ApiDiagnosticSession();
     }
 
     public void SetStage(string stage)
@@ -144,8 +155,13 @@ internal sealed class ImportFailureDiagnostics : IDisposable
                 Operation = stage,
                 Element = new()
                 {
-                    Kind = stage == "disposing-browser-session" ? "BrowserSession" : "Project",
-                    TargetId = stage == "disposing-browser-session" ? null : _targetId,
+                    Kind = stage switch
+                    {
+                        "disposing-browser-session" => "BrowserSession",
+                        "disposing-api-diagnostics" => "DiagnosticFile",
+                        _ => "Project",
+                    },
+                    TargetId = stage is "disposing-browser-session" or "disposing-api-diagnostics" ? null : _targetId,
                 },
             });
             _cleanupFailures.Add(new ImportCleanupFailure
@@ -154,6 +170,7 @@ internal sealed class ImportFailureDiagnostics : IDisposable
                 Type = exception.GetType().FullName ?? exception.GetType().Name,
                 Message = FormatExceptionForReport(exception),
                 Context = MigrationDiagnostics.Get(exception),
+                Exceptions = DescribeExceptions(exception),
             });
         }
     }
@@ -212,6 +229,9 @@ internal sealed class ImportFailureDiagnostics : IDisposable
 
         var report = new ImportFailureReport
         {
+            RunId = _apiDiagnostics.RunId,
+            SensitiveDiagnosticsFile = _apiDiagnostics.SensitiveDiagnosticsFile,
+            SensitiveDiagnosticsState = _apiDiagnostics.SensitiveDiagnosticsState,
             OccurredAtUtc = DateTimeOffset.UtcNow,
             Command = "import",
             TargetOwner = MigrationDiagnostics.Text(_targetOwner)!,
@@ -295,16 +315,20 @@ internal sealed class ImportFailureDiagnostics : IDisposable
         var graphQlException = exception as GitHubGraphQLException;
         var ambiguousException = exception as AmbiguousMutationResultException;
         var httpException = exception as HttpRequestException;
-        var restDiagnostic = httpException is null ? null : GitHubRestClient.GetFailureDiagnostic(httpException);
+        var restDiagnostic = GitHubRestClient.GetFailureDiagnostic(exception);
+        var attempt = ApiDiagnosticSession.GetAttempt(exception);
         details.Add(new ImportExceptionDetail
         {
+            RunId = attempt?.RunId,
+            AttemptId = attempt?.AttemptId,
+            SensitiveResponseCapture = attempt?.SensitiveResponseCapture,
             Depth = depth,
             Context = MigrationDiagnostics.Get(exception),
             Type = exception.GetType().FullName ?? exception.GetType().Name,
             Message = FormatExceptionForReport(exception),
             StackTrace = exception.StackTrace,
             ErrorType = GraphQLDiagnosticSanitizer.ErrorType(graphQlException?.ErrorType),
-            StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode),
+            StatusCode = FormatStatusCode(graphQlException?.StatusCode ?? httpException?.StatusCode ?? restDiagnostic?.StatusCode),
             RequestId = GraphQLDiagnosticSanitizer.RequestId(graphQlException?.RequestId ?? restDiagnostic?.RequestId),
             FailureReason = graphQlException?.FailureReason ?? restDiagnostic?.FailureReason,
             OperationKind = graphQlException?.OperationKind ?? restDiagnostic?.Operation,
@@ -369,6 +393,9 @@ internal sealed class ImportFailureDiagnostics : IDisposable
 
 internal sealed record ImportFailureReport
 {
+    public string? RunId { get; init; }
+    public string? SensitiveDiagnosticsFile { get; init; }
+    public string? SensitiveDiagnosticsState { get; init; }
     public MigrationDiagnosticContext? Context { get; init; }
     public required DateTimeOffset OccurredAtUtc { get; init; }
 
@@ -405,6 +432,9 @@ internal sealed record ImportProgressEntry
 
 internal sealed record ImportExceptionDetail
 {
+    public string? RunId { get; init; }
+    public string? AttemptId { get; init; }
+    public string? SensitiveResponseCapture { get; init; }
     public MigrationDiagnosticContext? Context { get; init; }
     public required int Depth { get; init; }
 
@@ -443,6 +473,7 @@ internal sealed record ImportExceptionDetail
 
 internal sealed record ImportCleanupFailure
 {
+    public ImportExceptionDetail[] Exceptions { get; init; } = [];
     public MigrationDiagnosticContext? Context { get; init; }
     public required string Stage { get; init; }
 

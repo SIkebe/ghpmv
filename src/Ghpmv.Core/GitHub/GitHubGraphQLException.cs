@@ -34,6 +34,8 @@ public class GitHubGraphQLException : Exception
 
     public string? RequestId { get; init; }
 
+    public ApiRequestAttempt? RequestAttempt => ApiDiagnosticSession.GetAttempt(this);
+
     /// <summary>A locally defined reason, independent of the untrusted server message.</summary>
     public string? FailureReason { get; init; }
 
@@ -51,7 +53,10 @@ public class GitHubGraphQLException : Exception
                 ? string.Empty
                 : string.Create(CultureInfo.InvariantCulture,
                     $" (operation {(OperationKind is "query" or "mutation" ? OperationKind : "unknown")}, HTTP {(StatusCode is { } status ? ((int)status).ToString(CultureInfo.InvariantCulture) : "unavailable")}, code {GraphQLDiagnosticSanitizer.ErrorType(ErrorType) ?? "unknown"}, request ID {GraphQLDiagnosticSanitizer.RequestId(RequestId) ?? "unavailable"}, retries {RetryCount}).");
-            return base.Message + context + (InputValidation is null ? string.Empty : $" {InputValidation}");
+            var correlation = RequestAttempt is { } attempt
+                ? $" (runId {attempt.RunId}, attemptId {attempt.AttemptId}, sensitiveResponseCapture {attempt.SensitiveResponseCapture})"
+                : string.Empty;
+            return base.Message + context + correlation + (InputValidation is null ? string.Empty : $" {InputValidation}");
         }
     }
 

@@ -26,9 +26,10 @@ public static class ImportCapabilityPreflight
                 || !response.AcceptsIssueFieldsWrite
                 || !response.ReportsMissingInput)
             {
-                throw new InvalidOperationException(
+                throw GitHubRestClient.ProbeFailure(
                     "Importing organization Issue Fields requires an administrator-owned token with Issue Fields write permission "
-                    + $"(REST validation preflight returned HTTP {(int)response.StatusCode}, accepts Issue Fields write: {response.AcceptsIssueFieldsWrite}, reports missing input: {response.ReportsMissingInput}, request ID {response.RequestId ?? "unavailable"}, retries 0).");
+                    + $"(REST validation preflight returned HTTP {(int)response.StatusCode}, accepts Issue Fields write: {response.AcceptsIssueFieldsWrite}, reports missing input: {response.ReportsMissingInput}, request ID {response.RequestId ?? "unavailable"}, retries 0).",
+                    response);
             }
         }
 

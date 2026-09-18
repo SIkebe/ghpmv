@@ -160,11 +160,21 @@ public class ProjectTemplateWriteSessionTests
                 var failures = Assert.IsType<AggregateException>(exception.InnerException);
                 Assert.Equal(2, failures.InnerExceptions.Count);
                 Assert.All(failures.InnerExceptions, failure => Assert.IsType<IOException>(failure));
+                var attempts = failures.InnerExceptions.Select(ApiDiagnosticSession.GetAttempt).ToArray();
+                Assert.All(attempts, attempt =>
+                {
+                    Assert.Equal(diagnostics.Session.RunId, attempt!.RunId);
+                    Assert.Equal("failed", attempt.SensitiveResponseCapture);
+                });
+                Assert.NotEqual(attempts[0]!.AttemptId, attempts[1]!.AttemptId);
                 Assert.Equal([true], persistedStates);
             }
             else
             {
-                await Assert.ThrowsAsync<IOException>(PrepareAsync);
+                var exception = await Assert.ThrowsAsync<IOException>(PrepareAsync);
+                var attempt = Assert.IsType<ApiRequestAttempt>(ApiDiagnosticSession.GetAttempt(exception));
+                Assert.Equal(diagnostics.Session.RunId, attempt.RunId);
+                Assert.Equal("failed", attempt.SensitiveResponseCapture);
                 Assert.Equal([true, false], persistedStates);
             }
 
@@ -177,6 +187,8 @@ public class ProjectTemplateWriteSessionTests
             Assert.Contains(warnings, message => message.Contains("could not be written", StringComparison.Ordinal));
             Assert.DoesNotContain(warnings, message => message.Contains("SYNTHETIC-ERROR-BODY", StringComparison.Ordinal));
             Assert.False(File.Exists(diagnostics.FilePath));
+            Assert.Null(diagnostics.Session.SensitiveDiagnosticsFile);
+            Assert.Equal("unavailable", diagnostics.Session.SensitiveDiagnosticsState);
         }
         finally
         {

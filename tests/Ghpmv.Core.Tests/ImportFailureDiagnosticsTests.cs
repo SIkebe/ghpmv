@@ -70,6 +70,11 @@ public sealed class ImportFailureDiagnosticsTests
         Assert.NotNull(report);
         Assert.Null(report.Context);
         Assert.Null(Assert.Single(report.Exceptions).Context);
+        Assert.Null(report.RunId);
+        Assert.Null(report.SensitiveDiagnosticsFile);
+        Assert.Null(report.SensitiveDiagnosticsState);
+        Assert.Null(report.Exceptions[0].AttemptId);
+        Assert.Null(report.Exceptions[0].SensitiveResponseCapture);
         var log = JsonSerializer.Deserialize(
             """
             {"projectId":"PVT_target","itemStates":{"issue":{"targetItemId":"PVTI_target","fieldValuesError":"old error"}}}
