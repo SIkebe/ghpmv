@@ -267,6 +267,7 @@ public sealed class ViewUiImporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
         ArgumentNullException.ThrowIfNull(viewNumbers);
+        using var projectScope = MigrationDiagnostics.ForBrowserProject(snapshot, ownerLogin, ownerType.ToString().ToLowerInvariant(), projectNumber);
         ValidateSharedRoadmapDisplaySettings(snapshot.Views);
 
         if (snapshot.Views.Count == 0)
@@ -278,6 +279,10 @@ public sealed class ViewUiImporter
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         foreach (var view in snapshot.Views.OrderBy(candidate => candidate.Number))
         {
+            using var viewScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "View", Name = view.Name, Number = view.Number,
+            }, "browser-apply-view");
             cancellationToken.ThrowIfCancellationRequested();
             if (!viewNumbers.TryGetValue(view.Number, out var targetNumber))
             {
@@ -307,7 +312,7 @@ public sealed class ViewUiImporter
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
-                _warnings.Add($"view '{view.Name}': browser-only settings could not be applied — {exception.Message}");
+                _warnings.Add(MigrationDiagnostics.Failure(exception));
             }
         }
 
@@ -378,7 +383,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
-            _warnings.Add($"view '{viewName}': field-sum drift could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': field-sum drift could not be applied — {MigrationDiagnostics.Failure(exception)}");
         }
     }
 
@@ -467,7 +472,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
-            _warnings.Add($"view '{view.Name}': Board column-limit drift could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(view.Name)}': Board column-limit drift could not be applied — {MigrationDiagnostics.Failure(exception)}");
         }
     }
 
@@ -525,7 +530,7 @@ public sealed class ViewUiImporter
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
             _warnings.Add(
-                $"view '{view.Name}': Board column visibility drift could not be applied — {exception.Message}");
+                $"view '{MigrationDiagnostics.Text(view.Name)}': Board column visibility drift could not be applied — {MigrationDiagnostics.Failure(exception)}");
         }
     }
 
@@ -551,7 +556,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
-            _warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': Roadmap display-option drift could not be applied — {MigrationDiagnostics.Failure(exception)}");
             return;
         }
 
@@ -630,13 +635,14 @@ public sealed class ViewUiImporter
         ArgumentNullException.ThrowIfNull(warnings);
         ArgumentException.ThrowIfNullOrWhiteSpace(viewName);
 
+        using var viewScope = MigrationDiagnostics.ForElement(new() { Kind = "View", Name = viewName }, "browser-apply-roadmap-display");
         try
         {
             await writeAsync().ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
-            warnings.Add($"view '{viewName}': Roadmap display-option drift could not be applied — {exception.Message}");
+            warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': Roadmap display-option drift could not be applied — {MigrationDiagnostics.Failure(exception)}");
         }
         finally
         {
@@ -652,13 +658,14 @@ public sealed class ViewUiImporter
         ArgumentNullException.ThrowIfNull(reorderAsync);
         ArgumentNullException.ThrowIfNull(warnings);
 
+        using var batchScope = MigrationDiagnostics.ForElement(new() { Kind = "ViewBatch" }, "browser-reorder-views");
         try
         {
             await reorderAsync().ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
         {
-            warnings.Add($"view tab order could not be applied — {exception.Message}");
+            warnings.Add($"view tab order could not be applied — {MigrationDiagnostics.Failure(exception)}");
         }
     }
 
@@ -776,7 +783,7 @@ public sealed class ViewUiImporter
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException)
             {
-                warnings.Add($"view tab '{names[move.ViewNumber]}' could not be reordered — {exception.Message}");
+                warnings.Add($"view tab '{MigrationDiagnostics.Text(names[move.ViewNumber])}' could not be reordered — {MigrationDiagnostics.Failure(exception)}");
             }
         }
 
@@ -1705,7 +1712,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': roadmap display option '{label}' could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': roadmap display option '{label}' could not be applied — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1766,7 +1773,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': {label} could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': {label} could not be applied — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
             return false;
         }
@@ -1810,7 +1817,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': sort direction could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': sort direction could not be applied — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1897,7 +1904,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': sort field '{field}' could not be made visible — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': sort field '{MigrationDiagnostics.Text(field)}' could not be made visible — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
             return false;
         }
@@ -1939,7 +1946,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': temporarily shown sort field '{field}' could not be hidden — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': temporarily shown sort field '{MigrationDiagnostics.Text(field)}' could not be hidden — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1985,7 +1992,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': {label} could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': {label} could not be applied — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -2073,7 +2080,7 @@ public sealed class ViewUiImporter
         }
         catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
         {
-            _warnings.Add($"view '{viewName}': roadmap date fields could not be applied — {exception.Message}");
+            _warnings.Add($"view '{MigrationDiagnostics.Text(viewName)}': roadmap date fields could not be applied — {MigrationDiagnostics.Failure(exception)}");
             await CloseMenusAsync(page, cancellationToken).ConfigureAwait(false);
         }
     }

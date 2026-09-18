@@ -3,6 +3,8 @@ using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 using Microsoft.Playwright;
 
+using Ghpmv.Core.Import;
+
 namespace Ghpmv.Core.Browser;
 
 /// <summary>Applies browser-only defaults after Project fields, options, and existing items exist.</summary>
@@ -140,15 +142,22 @@ public sealed class FieldDefaultUiImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        using var projectScope = MigrationDiagnostics.ForBrowserProject(snapshot, ownerLogin, ownerType.ToString().ToLowerInvariant(), projectNumber);
 
         var page = await _session.GetPageAsync(cancellationToken).ConfigureAwait(false);
         foreach (var field in snapshot.Fields.Where(field => field.DefaultValue is not null))
         {
+            using var fieldScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Field",
+                Name = field.Name,
+                DataType = field.DataType,
+            }, "browser-apply-field-default");
             cancellationToken.ThrowIfCancellationRequested();
             var validation = Validate(field);
             if (validation is not null)
             {
-                _warnings.Add(validation);
+                _warnings.Add(MigrationDiagnostics.Warning(validation));
                 continue;
             }
 
@@ -166,7 +175,7 @@ public sealed class FieldDefaultUiImporter
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException or InvalidOperationException or FormatException)
             {
-                _warnings.Add($"field '{field.Name}': default value could not be applied — {exception.Message}");
+                _warnings.Add(MigrationDiagnostics.Failure(exception));
             }
         }
     }
@@ -196,7 +205,7 @@ public sealed class FieldDefaultUiImporter
             && !(field.Options ?? []).Any(option =>
                 string.Equals(option.Name, optionName, StringComparison.Ordinal)))
         {
-            return $"field '{field.Name}': default option '{optionName}' does not exist in the snapshot";
+            return $"field '{field.Name}': default option does not exist in the snapshot";
         }
 
         var wrongMember = field.DataType switch
@@ -301,8 +310,7 @@ public sealed class FieldDefaultUiImporter
         }
 
         throw new InvalidOperationException(
-            $"saved value did not persist after {PersistenceAttempts} attempts "
-            + $"(expected {Display(field)}, actual {Display(field with { DefaultValue = actual })})");
+            $"saved value did not persist after {PersistenceAttempts} attempts");
     }
 
     private static async Task ApplySingleSelectAsync(
@@ -335,16 +343,4 @@ public sealed class FieldDefaultUiImporter
         }
     }
 
-    private static string Display(FieldSnapshot field)
-        => field.DataType switch
-        {
-            "TEXT" => field.DefaultValue?.Text is { } text ? $"'{text}'" : "<cleared>",
-            "NUMBER" => field.DefaultValue?.Number is { } number
-                ? number.ToString("R", CultureInfo.InvariantCulture)
-                : "<cleared>",
-            "SINGLE_SELECT" => field.DefaultValue?.SingleSelectOptionName is { } option
-                ? $"'{option}'"
-                : "<cleared>",
-            _ => "<unsupported>",
-        };
 }

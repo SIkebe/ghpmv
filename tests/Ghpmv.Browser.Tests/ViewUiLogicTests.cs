@@ -1,4 +1,5 @@
 using Ghpmv.Core.Browser;
+using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
 using Microsoft.Playwright;
@@ -1147,7 +1148,8 @@ public class ViewUiLogicTests
 
         Assert.Contains(warnings, warning =>
             warning.Contains("view tab 'Second' could not be reordered", StringComparison.Ordinal)
-            && warning.Contains("forced drag failure", StringComparison.Ordinal));
+            && warning.Contains("PlaywrightException", StringComparison.Ordinal));
+        Assert.DoesNotContain(warnings, warning => warning.Contains("forced drag failure", StringComparison.Ordinal));
         Assert.Contains(warnings, warning =>
             warning.Contains("could not be fully applied", StringComparison.Ordinal)
             && warning.Contains("expected [Second, First]", StringComparison.Ordinal)
@@ -1166,7 +1168,9 @@ public class ViewUiLogicTests
 
         var warning = Assert.Single(warnings);
         Assert.Contains("view tab order could not be applied", warning, StringComparison.Ordinal);
-        Assert.Contains("forced DOM read failure", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("forced DOM read failure", warning, StringComparison.Ordinal);
+        Assert.Contains("element: ViewBatch", warning, StringComparison.Ordinal);
+        Assert.Contains("operation: browser-reorder-views", warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1175,6 +1179,11 @@ public class ViewUiLogicTests
         var warnings = new List<string>();
         var partialWriteApplied = false;
         var savedPartialWrite = false;
+        using var context = MigrationDiagnostics.Begin(new()
+        {
+            Source = new() { Owner = "source-org", Number = 12, Title = "Demo project" },
+            Target = new() { Owner = "target-org", Number = 34, Title = "Demo project" },
+        });
 
         await ViewUiImporter.ApplyRoadmapDisplayWriteRecoverablyAsync(
             () =>
@@ -1193,7 +1202,11 @@ public class ViewUiLogicTests
         Assert.True(savedPartialWrite);
         var warning = Assert.Single(warnings);
         Assert.Contains("Fixture Roadmap", warning, StringComparison.Ordinal);
-        Assert.Contains("forced read-back failure", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("forced read-back failure", warning, StringComparison.Ordinal);
+        Assert.Contains("element: View \"Fixture Roadmap\"", warning, StringComparison.Ordinal);
+        Assert.Contains("source: source-org / Project 12", warning, StringComparison.Ordinal);
+        Assert.Contains("target: target-org / Project 34", warning, StringComparison.Ordinal);
+        Assert.Contains("operation: browser-apply-roadmap-display", warning, StringComparison.Ordinal);
     }
 
     [Fact]
