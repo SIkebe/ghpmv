@@ -72,6 +72,8 @@ public sealed class ProjectImporter
     /// <summary>Invoked as soon as the target project is resolved, before project-stage writes.</summary>
     public Action<int, string>? OnTargetProjectResolved { get; set; }
 
+    public Action<MigrationProjectIdentity>? OnTargetIdentityResolved { get; set; }
+
     /// <summary>Invoked after conflict resolution and immediately before the first mutation.</summary>
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; set; }
 
@@ -374,6 +376,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        using var diagnosticScope = BeginProjectDiagnostics(snapshot, ownerLogin, null, snapshot.Project.Title);
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
@@ -410,7 +413,8 @@ public sealed class ProjectImporter
                 _operationLog.CreatedProjectId = existing.Id;
             }
 
-            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
+            using var resolvedTargetScope = BeginResolvedProjectDiagnostics(existing);
+            ReportTargetProject(existing);
             if (_operationLog.ImportCompleted is true)
             {
                 _operationLog.HasUnresolvedWarnings = false;
@@ -448,7 +452,8 @@ public sealed class ProjectImporter
 
         if (existing is not null)
         {
-            OnTargetProjectResolved?.Invoke(existing.Number, existing.Url);
+            using var resolvedTargetScope = BeginResolvedProjectDiagnostics(existing);
+            ReportTargetProject(existing);
             ValidatePendingItemProject(existing.Id);
             switch (OnConflict)
             {
@@ -503,6 +508,7 @@ public sealed class ProjectImporter
             matches,
             cancellationToken,
             invokeBeforeWrite: !beforeWriteInvoked).ConfigureAwait(false);
+        using var createdTargetScope = BeginResolvedProjectDiagnostics(project);
         var result = await ApplySnapshotAsync(
             snapshot,
             ownerLogin,
@@ -528,6 +534,7 @@ public sealed class ProjectImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerLogin);
+        using var diagnosticScope = BeginProjectDiagnostics(snapshot, ownerLogin, projectNumber, null);
         ValidateProjectFieldContracts(snapshot);
         InitializeSnapshotFieldNames(snapshot);
         await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
@@ -540,7 +547,8 @@ public sealed class ProjectImporter
         var project = await FindProjectByNumberAsync(ownerLogin, projectNumber, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture,
                 $"Project #{projectNumber} was not found in {OwnerDescription} '{ownerLogin}'."));
-        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
+        using var resolvedTargetScope = BeginResolvedProjectDiagnostics(project);
+        ReportTargetProject(project);
 
         if (_operationLog?.PendingProject is { } pendingProject)
         {
@@ -697,7 +705,8 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
-        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
+        using var resolvedTargetScope = BeginResolvedProjectDiagnostics(project);
+        ReportTargetProject(project);
         if (_operationLog is not null)
         {
             _operationLog.CreatedProjectId = project.Id;
@@ -719,6 +728,69 @@ public sealed class ProjectImporter
             throw new InvalidDataException(
                 $"Snapshot Project multi-select field '{invalidMultiSelect.Name}' must define at least one option. " +
                 "GitHub requires at least one option when creating the field and ignores empty option updates.");
+        }
+
+        foreach (var field in snapshot.Fields.Where(field =>
+                     field.IssueField is null
+                     && string.Equals(field.DataType, "ITERATION", StringComparison.Ordinal)))
+        {
+            using var fieldScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Field",
+                Name = field.Name,
+                DataType = field.DataType,
+            }, "validate-field");
+            try
+            {
+                if (field.IterationConfiguration is { } configuration)
+                {
+                    ValidateIterationConfiguration(configuration);
+                }
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
+            }
+        }
+    }
+
+    private static bool IsUninitializedIterationConfiguration(IterationConfigurationSnapshot configuration) =>
+        configuration is { Duration: 0, StartDay: 0, Iterations.Count: 0, CompletedIterations.Count: 0 };
+
+    private static void ValidateIterationConfiguration(IterationConfigurationSnapshot configuration)
+    {
+        if (configuration.Iterations is null || configuration.CompletedIterations is null)
+        {
+            throw new InvalidDataException("Iteration field must provide active and completed iteration lists.");
+        }
+
+        if (IsUninitializedIterationConfiguration(configuration))
+        {
+            return;
+        }
+
+        if (configuration.Duration <= 0)
+        {
+            throw new InvalidDataException(
+                "Iteration field must have a positive default duration unless it is uninitialized (duration 0, start day 0, and no iterations).");
+        }
+
+        if (configuration.StartDay is < 1 or > 7)
+        {
+            throw new InvalidDataException("Iteration field must have a start day from 1 (Monday) to 7 (Sunday).");
+        }
+
+        if (configuration.Iterations.Concat(configuration.CompletedIterations).Any(iteration => iteration is null || iteration.Duration <= 0))
+        {
+            throw new InvalidDataException("Iteration field must have a positive duration for every active and completed iteration.");
+        }
+
+        if (configuration.Iterations.Concat(configuration.CompletedIterations).Any(iteration =>
+                !DateOnly.TryParseExact(iteration.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                    DateTimeStyles.None, out _)))
+        {
+            throw new InvalidDataException(
+                "Iteration field must have a valid yyyy-MM-dd start date for every active and completed iteration.");
         }
     }
 
@@ -840,6 +912,20 @@ public sealed class ProjectImporter
         IReadOnlyList<ResolvedTeamLink> linkedTeams,
         CancellationToken cancellationToken)
     {
+        using var diagnosticScope = MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
+        {
+            Source = MigrationDiagnostics.Source(snapshot),
+            Target = (MigrationDiagnostics.Current?.Target ?? new()) with
+            {
+                Owner = ownerLogin,
+                OwnerType = OwnerType.ToString().ToLowerInvariant(),
+                Number = project.Number,
+                Id = project.Id,
+                Title = project.Title ?? MigrationDiagnostics.Current?.Target?.Title,
+            },
+            Element = new() { Kind = "Project", TargetId = project.Id },
+            Operation = "apply-project",
+        });
         _warnings.Clear();
         if (!BrowserFieldDefaultEnrichmentPlanned
             && snapshot.Fields.Any(field => field.DefaultValue is not null))
@@ -893,139 +979,153 @@ public sealed class ProjectImporter
 
         foreach (var field in snapshot.Fields)
         {
-            if (field.IssueField is not null)
+            using var fieldScope = MigrationDiagnostics.ForElement(new()
             {
-                continue;
-            }
-
-            if (!CreatableDataTypes.Contains(field.DataType))
+                Kind = "Field",
+                Name = field.Name,
+                DataType = field.DataType,
+                TargetId = existingFields.GetValueOrDefault(field.Name)?.Id,
+            }, "reconcile-field");
+            try
             {
-                continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
-            }
-
-            if (_operationLog?.PendingFields.TryGetValue(field.Name, out var pendingField) == true)
-            {
-                if (!string.Equals(pendingField.ProjectId, project.Id, StringComparison.Ordinal)
-                    || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
+                if (field.IssueField is not null)
                 {
-                    throw new InvalidOperationException(
-                        $"Pending field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
+                    continue;
                 }
 
-                var candidates = existingFieldList.Where(candidate =>
-                    string.Equals(candidate.Name, field.Name, StringComparison.Ordinal)
-                    && string.Equals(candidate.DataType, pendingField.DataType, StringComparison.Ordinal)
-                    && !pendingField.ExistingFieldIds.Contains(candidate.Id, StringComparer.Ordinal)).ToArray();
-                TargetField reconciled;
-                if (candidates.Length > 1)
+                if (!CreatableDataTypes.Contains(field.DataType))
                 {
-                    throw new InvalidOperationException(
-                        $"Pending field operation '{pendingField.OperationId}' matches multiple new fields. Reconcile the target manually.");
+                    continue; // Built-in field (Title, Assignees, Labels, Repository, Milestone, Reviewers, ...).
                 }
 
-                if (candidates.Length == 1)
+                if (_operationLog?.PendingFields.TryGetValue(field.Name, out var pendingField) == true)
                 {
-                    reconciled = candidates[0];
-                }
-                else
-                {
-                    reconciled = await ReconcilePendingFieldAsync(project.Id, field, maps, pendingField, cancellationToken).ConfigureAwait(false);
-                }
-
-                existingFields[field.Name] = reconciled;
-                _operationLog.CreatedFields[field.Name] = reconciled.Id;
-                _operationLog.PendingFields.Remove(field.Name);
-                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            if (existingFields.TryGetValue(field.Name, out var target))
-            {
-                if (!string.Equals(target.DataType, field.DataType, StringComparison.Ordinal))
-                {
-                    Warn($"field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
-                }
-                else if (field.Options is { } selectOptions
-                    && (field.DataType == "SINGLE_SELECT"
-                        || (field.DataType == "MULTI_SELECT" && selectOptions.Count > 0)))
-                {
-                    if (ShouldUpdateSelectOptions(selectOptions, target.Options))
+                    if (!string.Equals(pendingField.ProjectId, project.Id, StringComparison.Ordinal)
+                        || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
                     {
-                        OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
-                            $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
-                        await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
+                        throw new InvalidOperationException(
+                            $"Pending field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
+                    }
+
+                    var candidates = existingFieldList.Where(candidate =>
+                        string.Equals(candidate.Name, field.Name, StringComparison.Ordinal)
+                        && string.Equals(candidate.DataType, pendingField.DataType, StringComparison.Ordinal)
+                        && !pendingField.ExistingFieldIds.Contains(candidate.Id, StringComparer.Ordinal)).ToArray();
+                    TargetField reconciled;
+                    if (candidates.Length > 1)
+                    {
+                        throw new InvalidOperationException(
+                            $"Pending field operation '{pendingField.OperationId}' matches multiple new fields. Reconcile the target manually.");
+                    }
+
+                    if (candidates.Length == 1)
+                    {
+                        reconciled = candidates[0];
                     }
                     else
                     {
-                        OnProgress?.Invoke($"Options of existing field '{field.Name}' already match; skipping.");
-                    }
-                }
-                else if (field.DataType == "ITERATION")
-                {
-                    var operationOwned = _operationLog?.CreatedFields.TryGetValue(
-                        field.Name,
-                        out var createdFieldId) is true
-                        && string.Equals(createdFieldId, target.Id, StringComparison.Ordinal);
-                    if (operationOwned)
-                    {
-                        OnProgress?.Invoke(
-                            $"Iteration field '{field.Name}' was created by this operation; resuming without re-creating it.");
-                    }
-                    else
-                    {
-                        Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
-                    }
-                }
-                else
-                {
-                    OnProgress?.Invoke($"Field '{field.Name}' already exists; skipping.");
-                }
-            }
-            else
-            {
-                OnProgress?.Invoke($"Creating {field.DataType} field '{field.Name}'...");
-                var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-                if (_operationLog is not null)
-                {
-                    _operationLog.PendingFields[field.Name] = new PendingFieldOperation
-                    {
-                        OperationId = operationId,
-                        ProjectId = project.Id,
-                        Name = field.Name,
-                        DataType = field.DataType,
-                        ExistingFieldIds = [],
-                    };
-                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                JsonElement createData;
-                try
-                {
-                    createData = await CreateFieldAsync(project.Id, field, operationId, cancellationToken).ConfigureAwait(false);
-                }
-                catch (AmbiguousMutationResultException)
-                {
-                    throw;
-                }
-                catch
-                {
-                    if (_operationLog is not null)
-                    {
-                        _operationLog.PendingFields.Remove(field.Name);
-                        await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                        reconciled = await ReconcilePendingFieldAsync(project.Id, field, maps, pendingField, cancellationToken).ConfigureAwait(false);
                     }
 
-                    throw;
-                }
-
-                var createdField = maps.Register(createData.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
-                existingFieldList.Add(createdField);
-                existingFields[createdField.Name] = createdField;
-                if (_operationLog is not null)
-                {
-                    _operationLog.CreatedFields[field.Name] = createdField.Id;
+                    existingFields[field.Name] = reconciled;
+                    _operationLog.CreatedFields[field.Name] = reconciled.Id;
                     _operationLog.PendingFields.Remove(field.Name);
                     await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
                 }
+
+                if (existingFields.TryGetValue(field.Name, out var target))
+                {
+                    if (!string.Equals(target.DataType, field.DataType, StringComparison.Ordinal))
+                    {
+                        Warn($"field '{field.Name}' exists with data type {target.DataType} (snapshot: {field.DataType}); leaving it unchanged.");
+                    }
+                    else if (field.Options is { } selectOptions
+                        && (field.DataType == "SINGLE_SELECT"
+                            || (field.DataType == "MULTI_SELECT" && selectOptions.Count > 0)))
+                    {
+                        if (ShouldUpdateSelectOptions(selectOptions, target.Options))
+                        {
+                            OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
+                                $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
+                            await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            OnProgress?.Invoke($"Options of existing field '{field.Name}' already match; skipping.");
+                        }
+                    }
+                    else if (field.DataType == "ITERATION")
+                    {
+                        var operationOwned = _operationLog?.CreatedFields.TryGetValue(
+                            field.Name,
+                            out var createdFieldId) is true
+                            && string.Equals(createdFieldId, target.Id, StringComparison.Ordinal);
+                        if (operationOwned)
+                        {
+                            OnProgress?.Invoke(
+                                $"Iteration field '{field.Name}' was created by this operation; resuming without re-creating it.");
+                        }
+                        else
+                        {
+                            Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
+                        }
+                    }
+                    else
+                    {
+                        OnProgress?.Invoke($"Field '{field.Name}' already exists; skipping.");
+                    }
+                }
+                else
+                {
+                    OnProgress?.Invoke($"Creating {field.DataType} field '{field.Name}'...");
+                    var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.PendingFields[field.Name] = new PendingFieldOperation
+                        {
+                            OperationId = operationId,
+                            ProjectId = project.Id,
+                            Name = field.Name,
+                            DataType = field.DataType,
+                            ExistingFieldIds = [],
+                        };
+                        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    JsonElement createData;
+                    try
+                    {
+                        createData = await CreateFieldAsync(project.Id, field, operationId, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (AmbiguousMutationResultException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        if (_operationLog is not null)
+                        {
+                            _operationLog.PendingFields.Remove(field.Name);
+                            await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                        }
+
+                        throw;
+                    }
+
+                    var createdField = maps.Register(createData.GetProperty("createProjectV2Field").GetProperty("projectV2Field"));
+                    existingFieldList.Add(createdField);
+                    existingFields[createdField.Name] = createdField;
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.CreatedFields[field.Name] = createdField.Id;
+                        _operationLog.PendingFields.Remove(field.Name);
+                        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
             }
         }
 
@@ -1118,108 +1218,122 @@ public sealed class ProjectImporter
 
         foreach (var field in fields)
         {
-            TargetIssueField targetIssueField;
-            if (_operationLog?.PendingIssueFields.TryGetValue(field.Name, out var pendingField) == true)
+            using var fieldScope = MigrationDiagnostics.ForElement(new()
             {
-                if (!string.Equals(pendingField.ProjectId, projectId, StringComparison.Ordinal)
-                    || !string.Equals(pendingField.OwnerLogin, ownerLogin, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Pending Issue Field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
-                }
-
-                targetIssueField = await ReconcilePendingIssueFieldAsync(
-                    ownerLogin,
-                    field,
-                    issueFields,
-                    pendingField,
-                    cancellationToken).ConfigureAwait(false);
-                if (IssueFieldNeedsUpdate(field, targetIssueField))
-                {
-                    targetIssueField = await UpdateIssueFieldAsync(
-                        targetIssueField.Id,
-                        field,
-                        cancellationToken).ConfigureAwait(false);
-                }
-
-                issueFields.Add(targetIssueField);
-                issueFieldsByName[field.Name] = targetIssueField;
-                _operationLog.PendingIssueFields.Remove(field.Name);
-                await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            }
-            else if (duplicateIssueFieldNames.Contains(field.Name))
+                Kind = "IssueField",
+                Name = field.Name,
+                DataType = field.DataType,
+                TargetId = issueFieldsByName.GetValueOrDefault(field.Name)?.Id,
+            }, "reconcile-issue-field");
+            try
             {
-                throw new InvalidOperationException(
-                    $"Multiple organization Issue Fields named '{field.Name}' exist in the target. Reconcile them before importing.");
-            }
-            else if (issueFieldsByName.TryGetValue(field.Name, out var existing))
-            {
-                if (!string.Equals(existing.DataType, field.DataType, StringComparison.Ordinal))
+                TargetIssueField targetIssueField;
+                if (_operationLog?.PendingIssueFields.TryGetValue(field.Name, out var pendingField) == true)
                 {
-                    Warn($"Issue Field '{field.Name}' exists with data type {existing.DataType} (snapshot: {field.DataType}); leaving it unchanged and skipping its values.");
-                    continue;
-                }
-
-                targetIssueField = IssueFieldNeedsUpdate(field, existing)
-                    ? await UpdateIssueFieldAsync(existing.Id, field, cancellationToken).ConfigureAwait(false)
-                    : existing;
-                issueFieldsByName[field.Name] = targetIssueField;
-            }
-            else
-            {
-                OnProgress?.Invoke($"Creating organization Issue Field {field.DataType} '{field.Name}'...");
-                ownerId ??= await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
-                var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-                if (_operationLog is not null)
-                {
-                    _operationLog.PendingIssueFields[field.Name] = new PendingIssueFieldOperation
+                    if (!string.Equals(pendingField.ProjectId, projectId, StringComparison.Ordinal)
+                        || !string.Equals(pendingField.OwnerLogin, ownerLogin, StringComparison.OrdinalIgnoreCase)
+                        || !string.Equals(pendingField.DataType, field.DataType, StringComparison.Ordinal))
                     {
-                        OperationId = operationId,
-                        ProjectId = projectId,
-                        OwnerLogin = ownerLogin,
-                        Name = field.Name,
-                        DataType = field.DataType,
-                        ExistingIssueFieldIds = [.. issueFields.Select(candidate => candidate.Id)],
-                    };
-                    await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-                }
-
-                try
-                {
-                    targetIssueField = await CreateIssueFieldAsync(ownerId, field, operationId, cancellationToken).ConfigureAwait(false);
-                }
-                catch (AmbiguousMutationResultException)
-                {
-                    throw;
-                }
-                catch
-                {
-                    if (_operationLog is not null)
-                    {
-                        _operationLog.PendingIssueFields.Remove(field.Name);
-                        await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                        throw new InvalidOperationException(
+                            $"Pending Issue Field operation '{pendingField.OperationId}' does not match field '{field.Name}'.");
                     }
 
-                    throw;
-                }
+                    targetIssueField = await ReconcilePendingIssueFieldAsync(
+                        ownerLogin,
+                        field,
+                        issueFields,
+                        pendingField,
+                        cancellationToken).ConfigureAwait(false);
+                    if (IssueFieldNeedsUpdate(field, targetIssueField))
+                    {
+                        targetIssueField = await UpdateIssueFieldAsync(
+                            targetIssueField.Id,
+                            field,
+                            cancellationToken).ConfigureAwait(false);
+                    }
 
-                issueFields.Add(targetIssueField);
-                issueFieldsByName[field.Name] = targetIssueField;
-                if (_operationLog is not null)
-                {
+                    issueFields.Add(targetIssueField);
+                    issueFieldsByName[field.Name] = targetIssueField;
                     _operationLog.PendingIssueFields.Remove(field.Name);
                     await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
                 }
-            }
+                else if (duplicateIssueFieldNames.Contains(field.Name))
+                {
+                    throw new InvalidOperationException(
+                        $"Multiple organization Issue Fields named '{field.Name}' exist in the target. Reconcile them before importing.");
+                }
+                else if (issueFieldsByName.TryGetValue(field.Name, out var existing))
+                {
+                    if (!string.Equals(existing.DataType, field.DataType, StringComparison.Ordinal))
+                    {
+                        Warn($"Issue Field '{field.Name}' exists with data type {existing.DataType} (snapshot: {field.DataType}); leaving it unchanged and skipping its values.");
+                        continue;
+                    }
 
-            maps.RegisterIssueField(targetIssueField);
-            _targetIssueFieldNames.Add(targetIssueField.Name);
-            await EnsureIssueFieldLinkedAsync(
-                projectId,
-                targetIssueField,
-                projectFields,
-                cancellationToken).ConfigureAwait(false);
+                    targetIssueField = IssueFieldNeedsUpdate(field, existing)
+                        ? await UpdateIssueFieldAsync(existing.Id, field, cancellationToken).ConfigureAwait(false)
+                        : existing;
+                    issueFieldsByName[field.Name] = targetIssueField;
+                }
+                else
+                {
+                    OnProgress?.Invoke($"Creating organization Issue Field {field.DataType} '{field.Name}'...");
+                    ownerId ??= await GetOwnerIdAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+                    var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.PendingIssueFields[field.Name] = new PendingIssueFieldOperation
+                        {
+                            OperationId = operationId,
+                            ProjectId = projectId,
+                            OwnerLogin = ownerLogin,
+                            Name = field.Name,
+                            DataType = field.DataType,
+                            ExistingIssueFieldIds = [.. issueFields.Select(candidate => candidate.Id)],
+                        };
+                        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    try
+                    {
+                        targetIssueField = await CreateIssueFieldAsync(ownerId, field, operationId, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (AmbiguousMutationResultException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        if (_operationLog is not null)
+                        {
+                            _operationLog.PendingIssueFields.Remove(field.Name);
+                            await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                        }
+
+                        throw;
+                    }
+
+                    issueFields.Add(targetIssueField);
+                    issueFieldsByName[field.Name] = targetIssueField;
+                    if (_operationLog is not null)
+                    {
+                        _operationLog.PendingIssueFields.Remove(field.Name);
+                        await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                maps.RegisterIssueField(targetIssueField);
+                _targetIssueFieldNames.Add(targetIssueField.Name);
+                await EnsureIssueFieldLinkedAsync(
+                    projectId,
+                    targetIssueField,
+                    projectFields,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
+            }
         }
     }
 
@@ -1270,6 +1384,13 @@ public sealed class ProjectImporter
         FieldSnapshot field,
         CancellationToken cancellationToken)
     {
+        using var fieldScope = MigrationDiagnostics.ForElement(new()
+        {
+            Kind = "IssueField",
+            Name = field.Name,
+            DataType = field.DataType,
+            TargetId = issueFieldId,
+        }, "updateIssueField");
         OnProgress?.Invoke($"Updating organization Issue Field '{field.Name}' metadata and options...");
         var data = await _client.MutationAsync(
             "updateIssueField",
@@ -1294,6 +1415,13 @@ public sealed class ProjectImporter
         List<TargetField> projectFields,
         CancellationToken cancellationToken)
     {
+        using var fieldScope = MigrationDiagnostics.ForElement(new()
+        {
+            Kind = "IssueField",
+            Name = issueField.Name,
+            DataType = issueField.DataType,
+            TargetId = issueField.Id,
+        }, "link-issue-field");
         if (_operationLog?.PendingIssueFieldLinks.TryGetValue(issueField.Name, out var pendingLink) == true)
         {
             if (!string.Equals(pendingLink.ProjectId, projectId, StringComparison.Ordinal)
@@ -1398,6 +1526,7 @@ public sealed class ProjectImporter
         IReadOnlyList<ResolvedTeamLink> linkedTeams,
         CancellationToken cancellationToken)
     {
+        using var batchScope = MigrationDiagnostics.ForElement(new() { Kind = "CollaboratorBatch" }, "apply-collaborators");
         if (collaborators is not { Count: > 0 })
         {
             return;
@@ -1406,6 +1535,12 @@ public sealed class ProjectImporter
         var inputs = new List<object>();
         foreach (var collaborator in collaborators)
         {
+            using var collaboratorScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Collaborator",
+                Name = collaborator.Login,
+                DataType = collaborator.Type,
+            }, "resolve-collaborator");
             if (string.Equals(collaborator.Type, "USER", StringComparison.OrdinalIgnoreCase))
             {
                 var login = UserMapping.TryGetValue(collaborator.Login, out var mapped) ? mapped : collaborator.Login;
@@ -1501,6 +1636,11 @@ public sealed class ProjectImporter
 
         foreach (var resolution in mappingResolutions.Where(item => item.Status == TeamLinkMappingStatus.Mapped))
         {
+            using var teamScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Team",
+                Name = resolution.TargetIdentity,
+            }, "preflight-linked-team");
             try
             {
                 var data = await _client.QueryAsync(
@@ -1625,6 +1765,12 @@ public sealed class ProjectImporter
 
         foreach (var team in teams)
         {
+            using var teamScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Team",
+                Name = team.Identity,
+                TargetId = team.Id,
+            }, "link-team");
             if (existingTeamIds.Contains(team.Id))
             {
                 OnProgress?.Invoke($"Team '{team.Identity}' is already linked; skipping.");
@@ -1667,6 +1813,12 @@ public sealed class ProjectImporter
         foreach (var repository in repositories)
         {
             var mapped = RepositoryMapping.TryGetValue(repository, out var target) ? target : repository;
+            using var repositoryScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Repository",
+                Repository = repository,
+                TargetRepository = mapped,
+            }, "link-repository");
             var separator = mapped.IndexOf('/', StringComparison.Ordinal);
             if (separator <= 0 || separator == mapped.Length - 1)
             {
@@ -1681,6 +1833,13 @@ public sealed class ProjectImporter
                 continue;
             }
 
+            using var resolvedRepositoryScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Repository",
+                Repository = repository,
+                TargetRepository = mapped,
+                TargetId = repositoryId,
+            }, "linkProjectV2ToRepository");
             try
             {
                 await _client.MutationAsync(
@@ -1701,7 +1860,7 @@ public sealed class ProjectImporter
             }
             catch (GitHubGraphQLException exception)
             {
-                Warn($"could not link repository '{mapped}': {exception.Message}");
+                Warn($"could not link repository '{mapped}': {MigrationDiagnostics.Failure(exception)}");
             }
         }
     }
@@ -1768,8 +1927,49 @@ public sealed class ProjectImporter
 
     private void Warn(string message)
     {
+        message = MigrationDiagnostics.Warning(message);
         _warnings.Add(message);
         OnProgress?.Invoke("warning: " + message);
+    }
+
+    private IDisposable BeginProjectDiagnostics(ProjectSnapshot snapshot, string owner, int? number, string? title) =>
+        MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
+        {
+            Stage = "importing-project",
+            Item = null,
+            Source = MigrationDiagnostics.Source(snapshot),
+            Target = (MigrationDiagnostics.Current?.Target ?? new()) with
+            {
+                Owner = owner,
+                OwnerType = OwnerType.ToString().ToLowerInvariant(),
+                Number = number,
+                Title = title,
+                Host = _client.EndpointHost,
+            },
+            Element = new() { Kind = "Project", Name = title },
+            Operation = "resolve-project",
+        });
+
+    private MigrationProjectIdentity ResolvedProjectIdentity(ProjectRef project) =>
+        (MigrationDiagnostics.Current?.Target ?? new()) with
+        {
+            Id = project.Id,
+            Number = project.Number,
+            Title = project.Title ?? MigrationDiagnostics.Current?.Target?.Title,
+            Host = _client.EndpointHost,
+        };
+
+    private IDisposable BeginResolvedProjectDiagnostics(ProjectRef project) =>
+        MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
+        {
+            Target = ResolvedProjectIdentity(project),
+            Element = new() { Kind = "Project", Name = project.Title, TargetId = project.Id },
+        });
+
+    private void ReportTargetProject(ProjectRef project)
+    {
+        OnTargetProjectResolved?.Invoke(project.Number, project.Url);
+        OnTargetIdentityResolved?.Invoke(ResolvedProjectIdentity(project));
     }
 
     private static ImportResult BuildSkippedResult(ProjectRef project) => new()
@@ -2115,24 +2315,34 @@ public sealed class ProjectImporter
         string clientMutationId,
         CancellationToken cancellationToken)
     {
-        return await _client.MutationAsync(
-            "createProjectV2Field",
-            CreateFieldMutation,
-            new
-            {
-                projectId,
-                name = field.Name,
-                dataType = field.DataType,
-                options = field.DataType == "SINGLE_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
-                multiSelectOptions = field.DataType == "MULTI_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
-                iterationConfiguration = field.DataType == "ITERATION" && field.IterationConfiguration is { } configuration
-                    ? BuildIterationConfigurationInput(field.Name, configuration)
-                    : null,
-            },
-            target: projectId,
-            clientMutationId: clientMutationId,
-            requiredResultPath: "projectV2Field.id",
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await _client.MutationAsync(
+                "createProjectV2Field",
+                CreateFieldMutation,
+                new
+                {
+                    projectId,
+                    name = field.Name,
+                    dataType = field.DataType,
+                    options = field.DataType == "SINGLE_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
+                    multiSelectOptions = field.DataType == "MULTI_SELECT" ? BuildOptionInputs(field.Options ?? []) : null,
+                    iterationConfiguration = field.DataType == "ITERATION" && field.IterationConfiguration is { } configuration
+                        ? BuildIterationConfigurationInput(field.Name, configuration)
+                        : null,
+                },
+                target: projectId,
+                clientMutationId: clientMutationId,
+                requiredResultPath: "projectV2Field.id",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitHubGraphQLException exception) when (field.DataType == "ITERATION")
+        {
+            var configuration = field.IterationConfiguration;
+            exception.InputValidation = string.Create(CultureInfo.InvariantCulture,
+                $"Iteration input: validated; configuration supplied: {configuration is not null}; active count: {configuration?.Iterations.Count ?? 0}; completed count: {configuration?.CompletedIterations.Count ?? 0}; configuration omitted from mutation: {configuration is null || IsUninitializedIterationConfiguration(configuration)}.");
+            throw;
+        }
     }
 
     private async Task LoadOperationLogAsync(CancellationToken cancellationToken)
@@ -2392,8 +2602,19 @@ public sealed class ProjectImporter
     /// recreated in chronological order; the API accepts past start dates and reclassifies
     /// them as completed on read (verified by PoC against the real API).
     /// </summary>
-    private object BuildIterationConfigurationInput(string fieldName, IterationConfigurationSnapshot configuration)
+    internal object? BuildIterationConfigurationInput(
+        string fieldName,
+        IterationConfigurationSnapshot configuration,
+        DateOnly? referenceDate = null)
     {
+        ValidateIterationConfiguration(configuration);
+        if (IsUninitializedIterationConfiguration(configuration))
+        {
+            // GitHub exports this state as zeros, but rejects those zeros as explicit creation inputs.
+            OnProgress?.Invoke($"Field '{fieldName}': preserving uninitialized iteration configuration.");
+            return null;
+        }
+
         // completedIterations are returned newest-first by the API; order everything chronologically.
         var ordered = configuration.CompletedIterations
             .Concat(configuration.Iterations)
@@ -2406,9 +2627,12 @@ public sealed class ProjectImporter
                 $"Field '{fieldName}': recreating {configuration.CompletedIterations.Count} completed iterations as past-dated iterations."));
         }
 
-        var startDate = ordered.Count > 0
-            ? ordered[0].StartDate
-            : DateTime.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var anchorDate = ordered.Count > 0
+            ? DateOnly.ParseExact(ordered[0].StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : referenceDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        // The configuration startDate sets the default weekday independently of explicit iteration dates.
+        var daysSinceStartDay = ((int)anchorDate.DayOfWeek - configuration.StartDay + 7) % 7;
+        var startDate = anchorDate.AddDays(-daysSinceStartDay).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return new
         {
@@ -2461,7 +2685,8 @@ public sealed class ProjectImporter
         node.TryGetProperty("public", out var visibility) && visibility.GetBoolean(),
         !node.TryGetProperty("viewerCanUpdate", out var viewerCanUpdate) || viewerCanUpdate.GetBoolean(),
         node.TryGetProperty("viewerCanClose", out var canClose) && canClose.GetBoolean()
-            || node.TryGetProperty("viewerCanReopen", out var canReopen) && canReopen.GetBoolean());
+            || node.TryGetProperty("viewerCanReopen", out var canReopen) && canReopen.GetBoolean(),
+         node.TryGetProperty("title", out var title) ? title.GetString() : null);
 
     private sealed record ProjectRef(
         string Id,
@@ -2469,7 +2694,8 @@ public sealed class ProjectImporter
         string Url,
         bool Public,
         bool ViewerCanUpdate,
-        bool ViewerCanManageAccess);
+        bool ViewerCanManageAccess,
+        string? Title);
 
     private sealed record ResolvedTeamLink(
         string Id,
@@ -2591,19 +2817,19 @@ public sealed class ProjectImporter
             ProjectImportOutcome outcome,
             IReadOnlyDictionary<int, int> viewNumbers,
             int viewWarningCount) => new()
-        {
-            ProjectId = project.Id,
-            ProjectNumber = project.Number,
-            Url = project.Url,
-            Outcome = outcome,
-            FieldIds = FieldIds,
-            OptionIds = OptionIds,
-            IterationIds = IterationIds,
-            IssueFieldIds = IssueFieldIds,
-            IssueFieldOptionIds = IssueFieldOptionIds,
-            ViewNumbers = viewNumbers,
-            ViewWarningCount = viewWarningCount,
-        };
+            {
+                ProjectId = project.Id,
+                ProjectNumber = project.Number,
+                Url = project.Url,
+                Outcome = outcome,
+                FieldIds = FieldIds,
+                OptionIds = OptionIds,
+                IterationIds = IterationIds,
+                IssueFieldIds = IssueFieldIds,
+                IssueFieldOptionIds = IssueFieldOptionIds,
+                ViewNumbers = viewNumbers,
+                ViewWarningCount = viewWarningCount,
+            };
     }
 
     private const string FindProjectQueryTemplate =

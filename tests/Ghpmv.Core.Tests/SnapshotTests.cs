@@ -6,6 +6,23 @@ namespace Ghpmv.Core.Tests;
 /// <summary>M2 unit tests for the snapshot schema (serialization roundtrip, schema version).</summary>
 public class SnapshotTests
 {
+    [Fact]
+    public void Optional_source_identity_round_trips_and_old_snapshots_leave_identity_unknown()
+    {
+        var old = CreateFullSnapshot();
+        var oldJson = JsonSerializer.Serialize(old, SnapshotJsonContext.Default.ProjectSnapshot);
+        Assert.DoesNotContain("\"source\"", oldJson, StringComparison.Ordinal);
+        Assert.Null(JsonSerializer.Deserialize(oldJson, SnapshotJsonContext.Default.ProjectSnapshot)!.Source);
+        var snapshot = old with
+        {
+            Source = new() { Owner = "source-org", OwnerType = "organization", Number = 12, Title = "Demo project", Host = "api.example.test" },
+        };
+        var json = JsonSerializer.Serialize(snapshot, SnapshotJsonContext.Default.ProjectSnapshot);
+        Assert.Equal(snapshot.Source, JsonSerializer.Deserialize(json, SnapshotJsonContext.Default.ProjectSnapshot)!.Source);
+        Assert.Equal(Ghpmv.Core.Import.ImportLog.ComputeSnapshotFingerprint(old),
+            Ghpmv.Core.Import.ImportLog.ComputeSnapshotFingerprint(snapshot));
+    }
+
     private static ProjectSnapshot CreateFullSnapshot() => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,

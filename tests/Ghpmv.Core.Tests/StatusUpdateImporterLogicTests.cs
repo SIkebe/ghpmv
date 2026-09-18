@@ -476,6 +476,10 @@ public class StatusUpdateImporterLogicTests
                     cancellationToken));
 
             Assert.Equal("createProjectV2StatusUpdate", exception.OperationName);
+            Assert.Equal("StatusUpdate", MigrationDiagnostics.Get(exception)?.Element?.Kind);
+            Assert.Equal(0, MigrationDiagnostics.Get(exception)?.Element?.Position);
+            Assert.Null(MigrationDiagnostics.Get(exception)?.Element?.Name);
+            Assert.Equal(Target.ProjectId, MigrationDiagnostics.Get(exception)?.Target?.Id);
             Assert.Equal(1, handler.CreateMutationCount);
 
             var log = await ImportLog.LoadAsync(directory, cancellationToken);

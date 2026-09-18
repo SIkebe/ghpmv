@@ -115,6 +115,7 @@ public sealed class WorkflowUiImporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentException.ThrowIfNullOrWhiteSpace(orgLogin);
+        using var projectScope = MigrationDiagnostics.ForBrowserProject(snapshot, orgLogin, "organization", projectNumber);
 
         var workflows = snapshot.Workflows.OrderBy(w => w.Number).ToList();
         if (workflows.Count == 0)
@@ -145,6 +146,10 @@ public sealed class WorkflowUiImporter
 
         foreach (var workflow in workflows)
         {
+            using var workflowScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "Workflow", Name = workflow.Name, Number = workflow.Number,
+            }, "browser-apply-workflow");
             cancellationToken.ThrowIfCancellationRequested();
             OnProgress?.Invoke($"Applying workflow '{workflow.Name}'...");
             try
@@ -186,7 +191,7 @@ public sealed class WorkflowUiImporter
             }
             catch (Exception exception) when (exception is PlaywrightException or TimeoutException)
             {
-                _warnings.Add($"workflow '{workflow.Name}': import failed — {exception.Message}");
+                _warnings.Add(MigrationDiagnostics.Failure(exception));
             }
         }
     }

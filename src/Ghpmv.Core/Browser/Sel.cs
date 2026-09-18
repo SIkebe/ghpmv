@@ -24,6 +24,7 @@ internal static class Sel
         "column limit",
         RegexOptions.IgnoreCase);
     private static readonly Regex BoardColumnActionsButtonName = new("^Actions for column: ");
+    private static readonly Regex RoadmapScrollToButtonName = new("^Scroll to:");
     private static readonly Regex AddBoardColumnButtonName = new(
         "^(Add a new column to the board|Add column)$",
         RegexOptions.IgnoreCase);
@@ -157,15 +158,25 @@ internal static class Sel
         => page.Locator("[class*='aggregate-labels-module__Label']:visible");
 
     /// <summary>The title rendered inside a Roadmap pill rather than the fixed left-hand table.</summary>
-    public static ILocator RoadmapPillTitle(IPage page, string title)
-        => page.Locator("[class*='roadmap-pill-module__SanitizedHtml']")
-            .Filter(new() { HasText = title })
-            .First;
+    public static ILocator RoadmapPillTitle(ILocator item, string title)
+        => item.Locator("[class*='roadmap-pill-module__SanitizedHtml']")
+            .Filter(new() { HasText = title, Visible = true });
 
-    /// <summary>The Roadmap item/card containing an item-title locator.</summary>
-    public static ILocator RoadmapItem(ILocator title)
-        => title.Locator(
-            "xpath=ancestor::*[@role='row' or @role='listitem' or contains(@data-testid,'roadmap-item') or contains(@class,'roadmap-item') or contains(@class,'RoadmapItem')][1]");
+    /// <summary>The unique Roadmap row identified by its fixed table title, even when its pill is off-screen.</summary>
+    public static ILocator RoadmapItem(IPage page, string title)
+        => page.GetByRole(AriaRole.Row).Filter(new()
+        {
+            Has = page.GetByRole(AriaRole.Rowheader).GetByText(title, new() { Exact = true }),
+        });
+
+    /// <summary>Item-scoped navigation to a Roadmap bar outside the current timeline viewport.</summary>
+    public static ILocator RoadmapScrollToButton(ILocator item)
+        => item.GetByRole(AriaRole.Button, new() { NameRegex = RoadmapScrollToButtonName });
+
+    /// <summary>Either the hydrated pill title or its viewport navigation control.</summary>
+    public static ILocator RoadmapTitleOrScrollControl(ILocator item, string title)
+        => RoadmapPillTitle(item, title).Or(RoadmapScrollToButton(item))
+            .Filter(new() { Visible = true }).First;
 
     /// <summary>Semantic date/time elements rendered within one Roadmap item.</summary>
     public static ILocator RoadmapItemDateElements(ILocator item)
