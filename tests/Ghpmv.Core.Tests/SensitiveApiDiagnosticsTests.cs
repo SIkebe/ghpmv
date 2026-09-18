@@ -100,7 +100,7 @@ public sealed class SensitiveApiDiagnosticsTests
             var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => client.QueryAsync(
                 "query { viewer { login } }", new { privateInput = "SYNTHETIC-INPUT" }, TestContext.Current.CancellationToken));
             Assert.Equal("FORBIDDEN", exception.ErrorType);
-            Assert.Equal("ABCD:1234", exception.RequestId);
+            Assert.Equal("ABCD:1234:5678:9ABC:01234567", exception.RequestId);
             Assert.Equal("query", exception.OperationKind);
             Assert.Equal(0, exception.RetryCount);
             Assert.Contains("HTTP 200", exception.Message, StringComparison.Ordinal);
@@ -111,7 +111,7 @@ public sealed class SensitiveApiDiagnosticsTests
             await diagnostics.SaveFailureAsync(directory, new InvalidOperationException(exception.Message, exception), TestContext.Current.CancellationToken);
             var report = await File.ReadAllTextAsync(Path.Combine(directory, ImportFailureDiagnostics.FileName), TestContext.Current.CancellationToken);
             Assert.DoesNotContain(Secret, report, StringComparison.Ordinal);
-            Assert.Contains("ABCD:1234", report, StringComparison.Ordinal);
+            Assert.Contains("ABCD:1234:5678:9ABC:01234567", report, StringComparison.Ordinal);
             Assert.DoesNotContain(Secret, string.Join('\n', warnings), StringComparison.Ordinal);
             sink.Dispose();
             Assert.Equal(enabled, File.Exists(sink.FilePath));
@@ -356,7 +356,7 @@ public sealed class SensitiveApiDiagnosticsTests
     private static HttpResponseMessage Response(HttpStatusCode status, string body)
     {
         var response = new HttpResponseMessage(status) { Content = new StringContent(body) };
-        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234");
+        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
         return response;
     }
 

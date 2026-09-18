@@ -225,13 +225,28 @@ public sealed class GraphQLDiagnosticSanitizerTests
     }
 
     [Theory]
-    [InlineData("ABCD:1234:ef90", "ABCD:1234:ef90")]
+    [InlineData("ABCD:1234:5678:9ABC:01234567", "ABCD:1234:5678:9ABC:01234567")]
+    [InlineData("abcd:a:b:c:01234567", "abcd:a:b:c:01234567")]
+    [InlineData("FFFF:FFFFFFFF:FFFFFFFF:FFFFFFFF:FFFFFFFF", "FFFF:FFFFFFFF:FFFFFFFF:FFFFFFFF:FFFFFFFF")]
+    [InlineData("ABCD:1234:ef90", "[redacted]")]
+    [InlineData("0123456789abcdef0123456789abcdef01234567", "[redacted]")]
+    [InlineData("01234567-89ab-4cde-8012-3456789abcde", "[redacted]")]
+    [InlineData("ABCD::B:C:01234567", "[redacted]")]
+    [InlineData("ABC:A:B:C:01234567", "[redacted]")]
+    [InlineData("ABCDE:A:B:C:01234567", "[redacted]")]
+    [InlineData("ABCD:123456789:B:C:01234567", "[redacted]")]
+    [InlineData("ABCD:A:B:C:0123456", "[redacted]")]
+    [InlineData("ABCD:A:B:C:012345678", "[redacted]")]
+    [InlineData("ABCD:A:B:C:D:01234567", "[redacted]")]
+    [InlineData("ABCD:A:B:\uFF27:01234567", "[redacted]")]
+    [InlineData(" ABCD:A:B:C:01234567", "[redacted]")]
+    [InlineData("ABCD:A:B:C:01234567\r\n", "[redacted]")]
     [InlineData(null, null)]
     [InlineData("ghp_secret", "[redacted]")]
     [InlineData("Bearer secret", "[redacted]")]
     [InlineData("ABCD\r\nsecret", "[redacted]")]
     [InlineData("", "[redacted]")]
-    public void Request_ids_are_allowlisted(string? input, string? expected) =>
+    public void Request_ids_require_the_known_github_structure(string? input, string? expected) =>
         Assert.Equal(expected, GraphQLDiagnosticSanitizer.RequestId(input));
 
     [Theory]

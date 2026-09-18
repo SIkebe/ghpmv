@@ -156,14 +156,14 @@ public sealed class MigrationDiagnosticRegressionTests
                 Path.Combine(directory, ImportFailureDiagnostics.FileName), TestContext.Current.CancellationToken));
             var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
             Assert.Equal("403 Forbidden", detail.GetProperty("statusCode").GetString());
-            Assert.Equal("ABCD:1234", detail.GetProperty("requestId").GetString());
+            Assert.Equal("ABCD:1234:5678:9ABC:01234567", detail.GetProperty("requestId").GetString());
             Assert.Equal("Rest" + method, detail.GetProperty("operationKind").GetString());
             Assert.Equal(0, detail.GetProperty("retryCount").GetInt32());
             Assert.Equal("http-error", detail.GetProperty("failureReason").GetString());
             foreach (var text in new[] { string.Join('\n', output), MigrationDiagnostics.Failure(exception), detail.GetRawText() })
             {
                 Assert.Contains("Rest" + method, text, StringComparison.Ordinal);
-                Assert.Contains("ABCD:1234", text, StringComparison.Ordinal);
+                Assert.Contains("ABCD:1234:5678:9ABC:01234567", text, StringComparison.Ordinal);
                 Assert.DoesNotContain("SYNTHETIC-", text, StringComparison.Ordinal);
             }
         }
@@ -187,7 +187,7 @@ public sealed class MigrationDiagnosticRegressionTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var response = Json("""{"message":"SYNTHETIC-RAW-BODY"}""", HttpStatusCode.Forbidden);
-            response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234");
+            response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
             return Task.FromResult(response);
         }
     }

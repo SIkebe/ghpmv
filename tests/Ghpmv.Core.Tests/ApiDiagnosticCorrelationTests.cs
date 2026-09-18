@@ -16,6 +16,10 @@ public sealed class ApiDiagnosticCorrelationTests
     [InlineData(401, null)]
     [InlineData(200, "SYNTHETIC-PRIVATE-HEADER")]
     [InlineData(403, "SYNTHETIC-PRIVATE-HEADER")]
+    [InlineData(200, "0123456789abcdef0123456789abcdef01234567")]
+    [InlineData(403, "0123456789abcdef0123456789abcdef01234567")]
+    [InlineData(200, "01234567-89ab-4cde-8012-3456789abcde")]
+    [InlineData(403, "01234567-89ab-4cde-8012-3456789abcde")]
     public async Task Graphql_exception_report_and_raw_record_join_without_a_vendor_request_id(int status, string? requestId)
     {
         using var fixture = new Fixture();
@@ -34,15 +38,27 @@ public sealed class ApiDiagnosticCorrelationTests
         Assert.DoesNotContain(Secret, report.RootElement.GetRawText() + error.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("SYNTHETIC-INPUT-SECRET", raw.RootElement.GetRawText(), StringComparison.Ordinal);
         Assert.DoesNotContain("SYNTHETIC-TOKEN-SECRET", raw.RootElement.GetRawText(), StringComparison.Ordinal);
+        if (requestId is not null)
+        {
+            using var diagnostics = new ImportFailureDiagnostics("synthetic", "organization", null, false, fixture.Session);
+            var stderr = new List<string>();
+            diagnostics.WriteFailure(error, stderr.Add);
+            Assert.DoesNotContain(requestId, error.ToString() + report.RootElement.GetRawText()
+                + raw.RootElement.GetRawText() + string.Join('\n', stderr), StringComparison.Ordinal);
+        }
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Rest_and_probe_failures_keep_attempt_metadata_in_safe_reports(bool probe)
+    [InlineData(false, "SYNTHETIC-PRIVATE-HEADER")]
+    [InlineData(true, "SYNTHETIC-PRIVATE-HEADER")]
+    [InlineData(false, "0123456789abcdef0123456789abcdef01234567")]
+    [InlineData(true, "0123456789abcdef0123456789abcdef01234567")]
+    [InlineData(false, "01234567-89ab-4cde-8012-3456789abcde")]
+    [InlineData(true, "01234567-89ab-4cde-8012-3456789abcde")]
+    public async Task Rest_and_probe_failures_keep_attempt_metadata_in_safe_reports(bool probe, string requestId)
     {
         using var fixture = new Fixture();
-        using var handler = new Handler(_ => Reply(HttpStatusCode.Forbidden, Secret, "SYNTHETIC-PRIVATE-HEADER"));
+        using var handler = new Handler(_ => Reply(HttpStatusCode.Forbidden, Secret, requestId));
         using var client = new GitHubRestClient("SYNTHETIC-TOKEN-SECRET", null, handler) { DiagnosticSession = fixture.Session };
         Exception error = probe
             ? await Assert.ThrowsAsync<InvalidOperationException>(() => ImportCapabilityPreflight.ValidateAsync(
@@ -58,6 +74,11 @@ public sealed class ApiDiagnosticCorrelationTests
         Assert.Equal(probe ? "RestValidationProbe" : "RestPost", detail.GetProperty("operationKind").GetString());
         Assert.Equal("403 Forbidden", detail.GetProperty("statusCode").GetString());
         Assert.DoesNotContain(Secret, error.ToString() + report.RootElement.GetRawText(), StringComparison.Ordinal);
+        using var diagnostics = new ImportFailureDiagnostics("synthetic", "organization", null, false, fixture.Session);
+        var stderr = new List<string>();
+        diagnostics.WriteFailure(error, stderr.Add);
+        Assert.DoesNotContain(requestId, error.ToString() + report.RootElement.GetRawText()
+            + raw.RootElement.GetRawText() + string.Join('\n', stderr), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -66,7 +87,7 @@ public sealed class ApiDiagnosticCorrelationTests
         using var fixture = new Fixture();
         using var handler = new Handler(index => index switch
         {
-            0 => Reply(HttpStatusCode.BadGateway, Secret, "ABCD:1234"),
+            0 => Reply(HttpStatusCode.BadGateway, Secret, "ABCD:1234:5678:9ABC:01234567"),
             1 => Reply(HttpStatusCode.BadGateway, Secret, "SYNTHETIC-PRIVATE-HEADER"),
             2 => Reply(HttpStatusCode.BadGateway, Secret),
             _ => throw new HttpRequestException(Secret),
@@ -89,7 +110,7 @@ public sealed class ApiDiagnosticCorrelationTests
             Assert.Equal(fixture.Session.RunId, raw.RootElement.GetProperty("runId").GetString());
             Assert.True(ids.Add(raw.RootElement.GetProperty("attemptId").GetString()!));
             Assert.Equal(index, raw.RootElement.GetProperty("retryCount").GetInt32());
-            Assert.Equal(index switch { 0 => "ABCD:1234", 1 => "[redacted]", _ => null }, raw.RootElement.GetProperty("requestId").GetString());
+            Assert.Equal(index switch { 0 => "ABCD:1234:5678:9ABC:01234567", 1 => "[redacted]", _ => null }, raw.RootElement.GetProperty("requestId").GetString());
         }
     }
 

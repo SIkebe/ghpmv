@@ -689,7 +689,7 @@ public class GitHubGraphQLClientTests
             }
             """;
         using var response = JsonResponse(HttpStatusCode.OK, body);
-        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC");
+        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
         using var handler = new StubHandler(response);
         var delays = new List<TimeSpan>();
         using var client = CreateClient(handler, delays);
@@ -722,7 +722,7 @@ public class GitHubGraphQLClientTests
             using var report = JsonDocument.Parse(json);
             var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
             Assert.Equal("200 OK", detail.GetProperty("statusCode").GetString());
-            Assert.Equal("ABCD:1234:5678:9ABC", detail.GetProperty("requestId").GetString());
+            Assert.Equal("ABCD:1234:5678:9ABC:01234567", detail.GetProperty("requestId").GetString());
             Assert.Equal(expectedReason, detail.GetProperty("failureReason").GetString());
             var errors = detail.GetProperty("graphQlErrors").EnumerateArray().ToArray();
             Assert.Equal(2, errors.Length);
@@ -753,7 +753,7 @@ public class GitHubGraphQLClientTests
         string reason)
     {
         using var response = JsonResponse(status, body);
-        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234");
+        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
         using var handler = new StubHandler(response);
         var delays = new List<TimeSpan>();
         using var client = CreateClient(handler, delays);
@@ -766,7 +766,7 @@ public class GitHubGraphQLClientTests
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(status, exception.StatusCode);
-        Assert.Equal("ABCD:1234", exception.RequestId);
+        Assert.Equal("ABCD:1234:5678:9ABC:01234567", exception.RequestId);
         Assert.Equal(reason, exception.FailureReason);
         Assert.Empty(exception.GraphQlErrors);
         Assert.Single(handler.RequestBodies);
@@ -774,14 +774,14 @@ public class GitHubGraphQLClientTests
     }
 
     [Theory]
-    [InlineData(true, "2222:BBBB")]
-    [InlineData(false, "2222:BBBB")]
+    [InlineData(true, "2222:BBBB:CCCC:DDDD:01234567")]
+    [InlineData(false, "2222:BBBB:CCCC:DDDD:01234567")]
     [InlineData(true, null)]
     [InlineData(false, null)]
     public async Task Definitive_failures_use_the_final_response_metadata(bool graphQlFailure, string? requestId)
     {
         using var first = JsonResponse(HttpStatusCode.BadGateway, "gateway error");
-        first.Headers.Add("X-GitHub-Request-Id", "1111:AAAA");
+        first.Headers.Add("X-GitHub-Request-Id", "1111:AAAA:BBBB:CCCC:01234567");
         using var last = graphQlFailure
             ? JsonResponse(HttpStatusCode.OK, """{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by secret-value","path":["viewer"]}]}""")
             : JsonResponse(HttpStatusCode.Unauthorized, "secret-value");

@@ -44,12 +44,24 @@ public static class GraphQLDiagnosticSanitizer
         _ => Redacted,
     };
 
-    public static string? RequestId(string? value) => value is null
-        ? null
-        : value.Length is > 0 and <= 128
-            && value.All(character => char.IsAsciiHexDigit(character) || character is ':' or '-')
+    public static string? RequestId(string? value)
+    {
+        if (value is null) return null;
+        if (value.Length is < 19 or > 40) return Redacted;
+
+        // Accept the observed five-part GitHub format, not arbitrary hex tokens or UUIDs.
+        // This validates structure, not the authenticity of the responding endpoint.
+        var segments = value.Split(':');
+        if (segments.Length != 5 || segments[0].Length != 4 || segments[^1].Length != 8)
+        {
+            return Redacted;
+        }
+
+        return segments.All(segment => segment.Length is >= 1 and <= 8
+                && segment.All(char.IsAsciiHexDigit))
             ? value
             : Redacted;
+    }
 
     internal static IReadOnlyList<GraphQLErrorDiagnostic> Errors(JsonElement errors, string query)
     {
