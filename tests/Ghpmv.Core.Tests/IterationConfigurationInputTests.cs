@@ -77,6 +77,39 @@ public sealed class IterationConfigurationInputTests
     }
 
     [Theory]
+    [InlineData(1, "2026-09-17", "2026-09-14")]
+    [InlineData(2, "2026-09-17", "2026-09-15")]
+    [InlineData(3, "2026-09-17", "2026-09-16")]
+    [InlineData(4, "2026-09-17", "2026-09-17")]
+    [InlineData(5, "2026-09-17", "2026-09-11")]
+    [InlineData(6, "2026-09-17", "2026-09-12")]
+    [InlineData(7, "2026-09-17", "2026-09-13")]
+    [InlineData(1, "2026-01-01", "2025-12-29")]
+    [InlineData(7, "2026-01-01", "2025-12-28")]
+    public void Populated_schedule_preserves_defaults_independently_of_iteration_dates(
+        int startDay, string earliestDate, string expectedConfigurationDate)
+    {
+        using var client = new GitHubGraphQLClient("test-token");
+        var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
+        var configuration = Configuration(14, startDay) with
+        {
+            Iterations = [Iteration("active", "2026-10-08", 21)],
+            CompletedIterations = [Iteration("completed", earliestDate, 3)],
+        };
+
+        var input = JsonSerializer.SerializeToElement(importer.BuildIterationConfigurationInput(
+            "Probe Sprint", configuration, new DateOnly(2026, 9, 30)));
+
+        Assert.Equal(14, input.GetProperty("duration").GetInt32());
+        Assert.Equal(expectedConfigurationDate, input.GetProperty("startDate").GetString());
+        var iterations = input.GetProperty("iterations").EnumerateArray().ToArray();
+        Assert.Equal(["completed", "active"], iterations.Select(iteration => iteration.GetProperty("title").GetString()));
+        Assert.Equal([earliestDate, "2026-10-08"], iterations.Select(iteration => iteration.GetProperty("startDate").GetString()));
+        Assert.Equal([3, 21], iterations.Select(iteration => iteration.GetProperty("duration").GetInt32()));
+        Assert.All(iterations, iteration => Assert.False(iteration.TryGetProperty("id", out _)));
+    }
+
+    [Theory]
     [InlineData(0, 1)]
     [InlineData(-1, 1)]
     [InlineData(14, 0)]
@@ -89,19 +122,27 @@ public sealed class IterationConfigurationInputTests
             importer.BuildIterationConfigurationInput("Probe Sprint", Configuration(duration, startDay)));
     }
 
-    [Fact]
-    public void Completed_only_configuration_uses_the_original_past_start_date()
+    [Theory]
+    [InlineData("2026-08-17", "2026-08-17")]
+    [InlineData("2026-08-20", "2026-08-17")]
+    [InlineData("2026-01-01", "2025-12-29")]
+    public void Completed_only_configuration_preserves_defaults_and_original_past_iteration(
+        string iterationDate, string expectedConfigurationDate)
     {
         using var client = new GitHubGraphQLClient("test-token");
         var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
         var configuration = Configuration(14, 1) with
         {
-            CompletedIterations = [Iteration("past", "2026-08-17", 14)],
+            CompletedIterations = [Iteration("past", iterationDate, 3)],
         };
         var input = JsonSerializer.SerializeToElement(importer.BuildIterationConfigurationInput(
             "Probe Sprint", configuration, new DateOnly(2026, 9, 17)));
-        Assert.Equal("2026-08-17", input.GetProperty("startDate").GetString());
-        Assert.Single(input.GetProperty("iterations").EnumerateArray());
+        Assert.Equal(14, input.GetProperty("duration").GetInt32());
+        Assert.Equal(expectedConfigurationDate, input.GetProperty("startDate").GetString());
+        var iteration = Assert.Single(input.GetProperty("iterations").EnumerateArray());
+        Assert.Equal("past", iteration.GetProperty("title").GetString());
+        Assert.Equal(iterationDate, iteration.GetProperty("startDate").GetString());
+        Assert.Equal(3, iteration.GetProperty("duration").GetInt32());
     }
 
     private static IterationConfigurationSnapshot Configuration(int duration, int startDay) => new()

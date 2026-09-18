@@ -2459,11 +2459,12 @@ public sealed class ProjectImporter
                 $"Field '{fieldName}': recreating {configuration.CompletedIterations.Count} completed iterations as past-dated iterations."));
         }
 
-        var today = referenceDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
-        var daysSinceStartDay = ((int)today.DayOfWeek - configuration.StartDay + 7) % 7;
-        var startDate = ordered.Count > 0
-            ? ordered[0].StartDate
-            : today.AddDays(-daysSinceStartDay).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var anchorDate = ordered.Count > 0
+            ? DateOnly.ParseExact(ordered[0].StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture)
+            : referenceDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+        // The configuration startDate sets the default weekday independently of explicit iteration dates.
+        var daysSinceStartDay = ((int)anchorDate.DayOfWeek - configuration.StartDay + 7) % 7;
+        var startDate = anchorDate.AddDays(-daysSinceStartDay).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return new
         {
