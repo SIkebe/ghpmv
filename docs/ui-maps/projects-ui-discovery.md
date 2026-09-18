@@ -51,6 +51,7 @@ GitHub.com の一時 organization-owned Project #74 で `Truncate titles` / `Sho
 5. `BrowserSession.SaveStateAsync`でprofileへflush後、別process/fresh BrowserSessionがProject #74のshared state `(false,true)` を取得できた。さらにfresh contextから`(true,false)`へ修復・flushし、別のfresh BrowserSessionで同値を確認した
 6. このため両controlはbrowser profile間で移行可能だが、write後のprofile flushとfresh-session read-backをdurability gateとして必須にする
 7. 2026-08-26 の target Project #4746 では同じitem titleが固定左列とRoadmap pillの両方に描画された。truncation renderingの判定は`[class*='roadmap-pill-module__SanitizedHtml']`へ限定し、固定左列の常設ellipsisをRoadmap stateとして誤認しない
+8. `Show date fields=true` では固定左列が広がり、過去の短いbarがtimelineの表示範囲外になるとpill title自体がDOMから除かれる。描画checkは固定列の完全一致タイトルから一意の`row`を特定し、必要な場合だけその行の`Scroll to:` buttonで期間を表示してから、同じ行のpill titleを検証する。固定列のellipsisによる代用、viewportの拡大、timeoutの延長を合格条件にしない。この確認は既存のRoadmap drift/render checkpointへ統合する。
 
 ## Field default UI contract (2026-08-25 live discovery)
 

@@ -610,6 +610,80 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public async Task Offscreen_roadmap_title_is_revealed_before_waiting_for_its_rendering()
+    {
+        var calls = new List<string>();
+        await FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+            () =>
+            {
+                calls.Add("observe-pill");
+                return Task.FromResult(false);
+            },
+            () =>
+            {
+                calls.Add("scroll-to-item");
+                return Task.CompletedTask;
+            },
+            () =>
+            {
+                calls.Add("wait-for-pill");
+                return Task.CompletedTask;
+            });
+        Assert.Equal(["observe-pill", "scroll-to-item", "wait-for-pill"], calls);
+    }
+
+    [Fact]
+    public async Task Visible_roadmap_title_does_not_trigger_viewport_navigation()
+    {
+        var calls = new List<string>();
+        await FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+            () => Task.FromResult(true),
+            () => throw new InvalidOperationException("An already visible pill must not scroll."),
+            () =>
+            {
+                calls.Add("wait-for-pill");
+                return Task.CompletedTask;
+            });
+        Assert.Equal(["wait-for-pill"], calls);
+    }
+
+    [Fact]
+    public async Task Roadmap_scroll_failure_is_not_hidden_by_a_rendering_wait()
+    {
+        var failure = new InvalidOperationException("Missing or ambiguous scroll control.");
+        var waited = false;
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+                () => Task.FromResult(false),
+                () => Task.FromException(failure),
+                () =>
+                {
+                    waited = true;
+                    return Task.CompletedTask;
+                }));
+        Assert.Same(failure, actual);
+        Assert.False(waited);
+    }
+
+    [Fact]
+    public async Task A_missing_roadmap_title_after_scrolling_still_fails()
+    {
+        var failure = new TimeoutException("Pill did not render after viewport navigation.");
+        var scrolled = false;
+        var actual = await Assert.ThrowsAsync<TimeoutException>(() =>
+            FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+                () => Task.FromResult(false),
+                () =>
+                {
+                    scrolled = true;
+                    return Task.CompletedTask;
+                },
+                () => Task.FromException(failure)));
+        Assert.True(scrolled);
+        Assert.Same(failure, actual);
+    }
+
+    [Fact]
     public void Rendered_roadmap_observation_rejects_dates_when_the_view_hides_them()
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(
