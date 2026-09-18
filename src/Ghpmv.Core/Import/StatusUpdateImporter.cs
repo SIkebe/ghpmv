@@ -38,6 +38,12 @@ public sealed class StatusUpdateImporter
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(logDirectory);
+        using var projectScope = MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
+        {
+            Source = MigrationDiagnostics.Source(snapshot),
+            Target = (MigrationDiagnostics.Current?.Target ?? new()) with { Number = target.ProjectNumber, Id = target.ProjectId },
+            Stage = "importing-status-updates",
+        });
 
         ValidateStatusUpdates(snapshot.StatusUpdates);
         var log = await LoadLogAsync(snapshot, target.ProjectId, logDirectory, cancellationToken).ConfigureAwait(false);
@@ -60,57 +66,71 @@ public sealed class StatusUpdateImporter
         for (var importIndex = 0; importIndex < ordered.Count; importIndex++)
         {
             var entry = ordered[importIndex];
-            var key = entry.SourceIndex.ToString(CultureInfo.InvariantCulture);
-            var prefix = string.Create(CultureInfo.InvariantCulture, $"[{importIndex + 1}/{ordered.Count}]");
-            if (log.StatusUpdates.ContainsKey(key))
+            using var updateScope = MigrationDiagnostics.ForElement(new()
             {
-                OnProgress?.Invoke($"{prefix} Status update at snapshot sequence {entry.SourceIndex}: already complete.");
-                alreadyComplete++;
-                continue;
-            }
-
-            string? targetId = null;
-            if (log.PendingStatusUpdates.TryGetValue(key, out var pending))
+                Kind = "StatusUpdate",
+                Position = entry.SourceIndex,
+            }, "import-status-update");
+            try
             {
-                throw new StatusUpdateReconciliationRequiredException(
-                    pending.OperationId,
-                    pending.ProjectId,
-                    entry.SourceIndex,
-                    Path.Combine(logDirectory, ImportLog.FileName));
-            }
-            else
-            {
-                var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
-                pending = new PendingStatusUpdateOperation
+                var key = entry.SourceIndex.ToString(CultureInfo.InvariantCulture);
+                var prefix = string.Create(CultureInfo.InvariantCulture, $"[{importIndex + 1}/{ordered.Count}]");
+                if (log.StatusUpdates.ContainsKey(key))
                 {
-                    OperationId = operationId,
-                    ProjectId = target.ProjectId,
-                };
-                log.PendingStatusUpdates[key] = pending;
+                    OnProgress?.Invoke($"{prefix} Status update at snapshot sequence {entry.SourceIndex}: already complete.");
+                    alreadyComplete++;
+                    continue;
+                }
+
+                string? targetId = null;
+                if (log.PendingStatusUpdates.TryGetValue(key, out var pending))
+                {
+                    var failure = new StatusUpdateReconciliationRequiredException(
+                        pending.OperationId,
+                        pending.ProjectId,
+                        entry.SourceIndex,
+                        Path.Combine(logDirectory, ImportLog.FileName));
+                    MigrationDiagnostics.Attach(failure);
+                    throw failure;
+                }
+                else
+                {
+                    var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
+                    pending = new PendingStatusUpdateOperation
+                    {
+                        OperationId = operationId,
+                        ProjectId = target.ProjectId,
+                    };
+                    log.PendingStatusUpdates[key] = pending;
+                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                    OnProgress?.Invoke($"{prefix} Creating status update at snapshot sequence {entry.SourceIndex}...");
+
+                    try
+                    {
+                        targetId = await CreateAsync(target.ProjectId, entry.Update, operationId, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (AmbiguousMutationResultException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        log.PendingStatusUpdates.Remove(key);
+                        await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                        throw;
+                    }
+
+                    created++;
+                }
+
+                log.StatusUpdates[key] = targetId;
+                log.PendingStatusUpdates.Remove(key);
                 await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
-                OnProgress?.Invoke($"{prefix} Creating status update at snapshot sequence {entry.SourceIndex}...");
-
-                try
-                {
-                    targetId = await CreateAsync(target.ProjectId, entry.Update, operationId, cancellationToken).ConfigureAwait(false);
-                }
-                catch (AmbiguousMutationResultException)
-                {
-                    throw;
-                }
-                catch
-                {
-                    log.PendingStatusUpdates.Remove(key);
-                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
-                    throw;
-                }
-
-                created++;
             }
-
-            log.StatusUpdates[key] = targetId;
-            log.PendingStatusUpdates.Remove(key);
-            await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
+            }
         }
 
         OnProgress?.Invoke(string.Create(
