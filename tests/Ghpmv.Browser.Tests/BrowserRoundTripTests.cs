@@ -118,6 +118,7 @@ public class BrowserRoundTripTests
             AssertSourceViews(source);
             AssertSourceWorkflows(source);
             AssertSourceFieldDefaults(source);
+            AssertSourceIterationCoverage(source);
             var collaborator = Assert.Single(source.Collaborators!, candidate =>
                 string.Equals(candidate.Login, ExplicitCollaboratorLogin, StringComparison.OrdinalIgnoreCase));
             Assert.Equal("USER", collaborator.Type);
@@ -679,6 +680,26 @@ public class BrowserRoundTripTests
         var sourceDisabled = Assert.Single(source.Workflows, workflow => workflow.Name == "Code changes requested");
         Assert.False(sourceDisabled.Enabled);
         Assert.Equal("In Progress", sourceDisabled.Ui!.StatusValue);
+    }
+
+    private static void AssertSourceIterationCoverage(ProjectSnapshot source)
+    {
+        IterationConfigurationSnapshot Configuration(string name) =>
+            Assert.IsType<IterationConfigurationSnapshot>(
+                Assert.Single(source.Fields, field => field.Name == name && field.DataType == "ITERATION").IterationConfiguration);
+        var uninitialized = Configuration("Fixture Sprint Uninitialized");
+        Assert.Equal(0, uninitialized.Duration);
+        Assert.Equal(0, uninitialized.StartDay);
+        Assert.Empty(uninitialized.Iterations.Concat(uninitialized.CompletedIterations));
+        var empty = Configuration("Fixture Sprint Empty");
+        Assert.Equal(14, empty.Duration);
+        Assert.Equal(1, empty.StartDay);
+        Assert.Empty(empty.Iterations.Concat(empty.CompletedIterations));
+        var schedule = Configuration("Fixture Sprint Schedule");
+        Assert.Equal(7, schedule.Duration);
+        Assert.Equal([1, 7, 21], schedule.Iterations.Concat(schedule.CompletedIterations)
+            .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+            .Select(iteration => iteration.Duration));
     }
 
     private static void AssertSourceFieldDefaults(ProjectSnapshot source)

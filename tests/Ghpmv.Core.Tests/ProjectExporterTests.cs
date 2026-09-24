@@ -26,6 +26,12 @@ public class ProjectExporterTests
             TestContext.Current.CancellationToken);
 
         Assert.True(snapshot.Project.Template);
+        Assert.Equal("source", snapshot.Source?.Owner);
+        Assert.Equal("organization", snapshot.Source?.OwnerType);
+        Assert.Equal(1, snapshot.Source?.Number);
+        Assert.Equal("example.test", snapshot.Source?.Host);
+        Assert.Equal(snapshot.Project.Title, snapshot.Source?.Title);
+        Assert.Null(snapshot.Source?.Id);
         Assert.Contains("template", handler.RequestBodies[0], StringComparison.Ordinal);
     }
 

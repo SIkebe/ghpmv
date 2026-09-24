@@ -150,7 +150,7 @@ public class GitHubGraphQLClientTests
         Assert.Equal("NOT_FOUND", exception.ErrorType);
         Assert.NotNull(exception.ErrorsJson);
         Assert.Contains("Could not resolve to an Organization.", exception.ErrorsJson, StringComparison.Ordinal);
-        Assert.Null(exception.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
     }
 
     [Fact]
@@ -410,7 +410,7 @@ public class GitHubGraphQLClientTests
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(1, handler.Attempts);
-        Assert.Equal("createThing", exception.OperationName);
+        Assert.Equal("mutation", exception.OperationName);
         Assert.Equal("target-project", exception.Target);
         Assert.NotEmpty(exception.ClientMutationId);
         Assert.Null(exception.StatusCode);
@@ -657,6 +657,187 @@ public class GitHubGraphQLClientTests
         {
             Attempts++;
             return Task.FromException<HttpResponseMessage>(new TaskCanceledException("The request timed out."));
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"createProjectV2Field":null}""", "graphql-error-with-mutation-payload")]
+    [InlineData("""{"createProjectV2Field":{"projectV2Field":null}}""", "graphql-error-with-mutation-payload")]
+    [InlineData("null", "graphql-error-with-uncertain-side-effect")]
+    public async Task Ambiguous_graphql_errors_reach_saved_diagnostics_without_sensitive_values(
+        string data,
+        string expectedReason)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-graphql-diagnostics-").FullName;
+        var body = $$"""
+            {
+              "data":{{data}},
+              "errors":[
+                {
+                  "type":"INTERNAL",
+                  "message":"Something went wrong while executing your query: secret-server-value",
+                  "path":["createProjectV2Field","projectV2Field","configuration","iterations",0,"title"],
+                  "extensions":{"token":"secret-extension-value"}
+                },
+                {
+                  "type":"secret-type-value",
+                  "message":"Invalid iteration secret-input-value",
+                  "path":["secret-path-value"]
+                }
+              ]
+            }
+            """;
+        using var response = JsonResponse(HttpStatusCode.OK, body);
+        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
+        using var handler = new StubHandler(response);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        try
+        {
+            var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => client.MutationAsync(
+                    "createProjectV2Field",
+                    """
+                    mutation($name: String!, $clientMutationId: String!) {
+                      createProjectV2Field(input: {name: $name, clientMutationId: $clientMutationId}) {
+                        projectV2Field { configuration { iterations { title } } }
+                      }
+                    }
+                    """,
+                    new { name = "secret-input-value" },
+                    requiredResultPath: "projectV2Field.id",
+                    cancellationToken: cancellationToken));
+            Assert.Equal("INTERNAL", exception.ErrorType);
+            Assert.NotNull(exception.ErrorsJson);
+            Assert.Single(handler.RequestBodies);
+            Assert.Empty(delays);
+
+            var diagnostics = new Ghpmv.Cli.ImportFailureDiagnostics("target", "organization", null, false);
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, Ghpmv.Cli.ImportFailureDiagnostics.FileName), cancellationToken);
+            Assert.DoesNotContain("secret-", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            Assert.Equal("200 OK", detail.GetProperty("statusCode").GetString());
+            Assert.Equal("ABCD:1234:5678:9ABC:01234567", detail.GetProperty("requestId").GetString());
+            Assert.Equal(expectedReason, detail.GetProperty("failureReason").GetString());
+            var errors = detail.GetProperty("graphQlErrors").EnumerateArray().ToArray();
+            Assert.Equal(2, errors.Length);
+            Assert.Equal("INTERNAL", errors[0].GetProperty("type").GetString());
+            Assert.Equal("GitHub reported an internal error while executing the query.",
+                errors[0].GetProperty("message").GetString());
+            Assert.Equal(
+                ["createProjectV2Field", "projectV2Field", "configuration", "iterations", "0", "title"],
+                errors[0].GetProperty("path").EnumerateArray().Select(segment => segment.GetString()));
+            Assert.Equal("[redacted]", errors[1].GetProperty("type").GetString());
+            Assert.Equal("Server message redacted (unrecognized format).", errors[1].GetProperty("message").GetString());
+            Assert.Equal("[redacted]", errors[1].GetProperty("path")[0].GetString());
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadGateway, "not json", "http-server-error")]
+    [InlineData(HttpStatusCode.OK, "{", "malformed-response")]
+    [InlineData(HttpStatusCode.OK, """{"data":{}}""", "missing-mutation-result")]
+    [InlineData(HttpStatusCode.OK, "null", "missing-mutation-result")]
+    public async Task Ambiguous_response_metadata_is_preserved_without_retry(
+        HttpStatusCode status,
+        string body,
+        string reason)
+    {
+        using var response = JsonResponse(status, body);
+        response.Headers.Add("X-GitHub-Request-Id", "ABCD:1234:5678:9ABC:01234567");
+        using var handler = new StubHandler(response);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var exception = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            () => client.MutationAsync(
+                "createThing",
+                "mutation($clientMutationId: String!) { createThing { id } }",
+                requiredResultPath: "id",
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(status, exception.StatusCode);
+        Assert.Equal("ABCD:1234:5678:9ABC:01234567", exception.RequestId);
+        Assert.Equal(reason, exception.FailureReason);
+        Assert.Empty(exception.GraphQlErrors);
+        Assert.Single(handler.RequestBodies);
+        Assert.Empty(delays);
+    }
+
+    [Theory]
+    [InlineData(true, "2222:BBBB:CCCC:DDDD:01234567")]
+    [InlineData(false, "2222:BBBB:CCCC:DDDD:01234567")]
+    [InlineData(true, null)]
+    [InlineData(false, null)]
+    public async Task Definitive_failures_use_the_final_response_metadata(bool graphQlFailure, string? requestId)
+    {
+        using var first = JsonResponse(HttpStatusCode.BadGateway, "gateway error");
+        first.Headers.Add("X-GitHub-Request-Id", "1111:AAAA:BBBB:CCCC:01234567");
+        using var last = graphQlFailure
+            ? JsonResponse(HttpStatusCode.OK, """{"data":null,"errors":[{"type":"FORBIDDEN","message":"Resource not accessible by secret-value","path":["viewer"]}]}""")
+            : JsonResponse(HttpStatusCode.Unauthorized, "secret-value");
+        if (requestId is not null)
+        {
+            last.Headers.Add("X-GitHub-Request-Id", requestId);
+        }
+        using var handler = new StubHandler(first, last);
+        var delays = new List<TimeSpan>();
+        using var client = CreateClient(handler, delays);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+            () => client.QueryAsync("query { viewer { login } }", cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(graphQlFailure ? HttpStatusCode.OK : HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.Equal(requestId, exception.RequestId);
+        Assert.Equal(graphQlFailure ? "graphql-error" : "http-error", exception.FailureReason);
+        Assert.Equal(2, handler.RequestBodies.Count);
+        Assert.Single(delays);
+        if (graphQlFailure)
+        {
+            Assert.Equal("FORBIDDEN", exception.ErrorType);
+            Assert.Equal("GitHub reported that the resource is not accessible.", Assert.Single(exception.GraphQlErrors).Message);
+        }
+    }
+
+    [Fact]
+    public async Task Escaped_block_literal_values_do_not_reach_persisted_error_paths()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-block-literal-diagnostics-").FullName;
+        using var handler = new StubHandler(JsonResponse(HttpStatusCode.OK,
+            """{"data":{"user":null},"errors":[{"type":"FORBIDDEN","message":"Resource not accessible","path":["user","privateBlockValue","id"]}]}"""));
+        using var client = CreateClient(handler, []);
+        try
+        {
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
+                client.QueryAsync(
+                    """"query { user(login: """prefix \""" privateBlockValue""") { id } }"""",
+                    cancellationToken: cancellationToken));
+            var diagnostics = new Ghpmv.Cli.ImportFailureDiagnostics("target", "organization", null, false);
+
+            await diagnostics.SaveFailureAsync(directory, exception, cancellationToken);
+
+            var json = await File.ReadAllTextAsync(
+                Path.Combine(directory, Ghpmv.Cli.ImportFailureDiagnostics.FileName), cancellationToken);
+            Assert.DoesNotContain("privateBlockValue", json, StringComparison.Ordinal);
+            using var report = JsonDocument.Parse(json);
+            var detail = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            var error = Assert.Single(detail.GetProperty("graphQlErrors").EnumerateArray());
+            Assert.Equal(["user", "[redacted]", "id"],
+                error.GetProperty("path").EnumerateArray().Select(segment => segment.GetString()));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 
