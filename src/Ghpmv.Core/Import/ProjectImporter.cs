@@ -792,6 +792,20 @@ public sealed class ProjectImporter
             throw new InvalidDataException(
                 "Iteration field must have a valid yyyy-MM-dd start date for every active and completed iteration.");
         }
+
+        var firstIteration = configuration.Iterations.Concat(configuration.CompletedIterations)
+            .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+            .FirstOrDefault();
+        if (firstIteration is not null)
+        {
+            var firstStartDate = DateOnly.ParseExact(firstIteration.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+            var daysSinceStartDay = ((int)firstStartDate.DayOfWeek - configuration.StartDay + 7) % 7;
+            if (firstStartDate.DayNumber < daysSinceStartDay)
+            {
+                throw new InvalidDataException(
+                    "Iteration field start date cannot be aligned to its configured weekday within the supported date range.");
+            }
+        }
     }
 
     private void InitializeSnapshotFieldNames(ProjectSnapshot snapshot)

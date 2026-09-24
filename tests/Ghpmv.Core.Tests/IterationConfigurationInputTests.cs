@@ -56,6 +56,44 @@ public sealed class IterationConfigurationInputTests
         Assert.Equal("2025-12-29", input.GetProperty("startDate").GetString());
     }
 
+    [Theory]
+    [InlineData("0001-01-01", 1, "0001-01-01")]
+    [InlineData("0001-01-02", 2, "0001-01-02")]
+    [InlineData("0001-01-07", 7, "0001-01-07")]
+    [InlineData("0001-01-08", 7, "0001-01-07")]
+    public void Boundary_dates_that_align_within_the_supported_range_remain_valid(
+        string firstDate, int startDay, string expectedStart)
+    {
+        using var client = new GitHubGraphQLClient("test-token");
+        var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
+        var configuration = Configuration(7, startDay) with
+        {
+            Iterations = [Iteration("first", firstDate, 7)],
+        };
+        var input = JsonSerializer.SerializeToElement(importer.BuildIterationConfigurationInput("Probe Sprint", configuration));
+        Assert.Equal(expectedStart, input.GetProperty("startDate").GetString());
+    }
+
+    [Theory]
+    [InlineData("0001-01-01", 7)]
+    [InlineData("0001-01-02", 3)]
+    [InlineData("0001-01-06", 7)]
+    public void Boundary_dates_that_would_underflow_are_rejected_before_building_the_input(
+        string firstDate, int startDay)
+    {
+        using var client = new GitHubGraphQLClient("test-token");
+        var importer = new ProjectImporter(client) { OperationLogDirectory = "unused" };
+        var configuration = Configuration(7, startDay) with
+        {
+            CompletedIterations = [Iteration("later", "0001-02-01", 7), Iteration("first", firstDate, 7)],
+        };
+        var exception = Assert.Throws<InvalidDataException>(() =>
+            importer.BuildIterationConfigurationInput("Probe Sprint", configuration));
+        Assert.Equal(
+            "Iteration field start date cannot be aligned to its configured weekday within the supported date range.",
+            exception.Message);
+    }
+
     [Fact]
     public void Active_and_completed_iterations_keep_dates_durations_and_breaks_in_chronological_order()
     {

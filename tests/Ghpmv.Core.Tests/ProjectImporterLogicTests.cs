@@ -1300,6 +1300,10 @@ public class ProjectImporterLogicTests
     [InlineData("first-completed-date", true)]
     [InlineData("later-completed-date", false)]
     [InlineData("later-completed-date", true)]
+    [InlineData("weekday-underflow-active", false)]
+    [InlineData("weekday-underflow-active", true)]
+    [InlineData("weekday-underflow-completed", false)]
+    [InlineData("weekday-underflow-completed", true)]
     public async Task Invalid_iteration_configuration_fails_before_any_api_call(string invalidPart, bool existingProject)
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-invalid-iteration-").FullName;
@@ -1319,6 +1323,8 @@ public class ProjectImporterLogicTests
                 "later-active-date" => configuration with { Iterations = [iteration, iteration with { StartDate = "SYNTHETIC-INVALID-DATE" }] },
                 "first-completed-date" => configuration with { CompletedIterations = [iteration with { StartDate = "" }, iteration] },
                 "later-completed-date" => configuration with { CompletedIterations = [iteration, iteration with { StartDate = "SYNTHETIC-INVALID-DATE" }] },
+                "weekday-underflow-active" => configuration with { StartDay = 7, Iterations = [iteration with { StartDate = "0001-01-01" }] },
+                "weekday-underflow-completed" => configuration with { StartDay = 7, CompletedIterations = [iteration, iteration with { StartDate = "0001-01-01" }] },
                 _ => throw new ArgumentOutOfRangeException(nameof(invalidPart)),
             };
             var snapshot = MinimalSnapshot("Regression fixture") with
@@ -1346,6 +1352,12 @@ public class ProjectImporterLogicTests
             {
                 Assert.Contains("yyyy-MM-dd", exception.Message, StringComparison.Ordinal);
                 Assert.DoesNotContain("SYNTHETIC-INVALID-DATE", exception.Message, StringComparison.Ordinal);
+                Assert.Equal("Probe Sprint", MigrationDiagnostics.Get(exception)?.Element?.Name);
+                Assert.Equal("validate-field", MigrationDiagnostics.Get(exception)?.Operation);
+            }
+            if (invalidPart.StartsWith("weekday-underflow", StringComparison.Ordinal))
+            {
+                Assert.Contains("configured weekday", exception.Message, StringComparison.Ordinal);
                 Assert.Equal("Probe Sprint", MigrationDiagnostics.Get(exception)?.Element?.Name);
                 Assert.Equal("validate-field", MigrationDiagnostics.Get(exception)?.Operation);
             }
