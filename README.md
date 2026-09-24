@@ -178,106 +178,23 @@ Creating a new project emits `result=created`. The result line also includes the
 
 ### Recovering from an ambiguous mutation result
 
-Uninitialized Iteration fields (duration `0`, start day `0`, and no active or completed iterations) are recreated without explicit configuration, preserving their unset state rather than inventing a schedule. Initialized fields with an empty iteration list retain their configured start weekday. Other nonpositive durations or invalid start weekdays fail validation before any Project write. Every active and completed iteration start date is also validated as an exact, valid yyyy-MM-dd calendar date before any API call; invalid values are not echoed in diagnostic messages. This fix does not discard pending operations from earlier failed imports; the reconciliation rules below still apply.
+If a create mutation may have succeeded but its result is unknown, `ghpmv` stops automatic retries to avoid duplicates. Inspect the target before resuming with the **same snapshot and import logs**. Use `--on-conflict update` for a project created by an interrupted import, or the same `--project-number` when updating an existing project. Do not delete pending operation records to force a retry.
 
-Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `ghpmv` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
+See [Recovery and resume rules](docs/DIAGNOSTICS.md#recovery-and-resume) for reconciliation, Status Update restrictions, and uninitialized Iteration handling.
 
-Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending. Project-to-Issue-Field linking is idempotent: a pending link is resent with its recorded client mutation ID and cleared after a definitive success. Resume stops for manual reconciliation if the recorded project or Issue Field no longer matches the current target.
+### Logging and diagnostics
 
-When an import fails, `ghpmv` writes `import-error.json` in the snapshot directory and prints its path to stderr. The report contains the requested and actual target Project context, the primary failure stage, separately identified cleanup failures, the latest 200 progress messages, exception and inner-exception stack traces, GraphQL error types, and HTTP status codes. An additive `context` on the report, exception/cleanup entries and progress entries identifies the source and destination Projects, the migration element (and parent item for item-field replay), and the operation where known. The same identity is printed directly with the error on stderr; it is not inferred from the last progress message. Ambiguous create results also include the locally generated operation name, client mutation ID, attempt time, target, and recovery guidance. Raw GraphQL error responses, tokens, and mutation variables are not written to the report. A later failure in the same snapshot directory replaces the previous report; only a clean completed import removes it, while a skipped or warning-completed import leaves the previous report available for investigation.
+Start with stderr and `<snapshot-directory>/import-error.json`: they identify the source, destination, failed element and operation, with sanitized API failure details. **Safe API diagnostics are not anonymous logs**; business names and known IDs remain visible.
 
-For example, synthetic iteration-field failure diagnostics may include:
-
-```text
-source: source-org / Project 12 "Demo project"
-target: target-org / Project 34 "Demo project"
-element: Field "Demo sprint" (ITERATION)
-operation: createProjectV2Field
-httpStatus: 200 OK
-errorCode: UNPROCESSABLE
-requestId: ABCD:1234:5678:9ABC:01234567
-```
-
-New exports include optional `source` provenance (owner, owner type, API host, project number and title) in `snapshot.json`. Older snapshots remain readable; their source owner/number/host are unknown, not guessed from repository mappings. Target numbers/IDs are only reported as resolved once known; an explicitly requested number remains separately available. Existing-project titles are omitted when they have not been read. New fields/items have no target ID until creation succeeds. Issue/PR identity uses repository and number, not content titles. Bulk collaborator and Issue Field writes identify the batch rather than claiming one member failed. Status updates use their snapshot sequence, never their body. Item resume logs retain compatible error strings and optional `fieldValuesErrorContext`, `positionErrorContext`, `archiveErrorContext`, and `fieldValueFailures`; successful retries clear the corresponding diagnostics.
-
-Diagnostic provenance is excluded from resume fingerprints, so adding it does not invalidate older resume state. `--project-title` changes the intended destination title, not the recorded source title. Errors before snapshot loading retain only the known destination and stage. Command-line parser errors (such as an invalid URL option) occur before import starts and do not create a report; URL validation messages do not echo the supplied URL.
-
-Exception entries also include `failureReason`, `requestId` (the `X-GitHub-Request-Id` response header), and `graphQlErrors` with per-error types, safe message summaries, and paths. HTTP 200 is recorded when the HTTP request succeeds but GraphQL reports an error. For example, `graphql-error-with-mutation-payload` means an error arrived alongside the mutation's response key, even if its value was null; it does not prove whether creation succeeded. `missing-mutation-result`, `malformed-response`, and `transport-failure` distinguish other ambiguous outcomes without changing retry behavior. Request metadata belongs to the failing attempt, not an earlier retried response. Locally generated `runId` and `attemptId` are the primary correlation keys; the remote `requestId` is optional support metadata and may be missing, redacted, or nonunique.
-
-Server messages are converted to fixed summaries for recognized internal errors, temporary conflicts, inaccessible resources, and unresolved resources; unrecognized messages are explicitly marked as redacted. Unknown error types are redacted, and request IDs are retained only in the observed five-part GitHub format: four hexadecimal characters, three colon-separated segments of one to eight hexadecimal characters each, and a final eight-character hexadecimal segment. Other forms, including unseparated hex strings and UUIDs, are redacted. This validates syntax, not endpoint authenticity; local runId/attemptId correlation remains available when a remote ID is redacted. String path segments survive only when they are field **response names** in the executable query document: aliases or unaliased selected fields, including nested selections and named/inline fragments. An aliased field's underlying name is excluded unless separately selected without an alias. Operation/fragment names, types, variables, argument/input-object names, directive names/arguments, and enum input literals do not contribute response names; nonnegative 32-bit list indexes remain available. The parser handles comments, ordinary string escapes (including four-digit Unicode escapes), and escaped block-string delimiters. Malformed/unterminated syntax, unsupported syntax (including schema definitions and variable-width Unicode escapes), or parser limits redact **all** string path segments. Limits are 65,536 query characters, 128 characters per identifier, 64 nesting levels, 8,192 tokens, and 1,024 distinct response names. This is syntactic extraction, not schema validation or per-operation/path validation. Query text, input values, arbitrary server extensions, and raw response bodies are never added to these diagnostic fields. Use the request ID and timestamp to correlate a redacted error with GitHub support; retain the snapshot and operation logs for recovery.
-
-Ordinary GraphQL diagnostics retain at most **16 detailed errors**, each with at most **32 path segments** of at most **128 characters** per retained identifier. Excess errors append one diagnostic with the fixed message `Additional GraphQL errors truncated.`; excess path segments append one `[path truncated]` marker. These markers are additional to the limits, preserve the retained prefix's order, and never include server content. Malformed entries count toward the limits, and sanitization stops after one lookahead rather than projecting entire arrays. These limits bound the sanitized GraphQL portion of an import-error report, not the raw HTTP response or other migration identity/context entries.
+See the [Logging and diagnostics guide](docs/DIAGNOSTICS.md) for output examples, file/schema tables, correlation diagrams, capture states and privacy limits.
 
 #### Sensitive API diagnostics (explicit opt-in)
 
-By default, failed GraphQL and REST response bodies are not logged. API exception messages, retry progress, warnings, `import-error.json`, and error fields in resume logs use safe summaries, HTTP status, allowlisted error codes, sanitized request IDs, operation kind, and retry counts where available. Issue Fields permission preflight reports boolean validation facts rather than response text or arbitrary permission headers. Iteration failures retain validation facts and active/completed counts; separate identity context deliberately retains the field name/type, but never iteration values or request inputs. Internal raw GraphQL errors remain in memory only for existing retry/permission classification.
-
-`export`, `import`, `verify`, and API operations under `setup` accept **`--allow-sensitive-diagnostics`**. It applies to **that invocation only**; there is no saved-config or environment-variable fallback. It does not enable browser tracing or general verbose logging.
-
-- On the first failed API response, stderr prints a **SENSITIVE** warning and the absolute destination **before** creating/writing `ghpmv-sensitive-api-<unique-id>.jsonl` in the **current working directory**, not the snapshot directory. No file is created if there are no failed responses. Each invocation uses a new filename and exclusive creation; existing files are never overwritten.
-- Only non-success HTTP responses (including REST 404 and validation-probe 422 responses) and HTTP 200 GraphQL error responses are captured, including retried attempts. HTTP-success bodies without GraphQL errors are not captured, even if malformed or missing an expected result. A GraphQL error response may also contain partial data; the entire bounded response is sensitive.
-- Each JSONL record contains `runId`, `attemptId`, timestamp, a fixed operation-kind label, numeric status, sanitized request ID, retry count, and response body. Bodies are limited to **65,536 UTF-16 characters per response**, with `originalBodyCharacters` and explicit `truncated` flags. The number of records is not capped; monitor disk space on long runs. Writes are serialized and flushed per response, then the invocation disposes the file. Cancellation does not interrupt a record already being written.
-- Files are created with owner read/write permissions on Unix. On Windows they inherit the working directory's ACL: **run from a private, access-controlled directory**, not a shared directory. Files are not encrypted and are not automatically deleted. The repository ignores their filename pattern, but that does not protect copies or files outside this repository.
-- I/O failures produce an explicit safe error; raw bodies never fall back to stderr or ordinary logs. A partial file may remain. If a diagnostic write fails after a create request, the result remains ambiguous so pending migration operations are retained; inspect target state before retrying.
-
-Request bodies, GraphQL query documents/variables, Authorization headers, PATs, cookies, and browser storage-state are **not collected as diagnostic inputs**. However, failed server bodies can themselves echo secrets or private data. **Opt-in files are not safe to share without review**; redact them manually and delete them when no longer needed.
+`export`, `import`, `verify` and API operations under `setup` accept `--allow-sensitive-diagnostics` for that invocation only. It writes eligible failed API response bodies to a separate `ghpmv-sensitive-api-<unique-id>.jsonl` in the **current working directory**, after a warning; ordinary API diagnostics stay sanitized. These files may contain secrets and must be reviewed before sharing. See [capture policy and file handling](docs/DIAGNOSTICS.md#capturing-raw-api-responses-explicitly).
 
 ##### Joining ordinary and sensitive diagnostics
 
-Each API command invocation owns one local `runId`, shared explicitly by its GraphQL, REST, preflight, and nested clients. Every application-level HTTP `SendAsync` attempt receives a fresh local `attemptId`, including retries and subsequent operations/pages. These IDs do not contain server/user data and are not sent as GitHub request identifiers. They do not replace `clientMutationId`: that logical mutation ID remains unchanged across its retries and continues to serve existing resume/recovery behavior.
-
-`import-error.json` contains report-level `runId`, `sensitiveDiagnosticsFile`, and `sensitiveDiagnosticsState`. The file reference is an **absolute path to a file actually created by this invocation**, so it still works when `--in` differs from the current working directory. Merely passing the opt-in flag does not populate the reference. A filename collision with a pre-existing file is not reported as an owned file. File state describes the invocation:
-
-| `sensitiveDiagnosticsState` | Meaning |
-| --- | --- |
-| `disabled` | Opt-in was not enabled; no sensitive file reference. |
-| `not-created` | Enabled, but no capture created a file yet; no reference. |
-| `available` | An owned file exists and no sink I/O failure has been observed. |
-| `unavailable` | Capture failed before an owned file could be opened; no reference. |
-| `partial` | An owned file exists, but a later write/flush/close failed; the reference remains useful for inspection, not proof of completeness. |
-
-Each transport exception entry includes its own `runId`, `attemptId`, and `sensitiveResponseCapture`. Cleanup failures retain their own exception details separately and never overwrite a primary failure's IDs. Stderr includes the run/attempt IDs and capture state for an import failure; stdout result formats remain unchanged.
-
-| `sensitiveResponseCapture` | Meaning for this attempt |
-| --- | --- |
-| `captured` | Its matching JSONL record was written and flushed successfully (the body may still be truncated). |
-| `not-captured` | Opt-in was enabled, but this attempt has no captured record: e.g. no response, failed response read, or an HTTP-success response outside the capture policy. |
-| `disabled` | No opt-in capture for this attempt. |
-| `failed` | Capture was attempted but failed; a partial or unflushed record may exist. Do not assume a usable matching record. |
-
-Local-only validation failures have no attempt ID/capture state. Successful responses, including malformed/missing-result HTTP-success bodies without GraphQL errors, do not create raw records. A transport failure can have an attempt ID but **no raw record even when the report references a file** containing earlier retry failures. Earlier retried response records remain in that file without necessarily having separate final exception entries. Join the final exception to its **own** `runId` + `attemptId`, not to the first/last line by time or a reused remote header.
-
-For example, these synthetic excerpts join even with no remote request ID:
-
-```json
-{
-  "runId": "11111111111141118111111111111111",
-  "sensitiveDiagnosticsFile": "C:\\private\\synthetic-run\\ghpmv-sensitive-api-33333333333343338333333333333333.jsonl",
-  "sensitiveDiagnosticsState": "available",
-  "exceptions": [{
-    "runId": "11111111111141118111111111111111",
-    "attemptId": "22222222222242228222222222222222",
-    "sensitiveResponseCapture": "captured",
-    "statusCode": "200 OK",
-    "requestId": null,
-    "failureReason": "graphql-error"
-  }]
-}
-```
-
-Corresponding sensitive JSONL record (body content is synthetic, not a recommended ordinary-log format):
-
-```json
-{"runId":"11111111111141118111111111111111","attemptId":"22222222222242228222222222222222","timestampUtc":"2026-01-01T00:00:00Z","operation":"GraphQlQuery","statusCode":200,"requestId":null,"retryCount":0,"originalBodyCharacters":72,"truncated":false,"body":"{\"errors\":[{\"type\":\"FORBIDDEN\",\"message\":\"SYNTHETIC-PRIVATE-RESPONSE\"}]}"}
-```
-
-Library callers can share an `ApiDiagnosticSession` explicitly through each client's `DiagnosticSession` and optionally give that same session to `SensitiveApiDiagnostics`. Existing `SensitiveDiagnostics = sink` initialization also shares the sink's session. Standalone clients default to independent sessions. `GitHubGraphQLException.RequestAttempt`, `GitHubRestClient.GetFailureDiagnostic(exception).RequestAttempt`, and `ApiDiagnosticSession.GetAttempt(exception)` expose safe attempt metadata without changing exception types. Session/sink objects are not part of snapshot or resume contracts.
-
-This is an **API failure diagnostic boundary, not an anonymity guarantee**. Default migration diagnostics deliberately retain organization/user/repository names, project titles, Draft/Field/View/Workflow names, numbers and known IDs. Do not treat them as safe for public sharing. Identity text is bounded to 256 characters and control/format characters are escaped to prevent forged log lines; diagnostic target URLs drop user information, query strings and fragments. Migration browser failure summaries suppress raw Playwright exception/call-log text and retain scoped identity instead. This does not enable or sanitize browser traces or other commands' output. Snapshots, mappings, verification differences and required pending-operation/resume payloads may still contain business content needed for migration. Review all artifacts before sharing. The sensitive-response opt-in remains isolated to its own file and stdout result formats are unchanged.
-
-Status Update creation is stricter because GitHub exposes neither an idempotency key nor a deterministic lookup key. Only a target Status Update node ID returned by the create mutation and persisted in `import-log.json` is accepted as completion. If the result is ambiguous before that ID is persisted, the pending entry remains durable and reruns fail with actionable manual-reconciliation instructions; body, status, and dates are never used to claim an existing or concurrent update.
-
-If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
+Match **`runId` + `attemptId`**, using the report's `sensitiveDiagnosticsFile` and capture states. A file can exist without containing the final attempt's response. See the [correlation walkthrough and diagrams](docs/DIAGNOSTICS.md#correlating-diagnostics); do not rely on timestamps or GitHub's optional `requestId` alone.
 
 ### User-owned projects
 
@@ -378,6 +295,7 @@ The most important constraints are that `ghpmv` does not migrate repositories or
 ## Development docs
 
 - [Migration scope and limitations](docs/MIGRATION_SCOPE.md) contains the detailed support matrix, prerequisites, and platform constraints.
+- [Logging and diagnostics](docs/DIAGNOSTICS.md) explains error identity, privacy boundaries, correlated response files and recovery with tables and diagrams.
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
