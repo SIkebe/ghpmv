@@ -107,6 +107,14 @@ public sealed class ProjectExporter
         {
             SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,
             Project = projectInfo,
+            Source = new Ghpmv.Core.Import.MigrationProjectIdentity
+            {
+                Owner = ownerLogin,
+                Host = _client.EndpointHost,
+                OwnerType = OwnerType.ToString().ToLowerInvariant(),
+                Number = projectNumber,
+                Title = projectInfo.Title,
+            },
             Fields = fields,
             Views = views,
             Workflows = workflows,
@@ -148,6 +156,11 @@ public sealed class ProjectExporter
                 ErrorsJson = exception.ErrorsJson,
                 ErrorType = exception.ErrorType,
                 StatusCode = exception.StatusCode,
+                RequestId = exception.RequestId,
+                FailureReason = exception.FailureReason,
+                GraphQlErrors = exception.GraphQlErrors,
+                OperationKind = exception.OperationKind,
+                RetryCount = exception.RetryCount,
             };
         }
 

@@ -71,7 +71,8 @@ public sealed class GitHubRestClientTests
 
         Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
         Assert.Contains("REST error 403", exception.Message, StringComparison.Ordinal);
-        Assert.Contains("forbidden", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("forbidden", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("operation RestPost", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -95,8 +96,8 @@ public sealed class GitHubRestClientTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.UnprocessableEntity, result.StatusCode);
-        Assert.Equal("issue_fields=write", result.AcceptedPermissions);
-        Assert.Contains("data cannot be null", result.Body, StringComparison.Ordinal);
+        Assert.True(result.AcceptsIssueFieldsWrite);
+        Assert.True(result.ReportsMissingInput);
         Assert.Equal(HttpMethod.Post, handler.Method);
         Assert.Equal(2, handler.ContentLength);
         Assert.Equal("2026-03-10", handler.ApiVersion);

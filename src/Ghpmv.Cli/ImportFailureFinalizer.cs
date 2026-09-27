@@ -16,10 +16,20 @@ internal sealed class ImportFailureFinalizer(
     public async Task<Exception?> CompleteAsync(
         Exception? importFailure,
         Func<Task>? restoreTemplateAsync,
-        Func<ValueTask>? disposeBrowserAsync)
+        Func<ValueTask>? disposeBrowserAsync,
+        Action? disposeApiDiagnostics = null)
     {
+        if (importFailure is not null)
+        {
+            diagnostics.CaptureFailureStage();
+            if (Ghpmv.Core.Import.MigrationDiagnostics.Get(importFailure) is null)
+            {
+                diagnostics.AttachFailure(importFailure);
+            }
+        }
         if (restoreTemplateAsync is not null)
         {
+            using var cleanupScope = diagnostics.BeginCleanup("restoring-template-state", "restore-template");
             try
             {
                 await restoreTemplateAsync().ConfigureAwait(false);
@@ -27,8 +37,9 @@ internal sealed class ImportFailureFinalizer(
             catch (Exception exception)
             {
                 diagnostics.RecordCleanupFailure("restoring-template-state", exception);
+                diagnostics.WriteFailure(exception, _writeError);
                 diagnostics.WriteProgress(
-                    $"error: failed to restore the target project's template state: {exception.Message}",
+                    $"error: failed to restore the target project's template state: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}",
                     $"error: failed to restore the target project's template state: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
                 importFailure = Combine(
                     importFailure,
@@ -46,13 +57,28 @@ internal sealed class ImportFailureFinalizer(
             catch (Exception exception)
             {
                 diagnostics.RecordCleanupFailure("disposing-browser-session", exception);
+                diagnostics.WriteFailure(exception, _writeError);
                 diagnostics.WriteProgress(
-                    $"error: failed to close the browser session: {exception.Message}",
+                    $"error: failed to close the browser session: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}",
                     $"error: failed to close the browser session: {ImportFailureDiagnostics.FormatExceptionForReport(exception)}");
                 importFailure = Combine(
                     importFailure,
                     exception,
                     "Import failed and the browser session could not be closed.");
+            }
+        }
+
+        if (disposeApiDiagnostics is not null)
+        {
+            try
+            {
+                disposeApiDiagnostics();
+            }
+            catch (Exception exception)
+            {
+                diagnostics.RecordCleanupFailure("disposing-api-diagnostics", exception);
+                diagnostics.WriteFailure(exception, _writeError);
+                importFailure = Combine(importFailure, exception, "Sensitive API diagnostics could not be closed.");
             }
         }
 

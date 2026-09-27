@@ -1,4 +1,5 @@
 using Ghpmv.Core.Browser;
+using Ghpmv.Core.Import;
 using Ghpmv.Core.Snapshot;
 using Ghpmv.Core.Verify;
 using Microsoft.Playwright;
@@ -610,6 +611,80 @@ public class ViewUiLogicTests
     }
 
     [Fact]
+    public async Task Offscreen_roadmap_title_is_revealed_before_waiting_for_its_rendering()
+    {
+        var calls = new List<string>();
+        await FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+            () =>
+            {
+                calls.Add("observe-pill");
+                return Task.FromResult(false);
+            },
+            () =>
+            {
+                calls.Add("scroll-to-item");
+                return Task.CompletedTask;
+            },
+            () =>
+            {
+                calls.Add("wait-for-pill");
+                return Task.CompletedTask;
+            });
+        Assert.Equal(["observe-pill", "scroll-to-item", "wait-for-pill"], calls);
+    }
+
+    [Fact]
+    public async Task Visible_roadmap_title_does_not_trigger_viewport_navigation()
+    {
+        var calls = new List<string>();
+        await FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+            () => Task.FromResult(true),
+            () => throw new InvalidOperationException("An already visible pill must not scroll."),
+            () =>
+            {
+                calls.Add("wait-for-pill");
+                return Task.CompletedTask;
+            });
+        Assert.Equal(["wait-for-pill"], calls);
+    }
+
+    [Fact]
+    public async Task Roadmap_scroll_failure_is_not_hidden_by_a_rendering_wait()
+    {
+        var failure = new InvalidOperationException("Missing or ambiguous scroll control.");
+        var waited = false;
+        var actual = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+                () => Task.FromResult(false),
+                () => Task.FromException(failure),
+                () =>
+                {
+                    waited = true;
+                    return Task.CompletedTask;
+                }));
+        Assert.Same(failure, actual);
+        Assert.False(waited);
+    }
+
+    [Fact]
+    public async Task A_missing_roadmap_title_after_scrolling_still_fails()
+    {
+        var failure = new TimeoutException("Pill did not render after viewport navigation.");
+        var scrolled = false;
+        var actual = await Assert.ThrowsAsync<TimeoutException>(() =>
+            FieldSumRenderingObserver.RevealRoadmapTitleAsync(
+                () => Task.FromResult(false),
+                () =>
+                {
+                    scrolled = true;
+                    return Task.CompletedTask;
+                },
+                () => Task.FromException(failure)));
+        Assert.True(scrolled);
+        Assert.Same(failure, actual);
+    }
+
+    [Fact]
     public void Rendered_roadmap_observation_rejects_dates_when_the_view_hides_them()
     {
         var view = FixtureUiSnapshotFactory.Create().Views.Single(
@@ -1073,7 +1148,8 @@ public class ViewUiLogicTests
 
         Assert.Contains(warnings, warning =>
             warning.Contains("view tab 'Second' could not be reordered", StringComparison.Ordinal)
-            && warning.Contains("forced drag failure", StringComparison.Ordinal));
+            && warning.Contains("PlaywrightException", StringComparison.Ordinal));
+        Assert.DoesNotContain(warnings, warning => warning.Contains("forced drag failure", StringComparison.Ordinal));
         Assert.Contains(warnings, warning =>
             warning.Contains("could not be fully applied", StringComparison.Ordinal)
             && warning.Contains("expected [Second, First]", StringComparison.Ordinal)
@@ -1092,7 +1168,9 @@ public class ViewUiLogicTests
 
         var warning = Assert.Single(warnings);
         Assert.Contains("view tab order could not be applied", warning, StringComparison.Ordinal);
-        Assert.Contains("forced DOM read failure", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("forced DOM read failure", warning, StringComparison.Ordinal);
+        Assert.Contains("element: ViewBatch", warning, StringComparison.Ordinal);
+        Assert.Contains("operation: browser-reorder-views", warning, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1101,6 +1179,11 @@ public class ViewUiLogicTests
         var warnings = new List<string>();
         var partialWriteApplied = false;
         var savedPartialWrite = false;
+        using var context = MigrationDiagnostics.Begin(new()
+        {
+            Source = new() { Owner = "source-org", Number = 12, Title = "Demo project" },
+            Target = new() { Owner = "target-org", Number = 34, Title = "Demo project" },
+        });
 
         await ViewUiImporter.ApplyRoadmapDisplayWriteRecoverablyAsync(
             () =>
@@ -1119,7 +1202,11 @@ public class ViewUiLogicTests
         Assert.True(savedPartialWrite);
         var warning = Assert.Single(warnings);
         Assert.Contains("Fixture Roadmap", warning, StringComparison.Ordinal);
-        Assert.Contains("forced read-back failure", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("forced read-back failure", warning, StringComparison.Ordinal);
+        Assert.Contains("element: View \"Fixture Roadmap\"", warning, StringComparison.Ordinal);
+        Assert.Contains("source: source-org / Project 12", warning, StringComparison.Ordinal);
+        Assert.Contains("target: target-org / Project 34", warning, StringComparison.Ordinal);
+        Assert.Contains("operation: browser-apply-roadmap-display", warning, StringComparison.Ordinal);
     }
 
     [Fact]

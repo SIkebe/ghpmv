@@ -708,6 +708,117 @@ public class ProjectVerifierTests
             d.Severity == VerifySeverity.Error && d.Category == "Field" && d.Message.Contains("start date mismatch", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData(7, 1, true, "iteration default duration mismatch")]
+    [InlineData(14, 7, true, "iteration start day mismatch")]
+    [InlineData(7, 1, false, "iteration default duration mismatch")]
+    [InlineData(14, 7, false, "iteration start day mismatch")]
+    public void Iteration_default_drift_is_detected_and_repair_restores_match(
+        int duration, int startDay, bool empty, string expectedMessage)
+    {
+        var source = BuildSnapshot() with { Items = [] };
+        if (empty)
+        {
+            source = WithFields(source, field => field.Name == "Sprint"
+                ? field with
+                {
+                    IterationConfiguration = field.IterationConfiguration! with { Iterations = [], CompletedIterations = [] },
+                }
+                : field);
+        }
+
+        var target = WithFields(source, field => field.Name == "Sprint"
+            ? field with
+            {
+                IterationConfiguration = field.IterationConfiguration! with { Duration = duration, StartDay = startDay },
+            }
+            : field);
+        var report = ProjectVerifier.Compare(source, target);
+        var difference = Assert.Single(report.Differences);
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Equal(VerifyCategories.Field, difference.Category);
+        Assert.Contains(expectedMessage, difference.Message, StringComparison.Ordinal);
+        Assert.Equal(VerifyStatus.Mismatch, Assert.Single(report.Categories, category => category.Category == VerifyCategories.Field).Status);
+
+        var repaired = WithFields(target, field => field.Name == "Sprint"
+            ? field with
+            {
+                IterationConfiguration = field.IterationConfiguration! with { Duration = 14, StartDay = 1 },
+            }
+            : field);
+        Assert.True(ProjectVerifier.Compare(source, repaired).IsMatch);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Missing_and_uninitialized_iteration_configurations_are_equivalent(bool sourceCaptured, bool targetCaptured)
+    {
+        var uninitialized = new IterationConfigurationSnapshot { Duration = 0, StartDay = 0, Iterations = [], CompletedIterations = [] };
+        var source = WithFields(BuildSnapshot() with { Items = [] }, field => field.Name == "Sprint"
+            ? field with { IterationConfiguration = sourceCaptured ? uninitialized : null }
+            : field);
+        var target = WithFields(source, field => field.Name == "Sprint"
+            ? field with { IterationConfiguration = targetCaptured ? uninitialized : null }
+            : field);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        Assert.Empty(report.Differences);
+        Assert.True(report.IsMatch);
+        Assert.Equal(VerifyStatus.Match, Assert.Single(report.Categories, category => category.Category == VerifyCategories.Field).Status);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Uninitialized_and_initialized_empty_schedules_do_not_match(bool captured, bool reverse)
+    {
+        var uninitialized = new IterationConfigurationSnapshot { Duration = 0, StartDay = 0, Iterations = [], CompletedIterations = [] };
+        var unset = WithFields(BuildSnapshot() with { Items = [] }, field => field.Name == "Sprint"
+            ? field with { IterationConfiguration = captured ? uninitialized : null }
+            : field);
+        var initialized = WithFields(unset, field => field.Name == "Sprint"
+            ? field with { IterationConfiguration = uninitialized with { Duration = 14, StartDay = 1 } }
+            : field);
+
+        var report = reverse ? ProjectVerifier.Compare(initialized, unset) : ProjectVerifier.Compare(unset, initialized);
+
+        Assert.Equal(2, report.ErrorCount);
+        Assert.Contains(report.Differences, difference => difference.Message.Contains("iteration default duration mismatch", StringComparison.Ordinal));
+        Assert.Contains(report.Differences, difference => difference.Message.Contains("iteration start day mismatch", StringComparison.Ordinal));
+        Assert.Equal(VerifyStatus.Mismatch, Assert.Single(report.Categories, category => category.Category == VerifyCategories.Field).Status);
+    }
+
+    [Fact]
+    public void Missing_configuration_does_not_hide_iteration_entries_in_the_target()
+    {
+        var source = WithFields(BuildSnapshot() with { Items = [] }, field => field.Name == "Sprint"
+            ? field with { IterationConfiguration = null }
+            : field);
+        var target = WithFields(source, field => field.Name == "Sprint"
+            ? field with
+            {
+                IterationConfiguration = new IterationConfigurationSnapshot
+                {
+                    Duration = 0, StartDay = 0,
+                    Iterations = [Iteration("synthetic", "Unexpected", "2026-07-06")],
+                    CompletedIterations = [],
+                },
+            }
+            : field);
+
+        var report = ProjectVerifier.Compare(source, target);
+
+        var difference = Assert.Single(report.Differences);
+        Assert.Equal(VerifySeverity.Error, difference.Severity);
+        Assert.Contains("exists only in the target", difference.Message, StringComparison.Ordinal);
+    }
+
     // ----- views / workflows -----
 
     [Fact]

@@ -649,6 +649,23 @@ public sealed class ProjectVerifier
             return;
         }
 
+        // Missing configuration is imported as an uninitialized field, which GitHub reads as 0/0.
+        var sourceDuration = source.IterationConfiguration?.Duration ?? 0;
+        var targetDuration = target.IterationConfiguration?.Duration ?? 0;
+        if (sourceDuration != targetDuration)
+        {
+            AddError(differences, FieldCategory, string.Create(CultureInfo.InvariantCulture,
+                $"field '{source.Name}': iteration default duration mismatch (source {sourceDuration}, target {targetDuration})"));
+        }
+
+        var sourceStartDay = source.IterationConfiguration?.StartDay ?? 0;
+        var targetStartDay = target.IterationConfiguration?.StartDay ?? 0;
+        if (sourceStartDay != targetStartDay)
+        {
+            AddError(differences, FieldCategory, string.Create(CultureInfo.InvariantCulture,
+                $"field '{source.Name}': iteration start day mismatch (source {sourceStartDay}, target {targetStartDay})"));
+        }
+
         // Completed/active classification depends on the current date, so iterations are
         // matched purely by title across both lists.
         var sourceIterations = MergeIterations(source.IterationConfiguration);

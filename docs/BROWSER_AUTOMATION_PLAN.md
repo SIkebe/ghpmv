@@ -115,6 +115,7 @@ context.SetDefaultTimeout(30_000);
 
 - 操作間ウェイト: 連続 UI 操作の間に 300ms(`Task.Delay`)。並列ページは使わない(1 セッション 1 ページ直列)。ToS 配慮とレース回避を兼ねる。
 - **失敗時処理**: 回復可能な UI 操作失敗は warning に追加して続行する。UI write は transaction ではないため、View の補完設定や Workflow が途中まで適用された状態で残る場合があり、移行後の browser-assisted `verify` が必須。View は save / reload 後に grouping、Slice by、Field sum を意味的に再読し、不一致なら最大 3 回再試行する。診断ダンプは未実装。その他の SPA race には repository option 待機(10 秒)など対象要素単位の待機・再試行を使う。
+- **移行失敗の識別情報**: import の View / Workflow / Field default 操作はスコープ付き `MigrationDiagnosticContext` を使用する。失敗 warning には source / target Project、要素の名前・種類、操作を残す一方、Playwright の生の例外メッセージや call log は含めない。タブ順の一括操作は `ViewBatch` とし、特定タブの失敗とは推測しない。名前は既定で残す機密性のある識別情報であり、匿名ログではない。改行・制御文字はエスケープする。`--allow-sensitive-diagnostics` は API 失敗レスポンス専用で、browser trace / DOM dump は有効化しない。
 
 ### 1.5 セレクターレジストリ
 

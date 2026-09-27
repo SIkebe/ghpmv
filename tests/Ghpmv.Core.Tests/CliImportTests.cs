@@ -11,6 +11,403 @@ namespace Ghpmv.Core.Tests;
 public class CliImportTests
 {
     [Fact]
+    public async Task Project_title_override_does_not_relabel_an_old_snapshots_source()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "title-identity-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, TestContext.Current.CancellationToken);
+        using var server = new GraphQlStubServer(EmptyProjectsResponse,
+            """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-BODY-SECRET"}]}""");
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--project-title", "Renamed target");
+            Assert.Equal(1, result.ExitCode);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), TestContext.Current.CancellationToken));
+            var context = report.RootElement.GetProperty("context");
+            Assert.Equal("Roadmap", context.GetProperty("source").GetProperty("title").GetString());
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("source").GetProperty("owner").ValueKind);
+            Assert.Equal("Renamed target", context.GetProperty("target").GetProperty("title").GetString());
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("target").GetProperty("id").ValueKind);
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("target").GetProperty("number").ValueKind);
+            Assert.DoesNotContain("SYNTHETIC-BODY-SECRET", result.Error + report.RootElement.GetRawText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Existing_project_metadata_failure_uses_the_actual_destination_title()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "existing-identity-" + Guid.NewGuid().ToString("N"));
+        await SnapshotFile.SaveAsync(MinimalSnapshot() with
+        {
+            Source = new() { Owner = "source-org", Number = 12, Title = "Demo project" },
+        }, directory, TestContext.Current.CancellationToken);
+        using var server = new GraphQlStubServer(
+            """{"data":{"organization":{"projectV2":{"id":"PVT_existing","number":34,"title":"Destination title","url":"https://github.com/orgs/target/projects/34","public":false,"viewerCanUpdate":true}}}}""",
+            """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-BODY-SECRET"}]}""");
+        try
+        {
+            var result = await RunCliAsync(directory, server, "--project-number", "34");
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("source: source-org / Project 12 \"Demo project\"", result.Error, StringComparison.Ordinal);
+            Assert.Contains("target: target / Project 34 \"Destination title\"", result.Error, StringComparison.Ordinal);
+            Assert.Contains("element: Project", result.Error, StringComparison.Ordinal);
+            Assert.Contains("operation: updateProjectV2", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("SYNTHETIC-BODY-SECRET", result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Invalid_target_url_argument_does_not_echo_url_credentials()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "early-identity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var result = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "target-org", "--in", directory, "--token", "SYNTHETIC-TOKEN-SECRET",
+                "--target-base-url", "http://user:SYNTHETIC-URL-SECRET@target.example.test/graphql?token=SYNTHETIC-URL-SECRET",
+                "--no-update-check",
+            ]);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("--target-base-url:", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("SYNTHETIC-", result.Error + result.Output, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(directory, "import-error.json")));
+            var earlyFailure = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "target-org", "--in", directory, "--token", " ", "--no-update-check",
+            ]);
+            Assert.Equal(1, earlyFailure.ExitCode);
+            Assert.Contains("target: target-org / Project (number unknown)", earlyFailure.Error, StringComparison.Ordinal);
+            var json = await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), TestContext.Current.CancellationToken);
+            using var report = JsonDocument.Parse(json);
+            var context = report.RootElement.GetProperty("context");
+            Assert.Equal("initializing", context.GetProperty("stage").GetString());
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("source").ValueKind);
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("element").ValueKind);
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("target").GetProperty("id").ValueKind);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Recoverable_repository_link_failure_emits_identity_without_response_body()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "repository-identity-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Source = new() { Owner = "source-org", Number = 12, Title = "Demo project" },
+            LinkedRepositories = ["target/repository"],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse, UpdateProjectResponse, EmptyFieldsResponse,
+            """{"data":{"repository":{"id":"R_target"}}}""",
+            """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-REPOSITORY-SECRET"}]}""",
+            NonTemplateProjectResponse);
+        try
+        {
+            using var client = new Ghpmv.Core.GitHub.GitHubGraphQLClient("synthetic-token", new Uri(server.GraphQlUrl));
+            var messages = new List<string>();
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                OnConflict = ConflictAction.Update,
+                OnProgress = messages.Add,
+            };
+            var result = await importer.ImportAsync(snapshot, "target", TestContext.Current.CancellationToken);
+            Assert.Equal(42, result.ProjectNumber);
+            var warning = Assert.Single(importer.Warnings);
+            Assert.Contains("element: Repository target/repository", warning, StringComparison.Ordinal);
+            Assert.Contains("operation: linkProjectV2ToRepository", warning, StringComparison.Ordinal);
+            Assert.Contains("source: source-org / Project 12", warning, StringComparison.Ordinal);
+            Assert.Contains("target: target / Project 42", warning, StringComparison.Ordinal);
+            Assert.Contains("warning: " + warning, messages);
+            Assert.DoesNotContain("SYNTHETIC-REPOSITORY-SECRET", string.Join("\n", messages), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Iteration_failure_prints_and_persists_source_target_and_field_identity(bool existing)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Environment.CurrentDirectory, "identity-cli-" + Guid.NewGuid().ToString("N"));
+        var snapshot = MinimalSnapshot() with
+        {
+            Source = new() { Owner = "source-org", OwnerType = "organization", Number = 12, Title = "Demo project", Host = "source.example.test" },
+            Fields =
+            [
+                new()
+                {
+                    Name = "Demo sprint\nforged-line", DataType = "ITERATION",
+                    IterationConfiguration = new()
+                    {
+                        Duration = 14, StartDay = 1, CompletedIterations = [],
+                        Iterations = [new() { Id = "source-iteration", Title = "SYNTHETIC-INPUT-SECRET", StartDate = "2026-01-05", Duration = 14 }],
+                    },
+                },
+            ],
+        };
+        await SnapshotFile.SaveAsync(snapshot, directory, cancellationToken);
+        var responses = existing
+            ? new[] { ExistingProjectResponse, UpdateProjectResponse, EmptyFieldsResponse }
+            : new[] { EmptyProjectsResponse, OwnerResponse, CreateProjectResponse, UpdateCreatedProjectResponse, EmptyFieldsResponse };
+        using var server = new GraphQlStubServer([.. responses,
+            """{"errors":[{"type":"UNPROCESSABLE","message":"SYNTHETIC-RESPONSE-SECRET","extensions":{"private":"SYNTHETIC-RESPONSE-SECRET"}}]}"""]);
+        try
+        {
+            var result = existing
+                ? await RunCliAsync(directory, server, "--on-conflict", "update")
+                : await RunCliAsync(directory, server);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("source: source-org / Project 12 \"Demo project\"", result.Error, StringComparison.Ordinal);
+            Assert.Contains("target: target / Project 42 \"Roadmap\"", result.Error, StringComparison.Ordinal);
+            Assert.Contains("element: Field \"Demo sprint\\u000aforged-line\" (ITERATION)", result.Error, StringComparison.Ordinal);
+            Assert.Contains("operation: createProjectV2Field", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("\nforged-line", result.Error, StringComparison.Ordinal);
+            var json = await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), cancellationToken);
+            foreach (var secret in new[] { "SYNTHETIC-INPUT-SECRET", "SYNTHETIC-RESPONSE-SECRET", "dummy-token" })
+            {
+                Assert.DoesNotContain(secret, json + result.Error + result.Output, StringComparison.Ordinal);
+            }
+            using var report = JsonDocument.Parse(json);
+            var context = report.RootElement.GetProperty("context");
+            Assert.Equal("source-org", context.GetProperty("source").GetProperty("owner").GetString());
+            Assert.Equal(12, context.GetProperty("source").GetProperty("number").GetInt32());
+            Assert.Equal("target", context.GetProperty("target").GetProperty("owner").GetString());
+            Assert.Equal(42, context.GetProperty("target").GetProperty("number").GetInt32());
+            Assert.Equal(existing ? "PVT_existing" : "PVT_created", context.GetProperty("target").GetProperty("id").GetString());
+            var element = context.GetProperty("element");
+            Assert.Equal("Field", element.GetProperty("kind").GetString());
+            Assert.Equal("Demo sprint\\u000aforged-line", element.GetProperty("name").GetString());
+            Assert.Equal("ITERATION", element.GetProperty("dataType").GetString());
+            Assert.Equal(JsonValueKind.Null, element.GetProperty("targetId").ValueKind);
+            Assert.Equal("createProjectV2Field", context.GetProperty("operation").GetString());
+            Assert.Contains("UNPROCESSABLE", result.Error, StringComparison.Ordinal);
+            Assert.Empty(Directory.GetFiles(directory, "ghpmv-sensitive-api-*.jsonl"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("export")]
+    [InlineData("import")]
+    [InlineData("verify")]
+    public async Task Sensitive_diagnostics_require_each_invocation_to_opt_in_and_never_reach_stderr(string command)
+    {
+        const string sentinel = "SYNTHETIC-CLI-RESPONSE-SECRET";
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-diagnostics-test-" + Guid.NewGuid().ToString("N"));
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+        try
+        {
+            var expectedFileCount = 0;
+            var runIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var enabled in new[] { false, true, false })
+            {
+                using var server = new GraphQlStubServer(
+                    """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-CLI-RESPONSE-SECRET","extensions":{"private":"SYNTHETIC-CLI-RESPONSE-SECRET"}}]}""");
+                var arguments = new List<string>
+                {
+                    command, "--org", "synthetic", "--token", "synthetic-token", "--no-update-check",
+                    command == "export" ? "--base-url" : "--target-base-url", server.GraphQlUrl,
+                };
+                if (command == "export")
+                {
+                    arguments.AddRange(["--project", "1", "--out", directory]);
+                }
+                else
+                {
+                    arguments.AddRange(["--in", directory]);
+                    if (command == "verify")
+                    {
+                        arguments.AddRange(["--project", "1"]);
+                    }
+                }
+                if (enabled)
+                {
+                    arguments.Add("--allow-sensitive-diagnostics");
+                    expectedFileCount++;
+                }
+
+                var result = await RunIsolatedCliAsync(directory, arguments);
+                Assert.Equal(1, result.ExitCode);
+                Assert.DoesNotContain(sentinel, result.Error + result.Output, StringComparison.Ordinal);
+                Assert.Contains("FORBIDDEN", result.Error, StringComparison.Ordinal);
+                Assert.Equal(enabled, result.Error.Contains("SENSITIVE API diagnostics", StringComparison.Ordinal));
+                var files = Directory.GetFiles(directory, "ghpmv-sensitive-api-*.jsonl");
+                Assert.Equal(expectedFileCount, files.Length);
+                if (enabled)
+                {
+                    Assert.Contains(Path.GetFullPath(files[0]), result.Error, StringComparison.Ordinal);
+                    Assert.Contains(sentinel, await File.ReadAllTextAsync(files[0], cancellationToken), StringComparison.Ordinal);
+                }
+                if (command == "import")
+                {
+                    var json = await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), cancellationToken);
+                    Assert.DoesNotContain(sentinel, json, StringComparison.Ordinal);
+                    using var report = JsonDocument.Parse(json);
+                    var root = report.RootElement;
+                    var runId = root.GetProperty("runId").GetString()!;
+                    Assert.True(runIds.Add(runId));
+                    Assert.Contains($"runId: {runId}", result.Error, StringComparison.Ordinal);
+                    var detail = Assert.Single(root.GetProperty("exceptions").EnumerateArray());
+                    Assert.Equal(runId, detail.GetProperty("runId").GetString());
+                    Assert.Contains($"attemptId: {detail.GetProperty("attemptId").GetString()}", result.Error, StringComparison.Ordinal);
+                    Assert.Equal(enabled ? "captured" : "disabled", detail.GetProperty("sensitiveResponseCapture").GetString());
+                    if (enabled)
+                    {
+                        Assert.Equal(Path.GetFullPath(files[0]), root.GetProperty("sensitiveDiagnosticsFile").GetString());
+                        using var raw = JsonDocument.Parse(await File.ReadAllTextAsync(files[0], cancellationToken));
+                        Assert.Equal(runId, raw.RootElement.GetProperty("runId").GetString());
+                        Assert.Equal(detail.GetProperty("attemptId").GetString(), raw.RootElement.GetProperty("attemptId").GetString());
+                    }
+                    else
+                    {
+                        Assert.Equal(JsonValueKind.Null, root.GetProperty("sensitiveDiagnosticsFile").ValueKind);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Theory]
+    [InlineData("export")]
+    [InlineData("import")]
+    [InlineData("verify")]
+    [InlineData("setup")]
+    public async Task Api_commands_expose_sensitive_diagnostics_help_without_enabling_it(string command)
+    {
+        var result = await RunIsolatedCliAsync(Environment.CurrentDirectory, [command, "--help"]);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("--allow-sensitive-diagnostics", result.Output, StringComparison.Ordinal);
+        Assert.Empty(result.Error);
+    }
+
+    private static async Task<(int ExitCode, string Output, string Error)> RunIsolatedCliAsync(string directory, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = directory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        // Neither plausible environment spelling is an opt-in mechanism.
+        startInfo.Environment["GHPMV_ALLOW_SENSITIVE_DIAGNOSTICS"] = "true";
+        startInfo.Environment["ALLOW_SENSITIVE_DIAGNOSTICS"] = "true";
+        startInfo.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "ghpmv.dll"));
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start synthetic CLI test.");
+        var output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        return (process.ExitCode, await output, await error);
+    }
+
+    [Fact]
+    public async Task Import_invocation_shares_correlation_across_rest_preflight_and_graphql_with_separate_report_directory()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-correlation-" + Guid.NewGuid().ToString("N"));
+        var reportDirectory = Path.Combine(directory, "snapshot");
+        await SnapshotFile.SaveAsync(MinimalSnapshot() with
+        {
+            Fields = [new FieldSnapshot
+            {
+                Name = "Synthetic issue field", DataType = "TEXT",
+                IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+            }],
+        }, reportDirectory, TestContext.Current.CancellationToken);
+        using var server = new GraphQlStubServer(
+            ExistingProjectResponse,
+            """{"message":"Validation Failed SYNTHETIC-PROBE-SECRET"}""",
+            """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-GRAPHQL-SECRET"}]}""")
+        {
+            ResponseStatusCodes = [200, 422, 200],
+        };
+        try
+        {
+            var result = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "synthetic", "--in", reportDirectory, "--token", "synthetic-token",
+                "--target-base-url", server.GraphQlUrl, "--on-conflict", "update", "--allow-sensitive-diagnostics", "--no-update-check",
+            ]);
+            Assert.Equal(1, result.ExitCode);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(reportDirectory, "import-error.json"), TestContext.Current.CancellationToken));
+            var rawPath = Assert.Single(Directory.GetFiles(directory, "ghpmv-sensitive-api-*.jsonl"));
+            Assert.Equal(rawPath, report.RootElement.GetProperty("sensitiveDiagnosticsFile").GetString());
+            var lines = await File.ReadAllLinesAsync(rawPath, TestContext.Current.CancellationToken);
+            Assert.Equal(2, lines.Length);
+            using var probe = JsonDocument.Parse(lines[0]);
+            using var graph = JsonDocument.Parse(lines[1]);
+            var runId = report.RootElement.GetProperty("runId").GetString();
+            Assert.Equal(runId, probe.RootElement.GetProperty("runId").GetString());
+            Assert.Equal(runId, graph.RootElement.GetProperty("runId").GetString());
+            Assert.Equal("RestValidationProbe", probe.RootElement.GetProperty("operation").GetString());
+            Assert.Equal("GraphQlMutation", graph.RootElement.GetProperty("operation").GetString());
+            Assert.NotEqual(probe.RootElement.GetProperty("attemptId").GetString(), graph.RootElement.GetProperty("attemptId").GetString());
+            var exception = Assert.Single(report.RootElement.GetProperty("exceptions").EnumerateArray());
+            Assert.Equal(graph.RootElement.GetProperty("attemptId").GetString(), exception.GetProperty("attemptId").GetString());
+            Assert.DoesNotContain("SYNTHETIC-", result.Error + result.Output + report.RootElement.GetRawText(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Local_only_import_failure_with_opt_in_does_not_claim_a_sensitive_file()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "cli-local-correlation-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var result = await RunIsolatedCliAsync(directory,
+            [
+                "import", "--org", "synthetic", "--in", directory, "--token", " ", "--allow-sensitive-diagnostics", "--no-update-check",
+            ]);
+            Assert.Equal(1, result.ExitCode);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(directory, "import-error.json"), TestContext.Current.CancellationToken));
+            Assert.True(Guid.TryParseExact(report.RootElement.GetProperty("runId").GetString(), "N", out _));
+            Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("sensitiveDiagnosticsFile").ValueKind);
+            Assert.Equal("not-created", report.RootElement.GetProperty("sensitiveDiagnosticsState").GetString());
+            Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("exceptions")[0].GetProperty("attemptId").ValueKind);
+            Assert.Empty(Directory.GetFiles(directory, "ghpmv-sensitive-api-*"));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task Import_invalid_snapshot_writes_a_diagnostic_report()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -33,6 +430,10 @@ public class CliImportTests
                 Path.Combine(directory, "import-error.json"),
                 cancellationToken));
             Assert.Equal("loading-snapshot", diagnostic.RootElement.GetProperty("stage").GetString());
+            var context = diagnostic.RootElement.GetProperty("context");
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("source").ValueKind);
+            Assert.Equal(JsonValueKind.Null, context.GetProperty("element").ValueKind);
+            Assert.Equal("target", context.GetProperty("target").GetProperty("owner").GetString());
             Assert.Contains(
                 diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
                 exception => exception.GetProperty("type").GetString() ==
@@ -95,6 +496,7 @@ public class CliImportTests
                 Path.Combine(directory, "import-error.json"),
                 cancellationToken));
             Assert.Equal("preflight", diagnostic.RootElement.GetProperty("stage").GetString());
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("context").GetProperty("element").ValueKind);
             Assert.Contains(
                 diagnostic.RootElement.GetProperty("exceptions").EnumerateArray(),
                 exception => exception.GetProperty("type").GetString() ==
@@ -127,6 +529,8 @@ public class CliImportTests
             Assert.Equal(99, diagnostic.RootElement.GetProperty("requestedTargetProjectNumber").GetInt32());
             Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectNumber").ValueKind);
             Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("targetProjectUrl").ValueKind);
+            Assert.Equal(99, diagnostic.RootElement.GetProperty("context").GetProperty("target").GetProperty("number").GetInt32());
+            Assert.Equal(JsonValueKind.Null, diagnostic.RootElement.GetProperty("context").GetProperty("target").GetProperty("id").ValueKind);
         }
         finally
         {
@@ -973,7 +1377,8 @@ public class CliImportTests
             Assert.Single(server.RequestBodies, request =>
                 request.Contains("createProjectV2StatusUpdate", StringComparison.Ordinal));
             Assert.Equal(1, result.ExitCode);
-            Assert.Contains("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("Template restore is not permitted", result.Error, StringComparison.Ordinal);
+            Assert.Contains("FORBIDDEN", result.Error, StringComparison.Ordinal);
             Assert.Contains("Detailed error log:", result.Error, StringComparison.Ordinal);
 
             Assert.True(File.Exists(diagnosticPath));
@@ -1004,7 +1409,7 @@ public class CliImportTests
             var cleanupFailure = Assert.Single(root.GetProperty("cleanupFailures").EnumerateArray());
             Assert.Equal("restoring-template-state", cleanupFailure.GetProperty("stage").GetString());
             Assert.Equal(
-                "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                "GitHub GraphQL request failed (HTTP 200 OK, code FORBIDDEN, request ID unavailable, retries 0).",
                 cleanupFailure.GetProperty("message").GetString());
             var exceptionDetails = root.GetProperty("exceptions").EnumerateArray().ToArray();
             Assert.Equal(3, exceptionDetails.Length);
@@ -1023,11 +1428,11 @@ public class CliImportTests
                 exceptionDetail =>
                 {
                     Assert.Equal(
-                        "GitHub GraphQL request failed. See the command's stderr output for the server response.",
+                        "GitHub GraphQL request failed (HTTP 200 OK, code FORBIDDEN, request ID unavailable, retries 0).",
                         exceptionDetail.GetProperty("message").GetString());
                     Assert.False(string.IsNullOrWhiteSpace(
                         exceptionDetail.GetProperty("stackTrace").GetString()));
-                    Assert.False(exceptionDetail.TryGetProperty("graphQlErrors", out _));
+                    Assert.Single(exceptionDetail.GetProperty("graphQlErrors").EnumerateArray());
                 });
 
             // The finally-path retry reports the dedicated restore diagnostic.
@@ -1395,6 +1800,7 @@ public class CliImportTests
         }
 
         public string GraphQlUrl { get; }
+        public int[]? ResponseStatusCodes { get; init; }
 
         public List<string> RequestBodies { get; } = [];
 
@@ -1433,6 +1839,7 @@ public class CliImportTests
                 var responseIndex = Math.Min(RequestBodies.Count - 1, _responses.Length - 1);
                 var response = Encoding.UTF8.GetBytes(_responses[responseIndex]);
                 context.Response.ContentType = "application/json";
+                if (ResponseStatusCodes is { } statuses) context.Response.StatusCode = statuses[Math.Min(responseIndex, statuses.Length - 1)];
                 context.Response.ContentLength64 = response.Length;
                 await context.Response.OutputStream.WriteAsync(response, cancellationToken);
                 context.Response.Close();

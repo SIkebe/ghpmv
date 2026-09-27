@@ -105,6 +105,8 @@ public class ProjectImporterTests
                     (sourceField.Options ?? []).Select(option => option.Name).Order(StringComparer.Ordinal),
                     result.IssueFieldOptionIds[sourceField.Name].Keys.Order(StringComparer.Ordinal));
             }
+
+            await AssertIterationConfigurationsAsync(client, snapshot, result, cancellationToken);
         }
         finally
         {
@@ -299,6 +301,56 @@ public class ProjectImporterTests
         finally
         {
             await DeleteProjectAsync(client, result.ProjectId);
+        }
+    }
+
+    private static async Task AssertIterationConfigurationsAsync(
+        GitHubGraphQLClient client,
+        ProjectSnapshot source,
+        ImportResult target,
+        CancellationToken cancellationToken)
+    {
+        var expected = source.Fields.Where(field =>
+            field.IssueField is null && field.DataType == "ITERATION" && field.IterationConfiguration is not null).ToArray();
+        var data = await client.QueryAsync(
+            """
+            query($ids: [ID!]!) {
+              nodes(ids: $ids) {
+                ... on ProjectV2IterationField {
+                  id
+                  configuration {
+                    duration startDay
+                    iterations { title startDate duration }
+                    completedIterations { title startDate duration }
+                  }
+                }
+              }
+            }
+            """,
+            new { ids = expected.Select(field => target.FieldIds[field.Name]).ToArray() },
+            cancellationToken);
+        var actual = data.GetProperty("nodes").EnumerateArray()
+            .ToDictionary(node => node.GetProperty("id").GetString()!, node => node.GetProperty("configuration"), StringComparer.Ordinal);
+        Assert.Equal(expected.Length, actual.Count);
+        foreach (var field in expected)
+        {
+            var configuration = field.IterationConfiguration!;
+            var observed = actual[target.FieldIds[field.Name]];
+            Assert.Equal(configuration.Duration, observed.GetProperty("duration").GetInt32());
+            Assert.Equal(configuration.StartDay, observed.GetProperty("startDay").GetInt32());
+            var expectedIterations = configuration.Iterations.Concat(configuration.CompletedIterations)
+                .Select(iteration => (iteration.Title, iteration.StartDate, iteration.Duration))
+                .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+                .ThenBy(iteration => iteration.Title, StringComparer.Ordinal);
+            var actualIterations = observed.GetProperty("iterations").EnumerateArray()
+                .Concat(observed.GetProperty("completedIterations").EnumerateArray())
+                .Select(iteration => (
+                    Title: iteration.GetProperty("title").GetString()!,
+                    StartDate: iteration.GetProperty("startDate").GetString()!,
+                    Duration: iteration.GetProperty("duration").GetInt32()))
+                .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+                .ThenBy(iteration => iteration.Title, StringComparer.Ordinal);
+            Assert.Equal(expectedIterations, actualIterations);
         }
     }
 

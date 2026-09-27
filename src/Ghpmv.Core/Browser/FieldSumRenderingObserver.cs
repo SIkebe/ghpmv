@@ -149,18 +149,35 @@ public sealed partial class FieldSumRenderingObserver
 
     private static async Task ValidateRoadmapDisplayAsync(IPage page, ViewSnapshot view)
     {
-        var title = Sel.RoadmapPillTitle(page, FixtureProjectBuilder.RoadmapLongTitle);
-        await title.WaitForAsync(new()
+        var item = Sel.RoadmapItem(page, FixtureProjectBuilder.RoadmapLongTitle);
+        await item.WaitForAsync(new()
         {
             State = WaitForSelectorState.Visible,
             Timeout = 15_000,
         }).ConfigureAwait(false);
-        var item = Sel.RoadmapItem(title);
-        if (await item.CountAsync().ConfigureAwait(false) == 0)
+        var title = Sel.RoadmapPillTitle(item, FixtureProjectBuilder.RoadmapLongTitle);
+        var scrollToItem = Sel.RoadmapScrollToButton(item);
+        await Sel.RoadmapTitleOrScrollControl(item, FixtureProjectBuilder.RoadmapLongTitle).WaitForAsync(new()
         {
-            throw new InvalidOperationException(
-                $"view '{view.Name}': containing Roadmap item for the long fixture title was not found");
-        }
+            State = WaitForSelectorState.Visible,
+            Timeout = 15_000,
+        }).ConfigureAwait(false);
+        await RevealRoadmapTitleAsync(
+            () => title.IsVisibleAsync(),
+            async () =>
+            {
+                if (await scrollToItem.CountAsync().ConfigureAwait(false) != 1)
+                {
+                    throw new InvalidOperationException(
+                        $"view '{view.Name}': expected exactly one scroll control for the long fixture item");
+                }
+                await scrollToItem.ClickAsync(new() { Timeout = 15_000 }).ConfigureAwait(false);
+            },
+            () => title.WaitForAsync(new()
+            {
+                State = WaitForSelectorState.Visible,
+                Timeout = 15_000,
+            })).ConfigureAwait(false);
 
         var titleTruncated = await title.EvaluateAsync<bool>(
             """
@@ -189,6 +206,21 @@ public sealed partial class FieldSumRenderingObserver
         var datesRendered = await Sel.RoadmapItemDateElements(item).CountAsync().ConfigureAwait(false) > 0
             || RenderedDate().IsMatch(itemText);
         ValidateRoadmapDisplayObservation(view, titleTruncated, datesRendered);
+    }
+
+    internal static async Task RevealRoadmapTitleAsync(
+        Func<Task<bool>> titleIsVisibleAsync,
+        Func<Task> scrollToItemAsync,
+        Func<Task> waitForTitleAsync)
+    {
+        ArgumentNullException.ThrowIfNull(titleIsVisibleAsync);
+        ArgumentNullException.ThrowIfNull(scrollToItemAsync);
+        ArgumentNullException.ThrowIfNull(waitForTitleAsync);
+        if (!await titleIsVisibleAsync().ConfigureAwait(false))
+        {
+            await scrollToItemAsync().ConfigureAwait(false);
+        }
+        await waitForTitleAsync().ConfigureAwait(false);
     }
 
     private static async Task<IReadOnlyList<string>> ReadNormalizedTextsAsync(ILocator locator)

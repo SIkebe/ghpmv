@@ -79,6 +79,10 @@ var noUpdateCheckOption = new Option<bool>("--no-update-check")
 {
     Description = "Skip the update check against GitHub Releases (also disabled by the GHPMV_NO_UPDATE_CHECK environment variable).",
 };
+var allowSensitiveDiagnosticsOption = new Option<bool>("--allow-sensitive-diagnostics")
+{
+    Description = "For this invocation only, save failed API response bodies to a unique ghpmv-sensitive-api-<id>.jsonl in the current directory (created only on failure). Sensitive; review before sharing. Ordinary API errors stay sanitized.",
+};
 
 var exportCommand = new Command("export", "Export one project (or all projects of an owner) from the source to JSON snapshots.")
 {
@@ -93,10 +97,15 @@ var exportCommand = new Command("export", "Export one project (or all projects o
     browserProfileOption,
     browserBaseUrlOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 exportCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    var apiDiagnostics = new ApiDiagnosticSession();
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine, apiDiagnostics)
+        : null;
     var org = parseResult.GetValue(orgOption)!;
     var projectNumber = parseResult.GetValue(projectOption);
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
@@ -116,7 +125,7 @@ exportCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { DiagnosticSession = apiDiagnostics };
     client.OnRetry = Console.Error.WriteLine;
     var exporter = new ProjectExporter(client) { OnProgress = Console.Error.WriteLine, OwnerType = ownerType };
 
@@ -289,6 +298,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     browserProfileOption,
     browserBaseUrlOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 importCommand.Validators.Add(result =>
@@ -311,6 +321,10 @@ importCommand.Validators.Add(result =>
 
 importCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    var apiDiagnostics = new ApiDiagnosticSession();
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine, apiDiagnostics)
+        : null;
     var org = parseResult.GetValue(importOrgOption)!;
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
     var inDirectory = parseResult.GetValue(inOption)!;
@@ -319,10 +333,16 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
+    using var diagnostics = new ImportFailureDiagnostics(
+        org,
+        ownerType.ToString().ToLowerInvariant(),
+        projectNumber,
+        enableBrowserAutomation,
+        apiDiagnostics);
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
-        Console.Error.WriteLine("error: --on-conflict must be one of: skip, update, fail.");
-        return 1;
+        return await diagnostics.ReportEarlyFailureAsync(inDirectory,
+            new ArgumentException("--on-conflict must be one of: skip, update, fail."));
     }
 
     var token = parseResult.GetValue(tokenOption)
@@ -331,501 +351,39 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
 
     if (string.IsNullOrWhiteSpace(token))
     {
-        Console.Error.WriteLine("error: no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN.");
-        return 1;
+        return await diagnostics.ReportEarlyFailureAsync(inDirectory,
+            new InvalidOperationException("no token provided. Use --token or set GITHUB_TOKEN / GHPMV_TOKEN."));
     }
 
-    var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    Uri? graphQlBaseUrl;
+    try
+    {
+        graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
+    }
+    catch (Exception exception) when (exception is ArgumentException or FormatException)
+    {
+        return await diagnostics.ReportEarlyFailureAsync(inDirectory,
+            new ArgumentException("The target API base URL is invalid."));
+    }
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { DiagnosticSession = apiDiagnostics };
     using var rest = new GitHubRestClient(
         token,
-        graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl));
-    var diagnostics = new ImportFailureDiagnostics(
-        org,
-        ownerType.ToString().ToLowerInvariant(),
-        projectNumber,
-        enableBrowserAutomation);
+        graphQlBaseUrl is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUrl))
+    {
+        DiagnosticSession = apiDiagnostics,
+    };
     client.OnRetry = diagnostics.WriteProgress;
     BrowserSession? session = null;
     ProjectTemplateWriteSession? templateWriteSession = null;
     Exception? importFailure = null;
 
+    var exitCode = 1;
     try
     {
-        diagnostics.SetStage("loading-snapshot");
-        var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
-
-        diagnostics.SetStage("preflight");
-        var repoMappingPath = parseResult.GetValue(repoMappingOption);
-        var userMappingPath = parseResult.GetValue(userMappingOption);
-        var repoMapping = repoMappingPath is null
-            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.Load(repoMappingPath);
-        var userMapping = userMappingPath is null
-            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.LoadUserMapping(userMappingPath);
-        var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
-        var organizationMapping = organizationMappingPath is null
-            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.Load(organizationMappingPath);
-        var teamMappingPath = parseResult.GetValue(teamMappingOption);
-        var teamMapping = teamMappingPath is null
-            ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
-            : CsvMapping.Load(teamMappingPath);
-
-        if (projectTitle is not null)
-        {
-            snapshot = snapshot with { Project = snapshot.Project with { Title = projectTitle } };
-        }
-
-        if (ownerType == ProjectOwnerType.User && snapshot.Project.Template is true)
-        {
-            throw new InvalidOperationException(
-                "A user-owned Project cannot be marked as a template. Import this snapshot into an organization-owned Project.");
-        }
-
-        var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation, ownerType);
-        if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
-        {
-            throw new InvalidOperationException(
-                "Snapshots containing organization Issue Fields cannot be imported into a user-owned Project.");
-        }
-
-        async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
-        {
-            var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
-                snapshot,
-                userMapping,
-                repoMapping,
-                organizationMapping);
-            foreach (var transform in filterTransforms)
-            {
-                diagnostics.WriteProgress(
-                    $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
-
-                foreach (var identifier in transform.Result.Unresolved)
-                {
-                    diagnostics.WriteProgress(
-                        $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
-                }
-
-                foreach (var identifier in transform.Result.Unchanged)
-                {
-                    diagnostics.WriteProgress(
-                        $"Filter preflight {transform.Location}: mapping not required for {identifier.Qualifier} value '{identifier.Value}'");
-                }
-
-                foreach (var identifier in transform.Result.Unsupported)
-                {
-                    diagnostics.WriteProgress(
-                        $"warning: Filter preflight {transform.Location}: unsupported qualifier '{identifier.Qualifier}' was left unchanged");
-                }
-            }
-
-            var repositoryResolutions = ProjectFilterTransformer.AnalyzeAutoAddRepositories(snapshot, repoMapping);
-            foreach (var repository in repositoryResolutions.Where(result =>
-                         result.Resolution.Status != RepositoryResolutionStatus.Mapped))
-            {
-                diagnostics.WriteProgress(
-                    $"warning: Filter preflight {repository.Location}: {repository.Resolution.Status.ToString().ToLowerInvariant()} Auto-add repository '{repository.Resolution.Source}'");
-            }
-
-            if (filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0)
-                || repositoryResolutions.Any(result => result.Resolution.Status != RepositoryResolutionStatus.Mapped))
-            {
-                throw new InvalidOperationException(
-                    "Filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
-            }
-
-            session = new BrowserSession(new BrowserSessionOptions
-            {
-                BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
-                Profile = parseResult.GetValue(browserProfileOption),
-            });
-            var apiLogin = await client.GetViewerLoginAsync(ct);
-            await session.ValidateAuthenticationAsync(apiLogin, ct);
-        }
-
-        var importPreflightCompleted = false;
-        async Task ValidateImportBeforeWriteAsync(CancellationToken ct)
-        {
-            if (importPreflightCompleted)
-            {
-                return;
-            }
-
-            diagnostics.SetStage("preflight");
-            if (enableBrowserAutomation)
-            {
-                ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
-            }
-
-            await ImportCapabilityPreflight.ValidateAsync(
-                ownerType == ProjectOwnerType.Organization
-                    ? capabilityPlan
-                    : capabilityPlan with { RequiresOrganizationAdministrator = false },
-                org,
-                repoMapping,
-                rest,
-                ct);
-            if (enableBrowserAutomation)
-            {
-                await ValidateBrowserBeforeWriteAsync(ct);
-            }
-
-            importPreflightCompleted = true;
-            diagnostics.SetStage("importing-project");
-        }
-
-        var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
-        var projectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
-        async Task PersistUnresolvedWarningsAsync(
-            int projectWarningCount,
-            int itemWarningCount,
-            int viewWarningCount,
-            int workflowWarningCount)
-        {
-            if (projectWarningCount == 0
-                && itemWarningCount == 0
-                && (!enableBrowserAutomation || (viewWarningCount == 0 && workflowWarningCount == 0)))
-            {
-                return;
-            }
-
-            var warningLog = await ProjectImportLog.LoadAsync(inDirectory, CancellationToken.None);
-            var previousWarningState = warningLog.HasUnresolvedWarnings;
-            warningLog.TryMarkImportCompleted(
-                enableBrowserAutomation,
-                projectWarningCount,
-                itemWarningCount,
-                viewWarningCount,
-                workflowWarningCount);
-            if (warningLog.HasUnresolvedWarnings != previousWarningState)
-            {
-                await warningLog.SaveAsync(inDirectory, CancellationToken.None);
-            }
-        }
-
-        ImportLog? templateLog = itemLog;
-        async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
-        {
-            var latestLog = await ImportLog.LoadAsync(inDirectory, ct)
-                ?? templateLog
-                ?? throw new InvalidOperationException(
-                    $"{ImportLog.FileName} was unavailable while persisting template restoration state.");
-            latestLog.TemplateRestorationRequired = required;
-            await latestLog.SaveAsync(inDirectory, ct);
-            templateLog = latestLog;
-        }
-
-        if (itemLog is { TemplateRestorationRequired: true })
-        {
-            templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
-                client,
-                itemLog.ProjectId,
-                restorationWasPending: true,
-                PersistTemplateRestorationAsync,
-                diagnostics.WriteProgress,
-                cancellationToken);
-        }
-
-        if (itemLog is not null
-            && !string.Equals(
-                itemLog.SourceSnapshotFingerprint,
-                ImportLog.ComputeSnapshotFingerprint(snapshot),
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                $"{ImportLog.FileName} in '{inDirectory}' belongs to a different source snapshot.");
-        }
-
-        var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
-            || itemLog is { PendingContents.Count: > 0 }
-            || itemLog is { HasIncompleteItems: true };
-        var hasIncompleteStatusUpdateWork = itemLog is not null
-            && snapshot.StatusUpdates is { } capturedStatusUpdates
-            && (itemLog.PendingStatusUpdates.Count > 0
-                || itemLog.StatusUpdates.Count < capturedStatusUpdates.Count
-                || itemLog.TemplateRestorationRequired);
-        var hasIncompleteProjectWork = projectLog.PendingProject is not null
-            || projectLog.PendingFields.Count > 0
-            || projectLog.PendingIssueFields.Count > 0
-            || projectLog.PendingIssueFieldLinks.Count > 0
-            || projectLog.PendingViews.Count > 0
-            || (projectLog.CreatedProjectId is not null && projectLog.ImportCompleted is false);
-        var pendingItemProjectId = itemLog?.ProjectId;
-        var importer = new ProjectImporter(client)
-        {
-            OnConflict = hasIncompleteItemWork || hasIncompleteStatusUpdateWork || hasIncompleteProjectWork
-                ? ConflictAction.Update
-                : onConflict,
-            OwnerType = ownerType,
-            RepositoryMapping = repoMapping,
-            UserMapping = userMapping,
-            OrganizationMapping = organizationMapping,
-            TeamMapping = teamMapping,
-            BrowserViewEnrichmentPlanned = enableBrowserAutomation,
-            BrowserFieldDefaultEnrichmentPlanned = enableBrowserAutomation,
-            OnProgress = diagnostics.WriteProgress,
-            OnTargetProjectResolved = diagnostics.SetTargetProject,
-            BeforeWriteAsync = ValidateImportBeforeWriteAsync,
-            OperationLogDirectory = inDirectory,
-            PendingItemProjectId = pendingItemProjectId,
-        };
-
-        diagnostics.SetStage("importing-project");
-        var result = projectNumber is { } number
-            ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
-            : await importer.ImportAsync(snapshot, org, cancellationToken);
-        diagnostics.SetTargetProject(result.ProjectNumber, result.Url);
-        await PersistUnresolvedWarningsAsync(
-            importer.Warnings.Count,
-            itemWarningCount: 0,
-            viewWarningCount: result.ViewWarningCount,
-            workflowWarningCount: 0);
-
-        if (result.Outcome == ProjectImportOutcome.Skipped)
-        {
-            diagnostics.WriteProgress("Project already exists; skipped without making changes.");
-            Console.WriteLine(result.Url);
-            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
-            await NotifyUpdateAsync(updateCheck);
-            return 0;
-        }
-
-        var fieldDefaultWarnings = 0;
-        string? fieldDefaultSummary = null;
-        diagnostics.SetStage("importing-items");
-        var itemImporter = new ItemImporter(client)
-        {
-            RepositoryMapping = repoMapping,
-            UserMapping = userMapping,
-            OnProgress = diagnostics.WriteProgress,
-            ReapplyCompletedFieldValues = result.Outcome == ProjectImportOutcome.Updated,
-        };
-        ItemImportResult itemResult;
-        if (enableBrowserAutomation)
-        {
-            System.Diagnostics.Debug.Assert(session is not null);
-            var sequence = await FieldDefaultUiImporter.RunImportSequenceAsync(
-                snapshot,
-                async (phase, desiredSnapshot, ct) =>
-                {
-                    var defaultImporter = new FieldDefaultUiImporter(session)
-                    {
-                        OnProgress = diagnostics.WriteProgress,
-                    };
-                    await defaultImporter.ImportAsync(
-                        desiredSnapshot,
-                        org,
-                        ownerType,
-                        result.ProjectNumber,
-                        ct);
-                    if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.ApplyAfterItems)
-                    {
-                        foreach (var warning in defaultImporter.Warnings)
-                        {
-                            diagnostics.WriteProgress($"warning: {warning}");
-                        }
-                    }
-
-                    return new FieldDefaultUiImporter.FieldDefaultImportStepResult
-                    {
-                        AppliedCount = defaultImporter.AppliedCount,
-                        Warnings = defaultImporter.Warnings,
-                    };
-                },
-                ct => itemImporter.ImportAsync(snapshot, result, inDirectory, ct),
-                candidate => candidate.Skipped,
-                cancellationToken);
-            itemResult = sequence.ItemResult;
-            fieldDefaultWarnings = sequence.Warnings.Count;
-            fieldDefaultSummary = sequence.Summary;
-            if (sequence.DefaultsDeferred)
-            {
-                diagnostics.WriteProgress($"warning: {sequence.Warnings[0]}");
-            }
-        }
-        else
-        {
-            itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
-        }
-
-        await PersistUnresolvedWarningsAsync(
-            importer.Warnings.Count,
-            itemResult.Warnings.Count,
-            viewWarningCount: result.ViewWarningCount,
-            workflowWarningCount: 0);
-        var statusUpdateResult = new StatusUpdateImportResult
-        {
-            Created = 0,
-            Resumed = 0,
-            AlreadyComplete = 0,
-        };
-        if (snapshot.StatusUpdates is { Count: > 0 })
-        {
-            diagnostics.SetStage("importing-status-updates");
-            templateLog = await ImportLog.LoadAsync(inDirectory, cancellationToken)
-                ?? new ImportLog
-                {
-                    ProjectId = result.ProjectId,
-                    SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
-                };
-            if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
-            {
-                templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
-                    client,
-                    result.ProjectId,
-                    templateLog.TemplateRestorationRequired,
-                    PersistTemplateRestorationAsync,
-                    diagnostics.WriteProgress,
-                    cancellationToken);
-            }
-
-            var statusUpdateImporter = new StatusUpdateImporter(client)
-            {
-                OnProgress = diagnostics.WriteProgress,
-            };
-            statusUpdateResult = await statusUpdateImporter.ImportAsync(
-                snapshot,
-                result,
-                inDirectory,
-                cancellationToken);
-        }
-
-        var viewWarnings = result.ViewWarningCount;
-        var workflowWarnings = 0;
-        var workflowsImported = 0;
-        if (enableBrowserAutomation)
-        {
-            diagnostics.SetStage("importing-browser-enrichment");
-            System.Diagnostics.Debug.Assert(session is not null);
-            await PersistUnresolvedWarningsAsync(
-                importer.Warnings.Count + fieldDefaultWarnings,
-                itemResult.Warnings.Count,
-                viewWarnings,
-                workflowWarningCount: 0);
-
-            var viewImporter = new ViewUiImporter(session, client)
-            {
-                OnProgress = diagnostics.WriteProgress,
-            };
-            await viewImporter.EnrichAsync(
-                snapshot,
-                org,
-                ownerType,
-                result.ProjectNumber,
-                result.ViewNumbers,
-                cancellationToken);
-            foreach (var warning in viewImporter.Warnings)
-            {
-                diagnostics.WriteProgress($"warning: {warning}");
-            }
-
-            viewWarnings += viewImporter.Warnings.Count;
-            await PersistUnresolvedWarningsAsync(
-                importer.Warnings.Count + fieldDefaultWarnings,
-                itemResult.Warnings.Count,
-                viewWarnings,
-                workflowWarningCount: 0);
-
-            var workflowImporter = new WorkflowUiImporter(session)
-            {
-                RepositoryMapping = repoMapping,
-                UserMapping = userMapping,
-                OrganizationMapping = organizationMapping,
-                OnProgress = diagnostics.WriteProgress,
-            };
-            await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
-            foreach (var warning in workflowImporter.Warnings)
-            {
-                diagnostics.WriteProgress($"warning: {warning}");
-            }
-
-            workflowWarnings = workflowImporter.Warnings.Count;
-            workflowsImported = workflowImporter.ImportedCount;
-            await PersistUnresolvedWarningsAsync(
-                importer.Warnings.Count + fieldDefaultWarnings,
-                itemResult.Warnings.Count,
-                viewWarnings,
-                workflowWarnings);
-        }
-
-        if (templateWriteSession is not null)
-        {
-            diagnostics.SetStage("finalizing-template-state");
-            await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
-        }
-        else
-        {
-            diagnostics.SetStage("finalizing-template-state");
-            await ProjectTemplateWriteSession.SetFinalStateAsync(
-                client,
-                result.ProjectId,
-                snapshot.Project.Template,
-                diagnostics.WriteProgress,
-                cancellationToken);
-        }
-
-        var completedProjectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
-        var previousWarningState = completedProjectLog.HasUnresolvedWarnings;
-        var importMarkedComplete = completedProjectLog.TryMarkImportCompleted(
-                enableBrowserAutomation,
-                importer.Warnings.Count + fieldDefaultWarnings,
-                itemResult.Warnings.Count,
-                viewWarnings,
-                workflowWarnings);
-        if (importMarkedComplete
-            || completedProjectLog.HasUnresolvedWarnings != previousWarningState)
-        {
-            await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
-        }
-
-        var hasCurrentWarnings = importer.Warnings.Count + fieldDefaultWarnings > 0
-            || itemResult.Warnings.Count > 0
-            || (enableBrowserAutomation && (viewWarnings > 0 || workflowWarnings > 0));
-        if (ImportFailureDiagnostics.CanDeletePreviousFailure(
-                completedProjectLog,
-                hasCurrentWarnings))
-        {
-            diagnostics.DeletePreviousFailure(inDirectory);
-        }
-        Console.WriteLine(result.Url);
-        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
-        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
-        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"status-updates: created={statusUpdateResult.Created} resumed={statusUpdateResult.Resumed} already-complete={statusUpdateResult.AlreadyComplete}"));
-        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-            $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
-        if (enableBrowserAutomation)
-        {
-            Console.WriteLine(fieldDefaultSummary);
-            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
-                $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
-        }
-
-        await NotifyUpdateAsync(updateCheck);
-        return 0;
-    }
-    catch (Exception exception) when (exception is GitHubGraphQLException or HttpRequestException or InvalidOperationException or IOException or InvalidDataException or UnauthorizedAccessException or FormatException or PlaywrightException or TimeoutException or ArgumentException or KeyNotFoundException or System.Text.Json.JsonException)
-    {
-        importFailure = exception;
-        diagnostics.CaptureFailureStage();
-        Console.Error.WriteLine($"error: {exception.Message}");
-        return 1;
-    }
-    catch (Exception exception)
-    {
-        importFailure = exception;
-        diagnostics.CaptureFailureStage();
-        throw;
+        exitCode = await RunImportAsync();
     }
     finally
     {
-        var failureBeforeCleanup = importFailure;
         importFailure = await new ImportFailureFinalizer(diagnostics, inDirectory).CompleteAsync(
             importFailure,
             templateWriteSession is { RestorationRequired: true }
@@ -833,8 +391,486 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 : null,
             session is null
                 ? null
-                : () => session.DisposeAsync());
-        ImportFailureFinalizer.ThrowIfCleanupOnlyFailure(failureBeforeCleanup, importFailure);
+                : () => session.DisposeAsync(),
+            sensitiveDiagnostics is null ? null : sensitiveDiagnostics.Dispose);
+    }
+    return importFailure is null ? exitCode : 1;
+
+    async Task<int> RunImportAsync()
+    {
+        try
+        {
+            diagnostics.SetStage("loading-snapshot");
+            var snapshot = await SnapshotFile.LoadAsync(inDirectory, cancellationToken);
+            diagnostics.SetSnapshot(snapshot, projectTitle);
+
+            diagnostics.SetStage("preflight");
+            var repoMappingPath = parseResult.GetValue(repoMappingOption);
+            var userMappingPath = parseResult.GetValue(userMappingOption);
+            var repoMapping = repoMappingPath is null
+                ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+                : CsvMapping.Load(repoMappingPath);
+            var userMapping = userMappingPath is null
+                ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+                : CsvMapping.LoadUserMapping(userMappingPath);
+            var organizationMappingPath = parseResult.GetValue(organizationMappingOption);
+            var organizationMapping = organizationMappingPath is null
+                ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+                : CsvMapping.Load(organizationMappingPath);
+            var teamMappingPath = parseResult.GetValue(teamMappingOption);
+            var teamMapping = teamMappingPath is null
+                ? System.Collections.ObjectModel.ReadOnlyDictionary<string, string>.Empty
+                : CsvMapping.Load(teamMappingPath);
+
+            if (projectTitle is not null)
+            {
+                snapshot = snapshot with
+                {
+                    Source = MigrationDiagnostics.Source(snapshot),
+                    Project = snapshot.Project with { Title = projectTitle },
+                };
+            }
+
+            if (ownerType == ProjectOwnerType.User && snapshot.Project.Template is true)
+            {
+                throw new InvalidOperationException(
+                    "A user-owned Project cannot be marked as a template. Import this snapshot into an organization-owned Project.");
+            }
+
+            var capabilityPlan = ImportCapabilityAnalyzer.Analyze(snapshot, enableBrowserAutomation, ownerType);
+            if (ownerType == ProjectOwnerType.User && capabilityPlan.RequiresOrganizationAdministrator)
+            {
+                throw new InvalidOperationException(
+                    "Snapshots containing organization Issue Fields cannot be imported into a user-owned Project.");
+            }
+
+            async Task ValidateBrowserBeforeWriteAsync(CancellationToken ct)
+            {
+                var filterTransforms = ProjectFilterTransformer.AnalyzeSnapshot(
+                    snapshot,
+                    userMapping,
+                    repoMapping,
+                    organizationMapping);
+                foreach (var transform in filterTransforms)
+                {
+                    diagnostics.WriteProgress(
+                        $"Filter preflight {transform.Location}: '{transform.Result.Original}' -> '{transform.Result.Transformed}'");
+
+                    foreach (var identifier in transform.Result.Unresolved)
+                    {
+                        diagnostics.WriteProgress(
+                            $"warning: Filter preflight {transform.Location}: unmapped {identifier.Qualifier} value '{identifier.Value}'");
+                    }
+
+                    foreach (var identifier in transform.Result.Unchanged)
+                    {
+                        diagnostics.WriteProgress(
+                            $"Filter preflight {transform.Location}: mapping not required for {identifier.Qualifier} value '{identifier.Value}'");
+                    }
+
+                    foreach (var identifier in transform.Result.Unsupported)
+                    {
+                        diagnostics.WriteProgress(
+                            $"warning: Filter preflight {transform.Location}: unsupported qualifier '{identifier.Qualifier}' was left unchanged");
+                    }
+                }
+
+                var repositoryResolutions = ProjectFilterTransformer.AnalyzeAutoAddRepositories(snapshot, repoMapping);
+                foreach (var repository in repositoryResolutions.Where(result =>
+                             result.Resolution.Status != RepositoryResolutionStatus.Mapped))
+                {
+                    diagnostics.WriteProgress(
+                        $"warning: Filter preflight {repository.Location}: {repository.Resolution.Status.ToString().ToLowerInvariant()} Auto-add repository '{repository.Resolution.Source}'");
+                }
+
+                if (filterTransforms.Any(transform => transform.Result.Unresolved.Count > 0)
+                    || repositoryResolutions.Any(result => result.Resolution.Status != RepositoryResolutionStatus.Mapped))
+                {
+                    throw new InvalidOperationException(
+                        "Filter mapping preflight failed; fill the generated mapping CSV rows before importing.");
+                }
+
+                session = new BrowserSession(new BrowserSessionOptions
+                {
+                    BaseUrl = BrowserBaseUrl.Resolve(graphQlBaseUrl, parseResult.GetValue(browserBaseUrlOption)),
+                    Profile = parseResult.GetValue(browserProfileOption),
+                });
+                var apiLogin = await client.GetViewerLoginAsync(ct);
+                await session.ValidateAuthenticationAsync(apiLogin, ct);
+            }
+
+            var importPreflightCompleted = false;
+            async Task ValidateImportBeforeWriteAsync(CancellationToken ct)
+            {
+                if (importPreflightCompleted)
+                {
+                    return;
+                }
+
+                diagnostics.SetStage("preflight");
+                if (enableBrowserAutomation)
+                {
+                    ViewUiImporter.ValidateSharedRoadmapDisplaySettings(snapshot.Views);
+                }
+
+                await ImportCapabilityPreflight.ValidateAsync(
+                    ownerType == ProjectOwnerType.Organization
+                        ? capabilityPlan
+                        : capabilityPlan with { RequiresOrganizationAdministrator = false },
+                    org,
+                    repoMapping,
+                    rest,
+                    ct);
+                if (enableBrowserAutomation)
+                {
+                    await ValidateBrowserBeforeWriteAsync(ct);
+                }
+
+                importPreflightCompleted = true;
+                diagnostics.SetStage("importing-project");
+            }
+
+            var itemLog = await ImportLog.LoadAsync(inDirectory, cancellationToken);
+            var projectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
+            async Task PersistUnresolvedWarningsAsync(
+                int projectWarningCount,
+                int itemWarningCount,
+                int viewWarningCount,
+                int workflowWarningCount)
+            {
+                if (projectWarningCount == 0
+                    && itemWarningCount == 0
+                    && (!enableBrowserAutomation || (viewWarningCount == 0 && workflowWarningCount == 0)))
+                {
+                    return;
+                }
+
+                var warningLog = await ProjectImportLog.LoadAsync(inDirectory, CancellationToken.None);
+                var previousWarningState = warningLog.HasUnresolvedWarnings;
+                warningLog.TryMarkImportCompleted(
+                    enableBrowserAutomation,
+                    projectWarningCount,
+                    itemWarningCount,
+                    viewWarningCount,
+                    workflowWarningCount);
+                if (warningLog.HasUnresolvedWarnings != previousWarningState)
+                {
+                    await warningLog.SaveAsync(inDirectory, CancellationToken.None);
+                }
+            }
+
+            ImportLog? templateLog = itemLog;
+            async Task PersistTemplateRestorationAsync(bool required, CancellationToken ct)
+            {
+                var latestLog = await ImportLog.LoadAsync(inDirectory, ct)
+                    ?? templateLog
+                    ?? throw new InvalidOperationException(
+                        $"{ImportLog.FileName} was unavailable while persisting template restoration state.");
+                latestLog.TemplateRestorationRequired = required;
+                await latestLog.SaveAsync(inDirectory, ct);
+                templateLog = latestLog;
+            }
+
+            if (itemLog is { TemplateRestorationRequired: true })
+            {
+                templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                    client,
+                    itemLog.ProjectId,
+                    restorationWasPending: true,
+                    PersistTemplateRestorationAsync,
+                    diagnostics.WriteProgress,
+                    cancellationToken);
+            }
+
+            if (itemLog is not null
+                && !string.Equals(
+                    itemLog.SourceSnapshotFingerprint,
+                    ImportLog.ComputeSnapshotFingerprint(snapshot),
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"{ImportLog.FileName} in '{inDirectory}' belongs to a different source snapshot.");
+            }
+
+            var hasIncompleteItemWork = itemLog is { PendingDrafts.Count: > 0 }
+                || itemLog is { PendingContents.Count: > 0 }
+                || itemLog is { HasIncompleteItems: true };
+            var hasIncompleteStatusUpdateWork = itemLog is not null
+                && snapshot.StatusUpdates is { } capturedStatusUpdates
+                && (itemLog.PendingStatusUpdates.Count > 0
+                    || itemLog.StatusUpdates.Count < capturedStatusUpdates.Count
+                    || itemLog.TemplateRestorationRequired);
+            var hasIncompleteProjectWork = projectLog.PendingProject is not null
+                || projectLog.PendingFields.Count > 0
+                || projectLog.PendingIssueFields.Count > 0
+                || projectLog.PendingIssueFieldLinks.Count > 0
+                || projectLog.PendingViews.Count > 0
+                || (projectLog.CreatedProjectId is not null && projectLog.ImportCompleted is false);
+            var pendingItemProjectId = itemLog?.ProjectId;
+            var importer = new ProjectImporter(client)
+            {
+                OnConflict = hasIncompleteItemWork || hasIncompleteStatusUpdateWork || hasIncompleteProjectWork
+                    ? ConflictAction.Update
+                    : onConflict,
+                OwnerType = ownerType,
+                RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OrganizationMapping = organizationMapping,
+                TeamMapping = teamMapping,
+                BrowserViewEnrichmentPlanned = enableBrowserAutomation,
+                BrowserFieldDefaultEnrichmentPlanned = enableBrowserAutomation,
+                OnProgress = diagnostics.WriteProgress,
+                OnTargetProjectResolved = diagnostics.SetTargetProject,
+                OnTargetIdentityResolved = diagnostics.SetTargetIdentity,
+                BeforeWriteAsync = ValidateImportBeforeWriteAsync,
+                OperationLogDirectory = inDirectory,
+                PendingItemProjectId = pendingItemProjectId,
+            };
+
+            diagnostics.SetStage("importing-project");
+            var result = projectNumber is { } number
+                ? await importer.ImportIntoAsync(snapshot, org, number, cancellationToken)
+                : await importer.ImportAsync(snapshot, org, cancellationToken);
+            diagnostics.SetTargetProject(result.ProjectNumber, result.Url);
+            await PersistUnresolvedWarningsAsync(
+                importer.Warnings.Count,
+                itemWarningCount: 0,
+                viewWarningCount: result.ViewWarningCount,
+                workflowWarningCount: 0);
+
+            if (result.Outcome == ProjectImportOutcome.Skipped)
+            {
+                diagnostics.WriteProgress("Project already exists; skipped without making changes.");
+                Console.WriteLine(result.Url);
+                Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
+                await NotifyUpdateAsync(updateCheck);
+                return 0;
+            }
+
+            var fieldDefaultWarnings = 0;
+            string? fieldDefaultSummary = null;
+            diagnostics.SetStage("importing-items");
+            var itemImporter = new ItemImporter(client)
+            {
+                RepositoryMapping = repoMapping,
+                UserMapping = userMapping,
+                OnProgress = diagnostics.WriteProgress,
+                ReapplyCompletedFieldValues = result.Outcome == ProjectImportOutcome.Updated,
+            };
+            ItemImportResult itemResult;
+            if (enableBrowserAutomation)
+            {
+                System.Diagnostics.Debug.Assert(session is not null);
+                var sequence = await FieldDefaultUiImporter.RunImportSequenceAsync(
+                    snapshot,
+                    async (phase, desiredSnapshot, ct) =>
+                    {
+                        var defaultImporter = new FieldDefaultUiImporter(session)
+                        {
+                            OnProgress = diagnostics.WriteProgress,
+                        };
+                        await defaultImporter.ImportAsync(
+                            desiredSnapshot,
+                            org,
+                            ownerType,
+                            result.ProjectNumber,
+                            ct);
+                        if (phase == FieldDefaultUiImporter.FieldDefaultImportPhase.ApplyAfterItems)
+                        {
+                            foreach (var warning in defaultImporter.Warnings)
+                            {
+                                diagnostics.WriteProgress($"warning: {warning}");
+                            }
+                        }
+
+                        return new FieldDefaultUiImporter.FieldDefaultImportStepResult
+                        {
+                            AppliedCount = defaultImporter.AppliedCount,
+                            Warnings = defaultImporter.Warnings,
+                        };
+                    },
+                    ct => itemImporter.ImportAsync(snapshot, result, inDirectory, ct),
+                    candidate => candidate.Skipped,
+                    cancellationToken);
+                itemResult = sequence.ItemResult;
+                fieldDefaultWarnings = sequence.Warnings.Count;
+                fieldDefaultSummary = sequence.Summary;
+                if (sequence.DefaultsDeferred)
+                {
+                    diagnostics.WriteProgress($"warning: {sequence.Warnings[0]}");
+                }
+            }
+            else
+            {
+                itemResult = await itemImporter.ImportAsync(snapshot, result, inDirectory, cancellationToken);
+            }
+
+            await PersistUnresolvedWarningsAsync(
+                importer.Warnings.Count,
+                itemResult.Warnings.Count,
+                viewWarningCount: result.ViewWarningCount,
+                workflowWarningCount: 0);
+            var statusUpdateResult = new StatusUpdateImportResult
+            {
+                Created = 0,
+                Resumed = 0,
+                AlreadyComplete = 0,
+            };
+            if (snapshot.StatusUpdates is { Count: > 0 })
+            {
+                diagnostics.SetStage("importing-status-updates");
+                templateLog = await ImportLog.LoadAsync(inDirectory, cancellationToken)
+                    ?? new ImportLog
+                    {
+                        ProjectId = result.ProjectId,
+                        SourceSnapshotFingerprint = ImportLog.ComputeSnapshotFingerprint(snapshot),
+                    };
+                if (ProjectTemplateWriteSession.RequiresPreparation(templateWriteSession))
+                {
+                    templateWriteSession = await ProjectTemplateWriteSession.PrepareAsync(
+                        client,
+                        result.ProjectId,
+                        templateLog.TemplateRestorationRequired,
+                        PersistTemplateRestorationAsync,
+                        diagnostics.WriteProgress,
+                        cancellationToken);
+                }
+
+                var statusUpdateImporter = new StatusUpdateImporter(client)
+                {
+                    OnProgress = diagnostics.WriteProgress,
+                };
+                statusUpdateResult = await statusUpdateImporter.ImportAsync(
+                    snapshot,
+                    result,
+                    inDirectory,
+                    cancellationToken);
+            }
+
+            var viewWarnings = result.ViewWarningCount;
+            var workflowWarnings = 0;
+            var workflowsImported = 0;
+            if (enableBrowserAutomation)
+            {
+                diagnostics.SetStage("importing-browser-enrichment");
+                System.Diagnostics.Debug.Assert(session is not null);
+                await PersistUnresolvedWarningsAsync(
+                    importer.Warnings.Count + fieldDefaultWarnings,
+                    itemResult.Warnings.Count,
+                    viewWarnings,
+                    workflowWarningCount: 0);
+
+                var viewImporter = new ViewUiImporter(session, client)
+                {
+                    OnProgress = diagnostics.WriteProgress,
+                };
+                await viewImporter.EnrichAsync(
+                    snapshot,
+                    org,
+                    ownerType,
+                    result.ProjectNumber,
+                    result.ViewNumbers,
+                    cancellationToken);
+                foreach (var warning in viewImporter.Warnings)
+                {
+                    diagnostics.WriteProgress($"warning: {warning}");
+                }
+
+                viewWarnings += viewImporter.Warnings.Count;
+                await PersistUnresolvedWarningsAsync(
+                    importer.Warnings.Count + fieldDefaultWarnings,
+                    itemResult.Warnings.Count,
+                    viewWarnings,
+                    workflowWarningCount: 0);
+
+                var workflowImporter = new WorkflowUiImporter(session)
+                {
+                    RepositoryMapping = repoMapping,
+                    UserMapping = userMapping,
+                    OrganizationMapping = organizationMapping,
+                    OnProgress = diagnostics.WriteProgress,
+                };
+                await workflowImporter.ImportAsync(snapshot, org, result.ProjectNumber, cancellationToken);
+                foreach (var warning in workflowImporter.Warnings)
+                {
+                    diagnostics.WriteProgress($"warning: {warning}");
+                }
+
+                workflowWarnings = workflowImporter.Warnings.Count;
+                workflowsImported = workflowImporter.ImportedCount;
+                await PersistUnresolvedWarningsAsync(
+                    importer.Warnings.Count + fieldDefaultWarnings,
+                    itemResult.Warnings.Count,
+                    viewWarnings,
+                    workflowWarnings);
+            }
+
+            if (templateWriteSession is not null)
+            {
+                diagnostics.SetStage("finalizing-template-state");
+                await templateWriteSession.CompleteAsync(snapshot.Project.Template, cancellationToken);
+            }
+            else
+            {
+                diagnostics.SetStage("finalizing-template-state");
+                await ProjectTemplateWriteSession.SetFinalStateAsync(
+                    client,
+                    result.ProjectId,
+                    snapshot.Project.Template,
+                    diagnostics.WriteProgress,
+                    cancellationToken);
+            }
+
+            var completedProjectLog = await ProjectImportLog.LoadAsync(inDirectory, cancellationToken);
+            var previousWarningState = completedProjectLog.HasUnresolvedWarnings;
+            var importMarkedComplete = completedProjectLog.TryMarkImportCompleted(
+                    enableBrowserAutomation,
+                    importer.Warnings.Count + fieldDefaultWarnings,
+                    itemResult.Warnings.Count,
+                    viewWarnings,
+                    workflowWarnings);
+            if (importMarkedComplete
+                || completedProjectLog.HasUnresolvedWarnings != previousWarningState)
+            {
+                await completedProjectLog.SaveAsync(inDirectory, cancellationToken);
+            }
+
+            var hasCurrentWarnings = importer.Warnings.Count + fieldDefaultWarnings > 0
+                || itemResult.Warnings.Count > 0
+                || (enableBrowserAutomation && (viewWarnings > 0 || workflowWarnings > 0));
+            if (ImportFailureDiagnostics.CanDeletePreviousFailure(
+                    completedProjectLog,
+                    hasCurrentWarnings))
+            {
+                diagnostics.DeletePreviousFailure(inDirectory);
+            }
+            Console.WriteLine(result.Url);
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"result={FormatProjectImportOutcome(result.Outcome)} project={result.ProjectNumber}"));
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"items: created={itemResult.Created} resumed={itemResult.Resumed} already-complete={itemResult.AlreadyComplete} skipped={itemResult.Skipped} warnings={itemResult.Warnings.Count}"));
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"status-updates: created={statusUpdateResult.Created} resumed={statusUpdateResult.Resumed} already-complete={statusUpdateResult.AlreadyComplete}"));
+            Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                $"views: imported={result.ViewNumbers.Count} warnings={viewWarnings}"));
+            if (enableBrowserAutomation)
+            {
+                Console.WriteLine(fieldDefaultSummary);
+                Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"workflows: imported={workflowsImported} warnings={workflowWarnings}"));
+            }
+
+            await NotifyUpdateAsync(updateCheck);
+            return 0;
+        }
+        catch (Exception exception)
+        {
+            importFailure = exception;
+            diagnostics.CaptureFailureStage();
+            diagnostics.WriteFailure(exception);
+            return 1;
+        }
     }
 });
 
@@ -931,10 +967,15 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     reportJsonOption,
     verifyCategoriesOption,
     noUpdateCheckOption,
+    allowSensitiveDiagnosticsOption,
 };
 
 verifyCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    var apiDiagnostics = new ApiDiagnosticSession();
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine, apiDiagnostics)
+        : null;
     var org = parseResult.GetValue(verifyOrgOption)!;
     var projectNumber = parseResult.GetValue(verifyProjectOption);
     var ownerType = ParseOwnerType(parseResult.GetValue(ownerTypeOption)!);
@@ -956,7 +997,7 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
     }
 
     var graphQlBaseUrl = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl);
+    using var client = new GitHubGraphQLClient(token, graphQlBaseUrl) { DiagnosticSession = apiDiagnostics };
     client.OnRetry = Console.Error.WriteLine;
 
     try
@@ -1360,8 +1401,13 @@ setupCommand.Validators.Add(result =>
     }
 });
 
+setupCommand.Options.Add(allowSensitiveDiagnosticsOption);
 setupCommand.SetAction(async (parseResult, cancellationToken) =>
 {
+    var apiDiagnostics = new ApiDiagnosticSession();
+    using var sensitiveDiagnostics = parseResult.GetValue(allowSensitiveDiagnosticsOption)
+        ? new SensitiveApiDiagnostics(Environment.CurrentDirectory, Console.Error.WriteLine, apiDiagnostics)
+        : null;
     if (!parseResult.GetValue(browsersOption)
         && !parseResult.GetValue(fixtureOption)
         && !parseResult.GetValue(fixtureUiOption)
@@ -1411,7 +1457,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
             var apiBaseUrl = parseResult.GetValue(setupApiBaseUrlOption);
             var graphQlBaseUri = apiBaseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(apiBaseUrl);
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var observer = new FieldDefaultFixtureObserver(client)
             {
@@ -1461,7 +1507,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1587,7 +1633,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1636,7 +1682,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1694,7 +1740,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1845,7 +1891,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                     parseResult.GetValue(browserBaseUrlOption)),
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
-            using var client = new GitHubGraphQLClient(token, graphQlBaseUri);
+            using var client = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
             client.OnRetry = Console.Error.WriteLine;
             var apiLogin = await client.GetViewerLoginAsync(cancellationToken);
             await browserSession.ValidateAuthenticationAsync(apiLogin, cancellationToken);
@@ -1932,9 +1978,9 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
 
         var baseUrl = parseResult.GetValue(setupApiBaseUrlOption);
         var graphQlBaseUri = baseUrl is null ? null : GitHubGraphQLClient.NormalizeBaseUrl(baseUrl);
-        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri);
+        using var graphQl = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
         graphQl.OnRetry = Console.Error.WriteLine;
-        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri));
+        using var rest = new GitHubRestClient(token, graphQlBaseUri is null ? null : GitHubRestClient.ToRestBaseUri(graphQlBaseUri)) { DiagnosticSession = apiDiagnostics };
         var fixturePreflightCompleted = false;
         async Task ValidateFixtureBeforeWriteAsync(CancellationToken ct)
         {
@@ -2093,7 +2139,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
                 Profile = parseResult.GetValue(setupBrowserProfileOption),
             });
         await using var fixtureUiSessionScope = fixtureUiSession;
-        using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri);
+        using var fixtureUiClient = new GitHubGraphQLClient(token, graphQlBaseUri) { DiagnosticSession = apiDiagnostics };
         fixtureUiClient.OnRetry = Console.Error.WriteLine;
         if (authenticatedFixtureUiSession is null)
         {
@@ -2208,7 +2254,7 @@ static void ValidateBaseUrl(System.CommandLine.Parsing.OptionResult result)
     }
     catch (Exception exception) when (exception is FormatException or ArgumentException)
     {
-        result.AddError($"{result.IdentifierToken?.Value ?? "--base-url"}: {exception.Message}");
+        result.AddError($"{result.IdentifierToken?.Value ?? "--base-url"}: a valid absolute HTTPS API URL is required (HTTP is allowed only for loopback).");
     }
 }
 
@@ -2227,7 +2273,7 @@ static void ValidateBrowserBaseUrl(System.CommandLine.Parsing.OptionResult resul
     }
     catch (Exception exception) when (exception is FormatException or ArgumentException)
     {
-        result.AddError($"{result.IdentifierToken?.Value ?? "--browser-base-url"}: {exception.Message}");
+        result.AddError($"{result.IdentifierToken?.Value ?? "--browser-base-url"}: invalid browser base URL.");
     }
 }
 

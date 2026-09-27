@@ -1444,6 +1444,67 @@ public sealed class FixtureProjectBuilder
                 },
                 new FieldSnapshot
                 {
+                    Name = "Fixture Sprint Uninitialized",
+                    DataType = "ITERATION",
+                    IterationConfiguration = new IterationConfigurationSnapshot
+                    {
+                        Duration = 0,
+                        StartDay = 0,
+                        Iterations = [],
+                        CompletedIterations = [],
+                    },
+                },
+                new FieldSnapshot
+                {
+                    Name = "Fixture Sprint Empty",
+                    DataType = "ITERATION",
+                    IterationConfiguration = new IterationConfigurationSnapshot
+                    {
+                        Duration = 14,
+                        StartDay = 1,
+                        Iterations = [],
+                        CompletedIterations = [],
+                    },
+                },
+                new FieldSnapshot
+                {
+                    Name = "Fixture Sprint Schedule",
+                    DataType = "ITERATION",
+                    IterationConfiguration = new IterationConfigurationSnapshot
+                    {
+                        Duration = 7,
+                        StartDay = 1,
+                        CompletedIterations =
+                        [
+                            new IterationSnapshot
+                            {
+                                Id = "schedule-day",
+                                Title = "Schedule day",
+                                StartDate = today.AddDays(-14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                                Duration = 1,
+                            },
+                        ],
+                        Iterations =
+                        [
+                            new IterationSnapshot
+                            {
+                                Id = "schedule-week",
+                                Title = "Schedule week",
+                                StartDate = today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                                Duration = 7,
+                            },
+                            new IterationSnapshot
+                            {
+                                Id = "schedule-long",
+                                Title = "Schedule long",
+                                StartDate = today.AddDays(14).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                                Duration = 21,
+                            },
+                        ],
+                    },
+                },
+                new FieldSnapshot
+                {
                     Name = "Fixture Areas",
                     DataType = "MULTI_SELECT",
                     Options =
@@ -1475,11 +1536,11 @@ public sealed class FixtureProjectBuilder
             Items =
             [
                 Draft(0, "Fixture draft 1", false, [],
-                    Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), ProjectMultiSelect("Backend", "Frontend"), Sprint("Sprint 0"), Status("Todo")),
+                    Text("日本語テキスト & <special> chars"), Number(3.14), Date(today.AddDays(-21)), Select("Alpha"), ProjectMultiSelect("Backend", "Frontend"), Sprint("Sprint 0"), Schedule("Schedule day"), Status("Todo")),
                 Draft(1, "Fixture draft 2", false, [],
-                    Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), ProjectMultiSelect("Operations"), Sprint("Sprint 1"), Status("In Progress")),
+                    Text("Café emoji 🚀 – em dash"), Number(-42), Date(today.AddDays(4)), Select("Beta"), ProjectMultiSelect("Operations"), Sprint("Sprint 1"), Schedule("Schedule week"), Status("In Progress")),
                 Draft(2, "Fixture draft 3", false, [],
-                    Text("plain ascii text"), Number(0), Date(today.AddDays(26)), Select("Gamma"), ProjectMultiSelect("Frontend"), Sprint("Sprint 2"), Status("Done")),
+                    Text("plain ascii text"), Number(0), Date(today.AddDays(26)), Select("Gamma"), ProjectMultiSelect("Frontend"), Sprint("Sprint 2"), Schedule("Schedule long"), Status("Done")),
                 new ItemSnapshot
                 {
                     Type = "ISSUE",
@@ -1576,6 +1637,7 @@ public sealed class FixtureProjectBuilder
         static FieldValueSnapshot ProjectMultiSelect(params string[] values) => new() { FieldName = "Fixture Areas", IsIssueField = false, MultiSelectOptionNames = values };
         static FieldValueSnapshot IssueMultiSelect(params string[] values) => new() { FieldName = "Fixture Teams", IsIssueField = true, MultiSelectOptionNames = values };
         static FieldValueSnapshot Sprint(string value) => new() { FieldName = "Fixture Sprint", IterationTitle = value };
+        static FieldValueSnapshot Schedule(string value) => new() { FieldName = "Fixture Sprint Schedule", IterationTitle = value };
         static FieldValueSnapshot Status(string value) => new() { FieldName = "Status", SingleSelectOptionName = value };
     }
 

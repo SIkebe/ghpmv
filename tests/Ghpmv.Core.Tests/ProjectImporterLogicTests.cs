@@ -1203,6 +1203,175 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Empty_uninitialized_iteration_round_trips_to_a_null_creation_input(bool configurationCaptured, bool failCreation)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-uninitialized-iteration-").FullName;
+        try
+        {
+            var snapshot = MinimalSnapshot("Regression fixture") with
+            {
+                Project = new ProjectInfoSnapshot { Title = "Regression fixture", Public = false, Closed = false, Template = false },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Probe Sprint",
+                        DataType = "ITERATION",
+                        IterationConfiguration = configurationCaptured
+                            ? new IterationConfigurationSnapshot { Duration = 0, StartDay = 0, Iterations = [], CompletedIterations = [] }
+                            : null,
+                    },
+                ],
+            };
+            await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
+            snapshot = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Regression fixture","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                """{"data":{"node":{"fields":{"nodes":[]}}}}""",
+                failCreation ? """{"errors":[{"type":"BAD_USER_INPUT","message":"SYNTHETIC-ITERATION-SECRET"}]}""" : """
+                {"data":{"createProjectV2Field":{"projectV2Field":{
+                  "__typename":"ProjectV2IterationField","id":"PVTF_sprint","name":"Probe Sprint","dataType":"ITERATION",
+                  "configuration":{"duration":0,"startDay":0,"iterations":[],"completedIterations":[]}
+                }}}}
+                """);
+            using var client = new GitHubGraphQLClient("dummy-token", new Uri("https://example.test/graphql"), handler, null);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            if (failCreation)
+            {
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+                    () => importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken));
+                Assert.Equal("BAD_USER_INPUT", exception.ErrorType);
+                Assert.Contains("Iteration input: validated", exception.Message, StringComparison.Ordinal);
+                Assert.Contains("active count: 0; completed count: 0", exception.InputValidation, StringComparison.Ordinal);
+                Assert.Contains("configuration omitted from mutation: True", exception.InputValidation, StringComparison.Ordinal);
+                Assert.DoesNotContain("SYNTHETIC-ITERATION-SECRET", exception.ToString(), StringComparison.Ordinal);
+                Assert.DoesNotContain("Probe Sprint", exception.Message, StringComparison.Ordinal);
+                return;
+            }
+
+            var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            var createRequest = Assert.Single(handler.RequestBodies, body => body.Contains("createProjectV2Field(", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(createRequest);
+            Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("variables").GetProperty("iterationConfiguration").ValueKind);
+            Assert.Equal("PVTF_sprint", result.FieldIds["Probe Sprint"]);
+            Assert.Empty(result.IterationIds["Probe Sprint"]);
+            Assert.Empty(importer.Warnings);
+            var log = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            Assert.Empty(log.PendingFields);
+            Assert.Equal("PVTF_sprint", log.CreatedFields["Probe Sprint"]);
+            if (configurationCaptured)
+            {
+                Assert.Equal(0, snapshot.Fields[0].IterationConfiguration!.Duration);
+                Assert.Equal(0, snapshot.Fields[0].IterationConfiguration!.StartDay);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("default", false)]
+    [InlineData("default", true)]
+    [InlineData("active", false)]
+    [InlineData("active", true)]
+    [InlineData("completed", false)]
+    [InlineData("completed", true)]
+    [InlineData("weekday", false)]
+    [InlineData("weekday", true)]
+    [InlineData("nonempty-uninitialized", false)]
+    [InlineData("nonempty-uninitialized", true)]
+    [InlineData("negative", false)]
+    [InlineData("negative", true)]
+    [InlineData("first-active-date", false)]
+    [InlineData("first-active-date", true)]
+    [InlineData("later-active-date", false)]
+    [InlineData("later-active-date", true)]
+    [InlineData("first-completed-date", false)]
+    [InlineData("first-completed-date", true)]
+    [InlineData("later-completed-date", false)]
+    [InlineData("later-completed-date", true)]
+    [InlineData("weekday-underflow-active", false)]
+    [InlineData("weekday-underflow-active", true)]
+    [InlineData("weekday-underflow-completed", false)]
+    [InlineData("weekday-underflow-completed", true)]
+    public async Task Invalid_iteration_configuration_fails_before_any_api_call(string invalidPart, bool existingProject)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-invalid-iteration-").FullName;
+        try
+        {
+            var iteration = new IterationSnapshot { Id = "synthetic", Title = "Example iteration", StartDate = "2026-09-14", Duration = 14 };
+            var configuration = new IterationConfigurationSnapshot { Duration = 14, StartDay = 1, Iterations = [], CompletedIterations = [] };
+            configuration = invalidPart switch
+            {
+                "default" => configuration with { Duration = 0 },
+                "active" => configuration with { Iterations = [iteration with { Duration = 0 }] },
+                "completed" => configuration with { CompletedIterations = [iteration with { Duration = 0 }] },
+                "weekday" => configuration with { StartDay = 0 },
+                "nonempty-uninitialized" => configuration with { Duration = 0, StartDay = 0, Iterations = [iteration] },
+                "negative" => configuration with { Duration = -1 },
+                "first-active-date" => configuration with { Iterations = [iteration with { StartDate = "" }, iteration] },
+                "later-active-date" => configuration with { Iterations = [iteration, iteration with { StartDate = "SYNTHETIC-INVALID-DATE" }] },
+                "first-completed-date" => configuration with { CompletedIterations = [iteration with { StartDate = "" }, iteration] },
+                "later-completed-date" => configuration with { CompletedIterations = [iteration, iteration with { StartDate = "SYNTHETIC-INVALID-DATE" }] },
+                "weekday-underflow-active" => configuration with { StartDay = 7, Iterations = [iteration with { StartDate = "0001-01-01" }] },
+                "weekday-underflow-completed" => configuration with { StartDay = 7, CompletedIterations = [iteration, iteration with { StartDate = "0001-01-01" }] },
+                _ => throw new ArgumentOutOfRangeException(nameof(invalidPart)),
+            };
+            var snapshot = MinimalSnapshot("Regression fixture") with
+            {
+                Fields = [new FieldSnapshot { Name = "Probe Sprint", DataType = "ITERATION", IterationConfiguration = configuration }],
+            };
+            using var handler = new StubHandler();
+            using var client = new GitHubGraphQLClient("dummy-token", new Uri("https://example.test/graphql"), handler, null);
+            var beforeWriteInvoked = false;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteInvoked = true;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() => existingProject
+                ? importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken)
+                : importer.ImportAsync(snapshot, "target", TestContext.Current.CancellationToken));
+
+            if (invalidPart.EndsWith("-date", StringComparison.Ordinal))
+            {
+                Assert.Contains("yyyy-MM-dd", exception.Message, StringComparison.Ordinal);
+                Assert.DoesNotContain("SYNTHETIC-INVALID-DATE", exception.Message, StringComparison.Ordinal);
+                Assert.Equal("Probe Sprint", MigrationDiagnostics.Get(exception)?.Element?.Name);
+                Assert.Equal("validate-field", MigrationDiagnostics.Get(exception)?.Operation);
+            }
+            if (invalidPart.StartsWith("weekday-underflow", StringComparison.Ordinal))
+            {
+                Assert.Contains("configured weekday", exception.Message, StringComparison.Ordinal);
+                Assert.Equal("Probe Sprint", MigrationDiagnostics.Get(exception)?.Element?.Name);
+                Assert.Equal("validate-field", MigrationDiagnostics.Get(exception)?.Operation);
+            }
+
+            Assert.Empty(handler.RequestBodies);
+            Assert.False(beforeWriteInvoked);
+            Assert.False(File.Exists(Path.Combine(directory, ProjectImportLog.FileName)));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static ProjectSnapshot MinimalSnapshot(string title) => new()
     {
         SchemaVersion = ProjectSnapshot.CurrentSchemaVersion,

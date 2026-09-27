@@ -9,6 +9,87 @@ namespace Ghpmv.Core.Tests;
 
 public class ItemImporterResumeTests
 {
+    [Fact]
+    public async Task Field_replay_and_archive_cleanup_failures_keep_distinct_persisted_context()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Environment.CurrentDirectory, "archive-identity-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var handler = new StageResumeHandler("field", failureAttempt: 2, failArchiveRestore: true);
+            using var client = new GitHubGraphQLClient("synthetic-token", null, handler, (_, _) => Task.CompletedTask);
+            var snapshot = CreateStageSnapshot(archived: true, withField: true);
+            var target = Target with { FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" } };
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            var importer = new ItemImporter(client)
+            {
+                RepositoryMapping = new Dictionary<string, string> { ["source/repo"] = "target/repo" },
+                ReapplyCompletedFieldValues = true,
+            };
+            var failure = await Assert.ThrowsAsync<AggregateException>(
+                () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+            Assert.Equal("Text", MigrationDiagnostics.Get(failure)?.Element?.Name);
+            var state = Assert.Single((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates).Value;
+            Assert.Equal("Field", state.FieldValuesErrorContext?.Element?.Kind);
+            Assert.Equal("updateProjectV2ItemFieldValue", state.FieldValuesErrorContext?.Operation);
+            Assert.Equal("restoring-item-archive", state.ArchiveErrorContext?.Stage);
+            Assert.Equal("archiveProjectV2Item", state.ArchiveErrorContext?.Operation);
+            Assert.Equal("PVTI_new", state.ArchiveErrorContext?.Item?.TargetId);
+            Assert.Equal(1, state.ArchiveErrorContext?.Item?.Number);
+            Assert.DoesNotContain("SYNTHETIC-STAGE-SECRET", state.FieldValuesError + state.ArchiveError, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public async Task Second_item_field_failure_persists_its_own_identity_without_values_or_response_body()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Path.Combine(Environment.CurrentDirectory, "item-identity-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var handler = new StageResumeHandler("field", failureAttempt: 2);
+            using var client = new GitHubGraphQLClient("SYNTHETIC-TOKEN-SECRET", null, handler, (_, _) => Task.CompletedTask);
+            var original = CreateStageSnapshot(archived: false, withField: true);
+            var item = original.Items[0] with { FieldValues = [new() { FieldName = "Text", Text = "SYNTHETIC-VALUE-SECRET" }] };
+            var snapshot = original with
+            {
+                Source = new() { Owner = "source-org", Number = 12, Title = "Demo project" },
+                Items = [item, item with { Number = 2, Position = 1 }],
+            };
+            var target = Target with { FieldIds = new Dictionary<string, string> { ["Text"] = "PVTF_text" } };
+            var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
+                () => CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken));
+            var context = Assert.IsType<MigrationDiagnosticContext>(MigrationDiagnostics.Get(exception));
+            Assert.Equal(2, context.Item?.Number);
+            Assert.Equal("source/repo", context.Item?.Repository);
+            Assert.Equal("target/repo", context.Item?.TargetRepository);
+            Assert.Equal("PVTI_second", context.Item?.TargetId);
+            Assert.Equal("Field", context.Element?.Kind);
+            Assert.Equal("Text", context.Element?.Name);
+            Assert.Equal("PVTF_text", context.Element?.TargetId);
+            Assert.Equal("updateProjectV2ItemFieldValue", context.Operation);
+            var log = (await ImportLog.LoadAsync(directory, cancellationToken))!;
+            var failed = Assert.Single(log.ItemStates.Values, state => state.FieldValuesError is not null);
+            Assert.Equal(context, failed.FieldValuesErrorContext);
+            var json = await File.ReadAllTextAsync(Path.Combine(directory, ImportLog.FileName), cancellationToken);
+            foreach (var secret in new[] { "SYNTHETIC-STAGE-SECRET", "SYNTHETIC-VALUE-SECRET", "SYNTHETIC-TOKEN-SECRET" })
+            {
+                Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
+            }
+            await CreateImporter(client).ImportAsync(snapshot, target, directory, cancellationToken);
+            Assert.All((await ImportLog.LoadAsync(directory, cancellationToken))!.ItemStates.Values,
+                state => Assert.Null(state.FieldValuesErrorContext));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -191,18 +272,28 @@ public class ItemImporterResumeTests
     }
 
     [Theory]
-    [InlineData("field")]
-    [InlineData("position")]
-    [InlineData("archive")]
-    public async Task Failed_stage_resumes_without_recreating_item(string failedStage)
+    [InlineData("field", false)]
+    [InlineData("position", false)]
+    [InlineData("archive", false)]
+    [InlineData("field", true)]
+    [InlineData("position", true)]
+    [InlineData("archive", true)]
+    public async Task Failed_stage_resumes_without_recreating_item(string failedStage, bool sensitiveDiagnostics)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-stage-resume-").FullName;
         try
         {
+            const string sentinel = "SYNTHETIC-STAGE-SECRET";
+            var progress = new List<string>();
+            using var sink = new SensitiveApiDiagnostics(directory, progress.Add);
             using var handler = new StageResumeHandler(failedStage);
-            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask)
+            {
+                SensitiveDiagnostics = sensitiveDiagnostics ? sink : null,
+            };
             var importer = CreateImporter(client);
+            importer.OnProgress = progress.Add;
             var snapshot = CreateStageSnapshot(archived: failedStage == "archive", withField: failedStage == "field");
             var target = Target with
             {
@@ -215,17 +306,23 @@ public class ItemImporterResumeTests
             {
                 var first = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
                 Assert.Single(first.Warnings);
+                Assert.DoesNotContain(sentinel, string.Join('\n', first.Warnings), StringComparison.Ordinal);
             }
             else
             {
-                await Assert.ThrowsAsync<GitHubGraphQLException>(
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(
                     () => importer.ImportAsync(snapshot, target, directory, cancellationToken));
+                Assert.DoesNotContain(sentinel, exception.ToString(), StringComparison.Ordinal);
             }
 
             var interrupted = await ImportLog.LoadAsync(directory, cancellationToken);
             var interruptedState = Assert.Single(interrupted!.ItemStates).Value;
             Assert.Equal("PVTI_new", interruptedState.TargetItemId);
             Assert.NotNull(interruptedState.LastError);
+            Assert.DoesNotContain(sentinel, interruptedState.LastError, StringComparison.Ordinal);
+            Assert.Contains("FORBIDDEN", interruptedState.LastError, StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, await File.ReadAllTextAsync(Path.Combine(directory, "import-log.json"), cancellationToken), StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, string.Join('\n', progress), StringComparison.Ordinal);
 
             var resumedResult = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
 
@@ -253,6 +350,12 @@ public class ItemImporterResumeTests
             Assert.Equal(0, completeResult.Resumed);
             Assert.Equal(1, completeResult.AlreadyComplete);
             Assert.Equal(0, completeResult.Skipped);
+            sink.Dispose();
+            Assert.Equal(sensitiveDiagnostics, File.Exists(sink.FilePath));
+            if (sensitiveDiagnostics)
+            {
+                Assert.Contains(sentinel, await File.ReadAllTextAsync(sink.FilePath, cancellationToken), StringComparison.Ordinal);
+            }
         }
         finally
         {
@@ -388,6 +491,9 @@ public class ItemImporterResumeTests
             Assert.True(state.ArchiveApplied);
             Assert.NotNull(state.FieldValuesError);
             Assert.Null(state.ArchiveError);
+            var failure = Assert.Single(state.FieldValueFailures!);
+            Assert.Equal("Text", failure.Element?.Name);
+            Assert.Equal(1, failure.Item?.Number);
         }
         finally
         {
@@ -660,6 +766,9 @@ public class ItemImporterResumeTests
                 () => changedImporter.ImportAsync(snapshot, Target, directory, cancellationToken));
 
             Assert.Contains("target content mapping no longer matches", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, MigrationDiagnostics.Get(exception)?.Item?.Number);
+            Assert.Equal("source/repo", MigrationDiagnostics.Get(exception)?.Item?.Repository);
+            Assert.Equal("import-item", MigrationDiagnostics.Get(exception)?.Operation);
             Assert.Equal(1, handler.CreateMutationCount);
         }
         finally
@@ -841,7 +950,8 @@ public class ItemImporterResumeTests
         int failureAttempt = 1,
         bool archivedAfterFailure = false,
         bool rejectFieldMutationWhenArchived = false,
-        bool failUnarchiveAfterApplying = false) : HttpMessageHandler
+        bool failUnarchiveAfterApplying = false,
+        bool failArchiveRestore = false) : HttpMessageHandler
     {
         private bool _isArchived = archivedAfterFailure;
 
@@ -921,7 +1031,7 @@ public class ItemImporterResumeTests
             if (query.Contains("archiveProjectV2Item", StringComparison.Ordinal))
             {
                 ArchiveMutationCount++;
-                if (ShouldFail("archive", ArchiveMutationCount))
+                if (ShouldFail("archive", ArchiveMutationCount) || (failArchiveRestore && ArchiveMutationCount > 1))
                 {
                     return Error();
                 }
@@ -944,7 +1054,7 @@ public class ItemImporterResumeTests
             => string.Equals(failedStage, stage, StringComparison.Ordinal) && count == failureAttempt;
 
         private static HttpResponseMessage Error()
-            => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure"}]}""");
+            => Json("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"Injected stage failure SYNTHETIC-STAGE-SECRET","extensions":{"private":"SYNTHETIC-STAGE-SECRET"}}]}""");
 
         private static HttpResponseMessage Json(string body)
             => new(HttpStatusCode.OK)

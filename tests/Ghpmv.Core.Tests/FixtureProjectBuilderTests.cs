@@ -426,6 +426,53 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Demo_fixture_preserves_variable_iteration_durations_breaks_and_values()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot(
+            "Fixture", "example/fixture", "octocat", pullRequestNumber: 2,
+            referenceDate: new DateOnly(2026, 9, 14));
+        var directory = Directory.CreateTempSubdirectory("ghpmv-iteration-fixture-").FullName;
+        try
+        {
+            await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
+            var restored = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
+            var field = Assert.Single(restored.Fields, field => field.Name == "Fixture Sprint Schedule");
+            var configuration = Assert.IsType<IterationConfigurationSnapshot>(field.IterationConfiguration);
+            Assert.Equal(7, configuration.Duration);
+            Assert.Equal(1, configuration.StartDay);
+            var iterations = configuration.CompletedIterations.Concat(configuration.Iterations).ToArray();
+            Assert.Equal([1, 7, 21], iterations.Select(iteration => iteration.Duration));
+            Assert.Equal(["2026-08-31", "2026-09-14", "2026-09-28"], iterations.Select(iteration => iteration.StartDate));
+            Assert.Equal(
+                ["Schedule day", "Schedule week", "Schedule long"],
+                restored.Items.SelectMany(item => item.FieldValues)
+                    .Where(value => value.FieldName == field.Name)
+                    .Select(value => value.IterationTitle));
+            Assert.All(iterations.Zip(iterations.Skip(1)), pair =>
+                Assert.True(DateOnly.ParseExact(pair.First.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture)
+                    .AddDays(pair.First.Duration) < DateOnly.ParseExact(pair.Second.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture)));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Demo_fixture_covers_both_uninitialized_and_initialized_empty_iteration_fields()
+    {
+        var snapshot = FixtureProjectBuilder.CreateSnapshot("Fixture", "example/fixture", "octocat", 2);
+        var uninitialized = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint Uninitialized").IterationConfiguration!;
+        var initialized = Assert.Single(snapshot.Fields, field => field.Name == "Fixture Sprint Empty").IterationConfiguration!;
+        Assert.Equal(0, uninitialized.Duration);
+        Assert.Equal(0, uninitialized.StartDay);
+        Assert.Equal(14, initialized.Duration);
+        Assert.Equal(1, initialized.StartDay);
+        Assert.Empty(uninitialized.Iterations.Concat(uninitialized.CompletedIterations));
+        Assert.Empty(initialized.Iterations.Concat(initialized.CompletedIterations));
+    }
+
+    [Fact]
     public void Demo_fixture_includes_distinct_empty_Board_columns()
     {
         var snapshot = FixtureProjectBuilder.CreateSnapshot(

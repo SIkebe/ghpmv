@@ -84,13 +84,19 @@ public class ProjectViewImporterTests
             };
             var view = View(2, "Board", "BOARD_LAYOUT", filter: null, visibleFields: []);
 
-            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+            var failure = await Assert.ThrowsAsync<AmbiguousMutationResultException>(
                 () => importer.ImportAsync(
                     [view],
                     "PVT_target",
                     new Dictionary<string, string>(),
                     ProjectImportOutcome.Updated,
                     TestContext.Current.CancellationToken));
+            Assert.Equal("View", MigrationDiagnostics.Get(failure)?.Element?.Kind);
+            Assert.Equal("Board", MigrationDiagnostics.Get(failure)?.Element?.Name);
+            Assert.Equal(2, MigrationDiagnostics.Get(failure)?.Element?.Number);
+            Assert.Null(MigrationDiagnostics.Get(failure)?.Element?.TargetId);
+            Assert.Equal("PVT_target", MigrationDiagnostics.Get(failure)?.Target?.Id);
+            Assert.Equal("createProjectV2View", MigrationDiagnostics.Get(failure)?.Operation);
 
             var pending = Assert.Single(log.PendingViews).Value;
             Assert.Equal("PVT_target", pending.ProjectId);

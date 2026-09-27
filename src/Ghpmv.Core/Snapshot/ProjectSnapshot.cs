@@ -13,6 +13,9 @@ public sealed record ProjectSnapshot
 
     public required ProjectInfoSnapshot Project { get; init; }
 
+    /// <summary>Optional export provenance for migration diagnostics; absent in older snapshots.</summary>
+    public Ghpmv.Core.Import.MigrationProjectIdentity? Source { get; init; }
+
     public required IReadOnlyList<FieldSnapshot> Fields { get; init; }
 
     public required IReadOnlyList<ViewSnapshot> Views { get; init; }
@@ -181,10 +184,10 @@ public sealed record IssueFieldConfigurationSnapshot
 /// </summary>
 public sealed record IterationConfigurationSnapshot
 {
-    /// <summary>Default duration of new iterations, in days.</summary>
+    /// <summary>Default duration of new iterations, in days. GitHub returns 0 for uninitialized fields.</summary>
     public required int Duration { get; init; }
 
-    /// <summary>Day of the week new iterations start on (1 = Monday ... 7 = Sunday).</summary>
+    /// <summary>Day of the week new iterations start on (1 = Monday ... 7 = Sunday; 0 for uninitialized fields).</summary>
     public required int StartDay { get; init; }
 
     public required IReadOnlyList<IterationSnapshot> Iterations { get; init; }

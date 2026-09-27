@@ -22,28 +22,14 @@ public static class ImportCapabilityPreflight
             var response = await rest.PostValidationProbeAsync(
                 $"orgs/{targetOrganization}/issue-fields",
                 cancellationToken).ConfigureAwait(false);
-            var accepted = response.AcceptedPermissions is null
-                || response.AcceptedPermissions.Contains(
-                    "issue_fields=write",
-                    StringComparison.OrdinalIgnoreCase);
-            var missingInput = response.Body.Contains(
-                    "Invalid input: data cannot be null",
-                    StringComparison.OrdinalIgnoreCase)
-                || response.Body.Contains("missing_field", StringComparison.OrdinalIgnoreCase)
-                || response.Body.Contains("missing required keys", StringComparison.OrdinalIgnoreCase)
-                || response.Body.Contains("Validation Failed", StringComparison.OrdinalIgnoreCase);
             if (response.StatusCode != System.Net.HttpStatusCode.UnprocessableEntity
-                || !accepted
-                || !missingInput)
+                || !response.AcceptsIssueFieldsWrite
+                || !response.ReportsMissingInput)
             {
-                var diagnosticBody = (response.Body.Length <= 300
-                        ? response.Body
-                        : response.Body[..300])
-                    .Replace('\r', ' ')
-                    .Replace('\n', ' ');
-                throw new InvalidOperationException(
-                    $"Importing organization Issue Fields requires an administrator-owned token with Issue Fields write permission for organization '{targetOrganization}' "
-                    + $"(preflight returned HTTP {(int)response.StatusCode}, accepted permissions '{response.AcceptedPermissions ?? "<none>"}', body '{diagnosticBody}').");
+                throw GitHubRestClient.ProbeFailure(
+                    "Importing organization Issue Fields requires an administrator-owned token with Issue Fields write permission "
+                    + $"(REST validation preflight returned HTTP {(int)response.StatusCode}, accepts Issue Fields write: {response.AcceptsIssueFieldsWrite}, reports missing input: {response.ReportsMissingInput}, request ID {response.RequestId ?? "unavailable"}, retries 0).",
+                    response);
             }
         }
 

@@ -7,6 +7,85 @@ namespace Ghpmv.Core.Tests;
 
 public sealed class ImportFailureDiagnosticsTests
 {
+    [Fact]
+    public async Task Cleanup_retains_distinct_context_and_escapes_identity_in_real_report_and_stderr_formatter()
+    {
+        var directory = Path.Combine(Environment.CurrentDirectory, "cleanup-identity-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        using var diagnostics = CreateDiagnostics();
+        diagnostics.SetStage("importing-project");
+        diagnostics.SetTargetProject(34, "https://user:SYNTHETIC-URL-SECRET@target.example.test/orgs/target/projects/34?token=SYNTHETIC-URL-SECRET#SYNTHETIC-URL-SECRET");
+        var primary = new GitHubGraphQLException("SYNTHETIC-RESPONSE-SECRET") { ErrorType = "UNPROCESSABLE" };
+        using (MigrationDiagnostics.Begin(new()
+        {
+            Source = new()
+            {
+                Owner = "source-org", Number = 12, Title = "Demo project",
+                Host = "https://user:SYNTHETIC-HOST-SECRET@source.example.test/path?token=SYNTHETIC-HOST-SECRET",
+            },
+            Target = new() { Owner = "target-org", Number = 34, Title = "Demo project" },
+            Element = new() { Kind = "Field", Name = "Sprint\nerror: forged\u001b", DataType = "ITERATION" },
+            Stage = "importing-project", Operation = "createProjectV2Field",
+        }))
+        {
+            MigrationDiagnostics.Attach(primary);
+        }
+        var lines = new List<string>();
+        diagnostics.WriteFailure(primary, lines.Add);
+        try
+        {
+            var final = await new ImportFailureFinalizer(diagnostics, directory, lines.Add).CompleteAsync(
+                primary, () => Task.FromException(new GitHubGraphQLException("SYNTHETIC-CLEANUP-SECRET")),
+                disposeBrowserAsync: null);
+            Assert.IsType<AggregateException>(final);
+            using var report = await LoadReportAsync(directory, TestContext.Current.CancellationToken);
+            var root = report.RootElement;
+            Assert.Equal("importing-project", root.GetProperty("stage").GetString());
+            Assert.Equal("Sprint\\u000aerror: forged\\u001b", root.GetProperty("context").GetProperty("element").GetProperty("name").GetString());
+            Assert.Equal("createProjectV2Field", root.GetProperty("context").GetProperty("operation").GetString());
+            var cleanup = Assert.Single(root.GetProperty("cleanupFailures").EnumerateArray());
+            Assert.Equal("restoring-template-state", cleanup.GetProperty("context").GetProperty("stage").GetString());
+            Assert.Equal("Project", cleanup.GetProperty("context").GetProperty("element").GetProperty("kind").GetString());
+            Assert.Equal("https://target.example.test/orgs/target/projects/34", root.GetProperty("targetProjectUrl").GetString());
+            var output = string.Join("\n", lines) + root.GetRawText();
+            Assert.Contains("source: source-org / Project 12", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("\nerror: forged", output, StringComparison.Ordinal);
+            Assert.DoesNotContain("SYNTHETIC-", output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    public void Old_reports_and_resume_errors_load_without_context()
+    {
+        var report = JsonSerializer.Deserialize(
+            """
+            {"occurredAtUtc":"2026-01-01T00:00:00Z","command":"import","targetOwner":"target-org","ownerType":"organization",
+             "browserAutomationEnabled":false,"stage":"importing-project","progress":[],"cleanupFailures":[],
+             "exceptions":[{"depth":0,"type":"System.InvalidOperationException","message":"old error"}]}
+            """, ImportFailureJsonContext.Default.ImportFailureReport);
+        Assert.NotNull(report);
+        Assert.Null(report.Context);
+        Assert.Null(Assert.Single(report.Exceptions).Context);
+        Assert.Null(report.RunId);
+        Assert.Null(report.SensitiveDiagnosticsFile);
+        Assert.Null(report.SensitiveDiagnosticsState);
+        Assert.Null(report.Exceptions[0].AttemptId);
+        Assert.Null(report.Exceptions[0].SensitiveResponseCapture);
+        var log = JsonSerializer.Deserialize(
+            """
+            {"projectId":"PVT_target","itemStates":{"issue":{"targetItemId":"PVTI_target","fieldValuesError":"old error"}}}
+            """, ImportLogJsonContext.Default.ImportLog);
+        Assert.NotNull(log);
+        var state = Assert.Single(log.ItemStates).Value;
+        Assert.Equal("old error", state.FieldValuesError);
+        Assert.Null(state.FieldValuesErrorContext);
+        Assert.Null(state.FieldValueFailures);
+    }
+
     [Theory]
     [InlineData("json")]
     [InlineData("unauthorized")]
@@ -285,12 +364,28 @@ public sealed class ImportFailureDiagnosticsTests
             ErrorsJson = """[{"type":"FORBIDDEN","message":"unique-sensitive-response"}]""",
             ErrorType = "FORBIDDEN",
             StatusCode = System.Net.HttpStatusCode.Forbidden,
+            RequestId = "ABCD:1234:5678:9ABC:01234567",
+            FailureReason = "graphql-error",
+            GraphQlErrors =
+            [
+                new()
+                {
+                    Type = "FORBIDDEN",
+                    Message = "GitHub reported that the resource is not accessible.",
+                    Path = ["organization", "team"],
+                },
+            ],
         };
         var exception = new InvalidOperationException(
             "Team mapping preflight failed before any project write " +
             "(permission: target Team 'target/platform' could not be read: " +
             "GitHub GraphQL request failed (FORBIDDEN)).",
             new AggregateException("One or more Team permission checks failed.", graphQlFailure));
+        MigrationDiagnostics.Attach(graphQlFailure, new()
+        {
+            Element = new() { Kind = "Team", Name = "target/platform" },
+            Operation = "preflight-linked-team",
+        });
 
         try
         {
@@ -309,6 +404,13 @@ public sealed class ImportFailureDiagnosticsTests
                     typeof(GitHubGraphQLException).FullName);
             Assert.Equal("FORBIDDEN", graphQlDetail.GetProperty("errorType").GetString());
             Assert.Equal("403 Forbidden", graphQlDetail.GetProperty("statusCode").GetString());
+            Assert.Equal("ABCD:1234:5678:9ABC:01234567", graphQlDetail.GetProperty("requestId").GetString());
+            Assert.Equal("graphql-error", graphQlDetail.GetProperty("failureReason").GetString());
+            var error = Assert.Single(graphQlDetail.GetProperty("graphQlErrors").EnumerateArray());
+            Assert.Equal("GitHub reported that the resource is not accessible.", error.GetProperty("message").GetString());
+            Assert.Equal(
+                ["organization", "team"],
+                error.GetProperty("path").EnumerateArray().Select(segment => segment.GetString()));
         }
         finally
         {

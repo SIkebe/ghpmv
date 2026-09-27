@@ -57,6 +57,13 @@ internal sealed class ProjectViewImporter
         ArgumentNullException.ThrowIfNull(sourceViews);
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
         ArgumentNullException.ThrowIfNull(fieldIds);
+        using var projectScope = MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
+        {
+            Target = (MigrationDiagnostics.Current?.Target ?? new()) with { Id = projectId },
+            Element = new() { Kind = "Project", TargetId = projectId },
+            Item = null,
+            Operation = "import-views",
+        });
 
         if (sourceViews.Count == 0)
         {
@@ -74,30 +81,50 @@ internal sealed class ProjectViewImporter
         {
             cancellationToken.ThrowIfCancellationRequested();
             var source = orderedSourceViews[index];
-            var visibleFieldIds = await ResolveVisibleFieldIdsAsync(
-                source,
-                projectId,
-                fieldIds,
-                cancellationToken).ConfigureAwait(false);
-            var target = await ResolveTargetViewAsync(
-                source,
-                projectId,
-                targetViews,
-                usedTargetIds,
-                projectOutcome == ProjectImportOutcome.Created && index == 0,
-                visibleFieldIds,
-                cancellationToken).ConfigureAwait(false);
-
-            OnProgress?.Invoke($"Applying API settings for view '{source.Name}' ({source.Layout})...");
-            target = await UpdateViewAsync(source, target.Id, visibleFieldIds, cancellationToken).ConfigureAwait(false);
-            usedTargetIds.Add(target.Id);
-            viewNumbers[source.Number] = target.Number;
-
-            if (!BrowserEnrichmentPlanned)
+            using var viewScope = MigrationDiagnostics.ForElement(new()
             {
-                var targetWasReused = projectOutcome == ProjectImportOutcome.Updated
-                    && initiallyExistingTargetIds.Contains(target.Id);
-                WarnAboutBrowserOnlySettings(source, targetWasReused);
+                Kind = "View",
+                Name = source.Name,
+                Number = source.Number,
+            }, "reconcile-view");
+            try
+            {
+                var visibleFieldIds = await ResolveVisibleFieldIdsAsync(
+                    source,
+                    projectId,
+                    fieldIds,
+                    cancellationToken).ConfigureAwait(false);
+                var target = await ResolveTargetViewAsync(
+                    source,
+                    projectId,
+                    targetViews,
+                    usedTargetIds,
+                    projectOutcome == ProjectImportOutcome.Created && index == 0,
+                    visibleFieldIds,
+                    cancellationToken).ConfigureAwait(false);
+
+                OnProgress?.Invoke($"Applying API settings for view '{source.Name}' ({source.Layout})...");
+                using var targetViewScope = MigrationDiagnostics.ForElement(new()
+                {
+                    Kind = "View",
+                    Name = source.Name,
+                    Number = source.Number,
+                    TargetId = target.Id,
+                }, "updateProjectV2View");
+                target = await UpdateViewAsync(source, target.Id, visibleFieldIds, cancellationToken).ConfigureAwait(false);
+                usedTargetIds.Add(target.Id);
+                viewNumbers[source.Number] = target.Number;
+
+                if (!BrowserEnrichmentPlanned)
+                {
+                    var targetWasReused = projectOutcome == ProjectImportOutcome.Updated
+                        && initiallyExistingTargetIds.Contains(target.Id);
+                    WarnAboutBrowserOnlySettings(source, targetWasReused);
+                }
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
             }
         }
 
@@ -328,7 +355,7 @@ internal sealed class ProjectViewImporter
             ProjectFieldQualifiers);
         foreach (var identifier in result.Unresolved)
         {
-            Warn($"view '{viewName}': unmapped {identifier.Qualifier} filter value '{identifier.Value}' was left unchanged");
+            Warn($"view '{viewName}': an unmapped {identifier.Qualifier} filter value was left unchanged");
         }
 
         foreach (var identifier in result.Unsupported)
@@ -413,21 +440,21 @@ internal sealed class ProjectViewImporter
         }
 
         if (view.Ui is
-            {
-                SliceBy: not null,
-            }
+        {
+            SliceBy: not null,
+        }
             or
-            {
-                FieldSum: not null,
-            }
+        {
+            FieldSum: not null,
+        }
             or
-            {
-                BoardColumnLimits: not null,
-            }
+        {
+            BoardColumnLimits: not null,
+        }
             or
-            {
-                Roadmap: not null,
-            })
+        {
+            Roadmap: not null,
+        })
         {
             settings.Add("UI-only settings");
         }
@@ -479,6 +506,7 @@ internal sealed class ProjectViewImporter
 
     private void Warn(string message)
     {
+        message = MigrationDiagnostics.Warning(message);
         _warnings.Add(message);
         OnProgress?.Invoke("warning: " + message);
     }

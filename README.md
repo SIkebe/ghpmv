@@ -84,7 +84,7 @@ Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` envi
 | Category | Verification coverage |
 |---|---|
 | Project | Description, README, visibility, closed state, and organization template state. A changed title is informational because import supports title overrides. |
-| Field | Field presence/type, select option order/name/color/description, Issue Field description/visibility/linkage, and iteration dates/durations. |
+| Field | Field presence/type, select option order/name/color/description, Issue Field description/visibility/linkage, Iteration default duration/start weekday, and individual iteration dates/durations. Missing Iteration configuration is normalized to the uninitialized 0/0 defaults. |
 | Item | Counts/types, issue and pull request identity, draft body, field values (including Project and Issue Field multi-select values), active-item order, and archived state. Archived-item order is excluded because GitHub cannot restore it. |
 | StatusUpdate | History order, body (including the imported attribution note), status, start date, and target date. |
 | View | Name/layout plus GraphQL filter, visible fields/order, grouping, and sorting. Browser mode adds slice, swimlanes, field sums, and roadmap dates/zoom/markers. |
@@ -178,15 +178,23 @@ Creating a new project emits `result=created`. The result line also includes the
 
 ### Recovering from an ambiguous mutation result
 
-Read-only GraphQL queries and explicitly idempotent updates are retried after transient network or server failures. Resource-creation mutations are not: if GitHub may have accepted a mutation but its response was lost, `ghpmv` exits with `Mutation result is ambiguous` instead of risking a duplicate. The error includes the operation, target, and a non-secret client mutation ID; mutation variables and tokens are never included.
+If a create mutation may have succeeded but its result is unknown, `ghpmv` stops automatic retries to avoid duplicates. Inspect the target before resuming with the **same snapshot and import logs**. Use `--on-conflict update` for a project created by an interrupted import, or the same `--project-number` when updating an existing project. Do not delete pending operation records to force a retry.
 
-Inspect the named target operation in GitHub before retrying. Rerun with the same snapshot directory so `project-import-log.json` and `import-log.json` can reconcile pending work. Project, custom-field, organization Issue Field, Draft, and Issue/PR item creation atomically records an operation and matching target baseline before sending. On resume, `ghpmv` polls for and adopts exactly one new match; no match or multiple matches stop the import for manual reconciliation instead of resending. Project-to-Issue-Field linking is idempotent: a pending link is resent with its recorded client mutation ID and cleared after a definitive success. Resume stops for manual reconciliation if the recorded project or Issue Field no longer matches the current target.
+See [Recovery and resume rules](docs/DIAGNOSTICS.md#recovery-and-resume) for reconciliation, Status Update restrictions, and uninitialized Iteration handling.
 
-When an import fails, `ghpmv` writes `import-error.json` in the snapshot directory and prints its path to stderr. The report contains the requested and actual target Project context, the primary failure stage, separately identified cleanup failures, the latest 200 progress messages, exception and inner-exception stack traces, GraphQL error types, and HTTP status codes. Ambiguous create results also include the locally generated operation name, client mutation ID, attempt time, target, and recovery guidance. Raw GraphQL error responses, tokens, and mutation variables are not written to the report. A later failure in the same snapshot directory replaces the previous report; only a clean completed import removes it, while a skipped or warning-completed import leaves the previous report available for investigation.
+### Logging and diagnostics
 
-Status Update creation is stricter because GitHub exposes neither an idempotency key nor a deterministic lookup key. Only a target Status Update node ID returned by the create mutation and persisted in `import-log.json` is accepted as completion. If the result is ambiguous before that ID is persisted, the pending entry remains durable and reruns fail with actionable manual-reconciliation instructions; body, status, and dates are never used to claim an existing or concurrent update.
+Start with stderr and `<snapshot-directory>/import-error.json`: they identify the source, destination, failed element and operation, with sanitized API failure details. **Safe API diagnostics are not anonymous logs**; business names and known IDs remain visible.
 
-If the target project was created before the interruption, resume with `--on-conflict update`; when the original import targeted an existing project, pass the same `--project-number`. The default `--on-conflict fail` and `skip` modes intentionally do not modify an existing project and therefore cannot continue pending field or item reconciliation.
+See the [Logging and diagnostics guide](docs/DIAGNOSTICS.md) for output examples, file/schema tables, correlation diagrams, capture states and privacy limits.
+
+#### Sensitive API diagnostics (explicit opt-in)
+
+`export`, `import`, `verify` and API operations under `setup` accept `--allow-sensitive-diagnostics` for that invocation only. It writes eligible failed API response bodies to a separate `ghpmv-sensitive-api-<unique-id>.jsonl` in the **current working directory**, after a warning; ordinary API diagnostics stay sanitized. These files may contain secrets and must be reviewed before sharing. See [capture policy and file handling](docs/DIAGNOSTICS.md#capturing-raw-api-responses-explicitly).
+
+##### Joining ordinary and sensitive diagnostics
+
+Match **`runId` + `attemptId`**, using the report's `sensitiveDiagnosticsFile` and capture states. A file can exist without containing the final attempt's response. See the [correlation walkthrough and diagrams](docs/DIAGNOSTICS.md#correlating-diagnostics); do not rely on timestamps or GitHub's optional `requestId` alone.
 
 ### User-owned projects
 
@@ -287,6 +295,7 @@ The most important constraints are that `ghpmv` does not migrate repositories or
 ## Development docs
 
 - [Migration scope and limitations](docs/MIGRATION_SCOPE.md) contains the detailed support matrix, prerequisites, and platform constraints.
+- [Logging and diagnostics](docs/DIAGNOSTICS.md) explains error identity, privacy boundaries, correlated response files and recovery with tables and diagrams.
 - [Test strategy](docs/TEST_STRATEGY.md) is a Japanese summary of the automated, browser, CI, packaging and manual release validation layers.
 - [Manual test plan](docs/MANUAL_TEST_PLAN.md) walks through the GEI + `ghpmv` end-to-end migration validation flow.
 
