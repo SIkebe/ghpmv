@@ -24,7 +24,7 @@ public class IssueFieldLifecycleIntegrationTests
     }
 
     [Fact]
-    public async Task Import_creates_links_updates_and_deletes_organization_issue_field()
+    public async Task Import_creates_links_rejects_disjoint_option_replacement_and_deletes_issue_field()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         using var client = IntegrationTestSettings.CreateClient(Token);
@@ -72,22 +72,20 @@ public class IssueFieldLifecycleIntegrationTests
                     fieldName,
                     description: "Updated by the ghpmv live API test.",
                     visibility: "ORG_ONLY",
-                    // GitHub rejects an update payload that reuses an existing option name.
                     Option("Gamma", "GREEN", "Third option"),
                     Option("Delta", "YELLOW", "Fourth option")));
-            var updateResult = await new ProjectImporter(client)
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => new ProjectImporter(client)
             {
                 OperationLogDirectory = updateLogDirectory,
-            }.ImportIntoAsync(updated, TargetOrg, project.Number, cancellationToken);
+            }.ImportIntoAsync(updated, TargetOrg, project.Number, cancellationToken));
 
-            Assert.Equal(issueFieldId, updateResult.IssueFieldIds[fieldName]);
-            Assert.Equal(["Gamma", "Delta"], updateResult.IssueFieldOptionIds[fieldName].Keys);
-            var updatedField = await ExportUntilIssueFieldMatchesAsync(
+            Assert.Contains("no overlap", exception.Message, StringComparison.Ordinal);
+            var unchangedField = await ExportUntilIssueFieldMatchesAsync(
                 client,
                 project.Number,
-                updated.Fields.Single(),
+                initial.Fields.Single(),
                 cancellationToken);
-            AssertIssueField(updated.Fields.Single(), updatedField);
+            AssertIssueField(initial.Fields.Single(), unchangedField);
 
             await TemporaryProjectFixture.DeleteAllByTitleAsync(
                 client,
@@ -113,6 +111,92 @@ public class IssueFieldLifecycleIntegrationTests
                 try
                 {
                     var remainingIssueFieldId = await FindIssueFieldIdAsync(
+                        client,
+                        fieldName,
+                        CancellationToken.None);
+                    if (remainingIssueFieldId is not null)
+                    {
+                        await DeleteIssueFieldAsync(client, remainingIssueFieldId);
+                    }
+                }
+                finally
+                {
+                    DeleteDirectoryIfPresent(createLogDirectory);
+                    DeleteDirectoryIfPresent(updateLogDirectory);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Import_updates_single_select_issue_field_without_renaming_existing_options()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = IntegrationTestSettings.CreateClient(Token);
+        var suffix = Guid.NewGuid().ToString("N")[..12];
+        var fieldName = $"ghpmv-ci-if-{suffix}";
+        var title = $"ghpmv-issue-field-test-{suffix}";
+        var createLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        var updateLogDirectory = IntegrationTestSettings.CreateOperationLogDirectory();
+        string? issueFieldId = null;
+
+        try
+        {
+            var project = await TemporaryProjectFixture.CreateAsync(
+                client,
+                TargetOrg,
+                title,
+                cancellationToken);
+            var field = IssueField(
+                fieldName,
+                description: "Before update",
+                visibility: "ORG_ONLY",
+                Option("High", "RED", ""),
+                Option("Medium", "YELLOW", ""),
+                Option("Low", "GREEN", "")) with { DataType = "SINGLE_SELECT" };
+            var initial = Snapshot(title, field);
+
+            var created = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = createLogDirectory,
+            }.ImportIntoAsync(initial, TargetOrg, project.Number, cancellationToken);
+            issueFieldId = Assert.Contains(fieldName, created.IssueFieldIds);
+
+            var updatedField = field with
+            {
+                Options = [.. field.Options!.Select(option => option with { Description = null })],
+                IssueField = field.IssueField! with { Description = "After update" },
+            };
+            var updated = Snapshot(title, updatedField);
+            var result = await new ProjectImporter(client)
+            {
+                OperationLogDirectory = updateLogDirectory,
+            }.ImportIntoAsync(updated, TargetOrg, project.Number, cancellationToken);
+
+            Assert.Equal(issueFieldId, result.IssueFieldIds[fieldName]);
+            Assert.Equal(["High", "Medium", "Low"], result.IssueFieldOptionIds[fieldName].Keys);
+            var expectedField = field with { IssueField = updatedField.IssueField };
+            AssertIssueField(expectedField, await ExportUntilIssueFieldMatchesAsync(
+                client,
+                project.Number,
+                expectedField,
+                cancellationToken));
+        }
+        finally
+        {
+            try
+            {
+                await TemporaryProjectFixture.DeleteAllByTitleAsync(
+                    client,
+                    TargetOrg,
+                    title,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                try
+                {
+                    var remainingIssueFieldId = issueFieldId ?? await FindIssueFieldIdAsync(
                         client,
                         fieldName,
                         CancellationToken.None);

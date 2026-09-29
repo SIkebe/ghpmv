@@ -712,7 +712,10 @@ public class ProjectImporterResumeTests
             Assert.Equal("PVTF_normal_teams", result.FieldIds["Teams"]);
             Assert.Equal(1, handler.IssueFieldCreateMutationCount);
             Assert.Equal(1, handler.IssueFieldUpdateMutationCount);
-            Assert.Equal("IFO_sdk", result.IssueFieldOptionIds["Teams"]["SDK"]);
+            Assert.True(handler.UpdateOptionsWereNull);
+            Assert.Equal("IFO_platform", result.IssueFieldOptionIds["Teams"]["Platform"]);
+            Assert.False(result.IssueFieldOptionIds["Teams"].ContainsKey("SDK"));
+            Assert.Contains("source-only unused options: 'SDK'", Assert.Single(importer.Warnings), StringComparison.Ordinal);
             Assert.Empty((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
         }
         finally
@@ -740,8 +743,63 @@ public class ProjectImporterResumeTests
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
 
-            Assert.Contains("multiple new Issue Fields", exception.Message, StringComparison.Ordinal);
+            var pending = Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields).Value;
+            Assert.Contains("conflicts with 2 same-name fields", exception.Message, StringComparison.Ordinal);
+            Assert.Contains($"pending Issue Field operation '{pending.OperationId}'", exception.Message, StringComparison.Ordinal);
             Assert.Equal(1, handler.IssueFieldCreateMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Resumed_issue_field_stops_before_writes_when_late_visible_option_is_used()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-issue-field-resume-").FullName;
+        try
+        {
+            using var handler = new IssueFieldResumeHandler(directory, ambiguousFieldCreate: true);
+            using var client = CreateClient(handler);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await Assert.ThrowsAsync<AmbiguousMutationResultException>(
+                () => importer.ImportIntoAsync(IssueFieldSnapshot(), "target", 7, cancellationToken));
+            var writesBeforeResume = handler.ProjectUpdateMutationCount;
+
+            handler.Resume = true;
+            handler.HideCreatedOnFirstResumeRead = true;
+            var source = IssueFieldSnapshot();
+            var resumedSnapshot = source with
+            {
+                Fields = source.Fields.Select(field => field with
+                {
+                    Options =
+                    [
+                        .. field.Options!,
+                        new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                    ],
+                }).ToArray(),
+                Items =
+                [
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE", Position = 0, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                        ],
+                    },
+                ],
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => importer.ImportIntoAsync(resumedSnapshot, "target", 7, cancellationToken));
+
+            Assert.Contains("'SDK' (1 item(s))", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(writesBeforeResume, handler.ProjectUpdateMutationCount);
+            Assert.Equal(0, handler.IssueFieldUpdateMutationCount);
             Assert.Single((await ProjectImportLog.LoadAsync(directory, cancellationToken)).PendingIssueFields);
         }
         finally
@@ -1090,11 +1148,19 @@ public class ProjectImporterResumeTests
 
     private sealed class IssueFieldResumeHandler(string directory, bool ambiguousFieldCreate) : ResumeHandler(directory)
     {
+        private int _resumeIssueFieldsQueryCount;
+
         public bool ReturnDuplicates { get; set; }
+
+        public bool HideCreatedOnFirstResumeRead { get; set; }
+
+        public int ProjectUpdateMutationCount { get; private set; }
 
         public int IssueFieldCreateMutationCount { get; private set; }
 
         public int IssueFieldUpdateMutationCount { get; private set; }
+
+        public bool UpdateOptionsWereNull { get; private set; }
 
         public int LinkCreateMutationCount { get; private set; }
 
@@ -1102,7 +1168,7 @@ public class ProjectImporterResumeTests
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
-            var (query, _) = await ReadAsync(request, cancellationToken);
+            var (query, variables) = await ReadAsync(request, cancellationToken);
             if (query.Contains("projectV2(number:", StringComparison.Ordinal))
             {
                 return Json("""{"data":{"organization":{"projectV2":{"id":"PVT_existing","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}}}}""");
@@ -1110,6 +1176,7 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("updateProjectV2", StringComparison.Ordinal))
             {
+                ProjectUpdateMutationCount++;
                 return Json("""{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_existing"}}}}""");
             }
 
@@ -1146,7 +1213,8 @@ public class ProjectImporterResumeTests
 
             if (query.Contains("issueFields(first:", StringComparison.Ordinal))
             {
-                if (ambiguousFieldCreate && !Resume)
+                if (ambiguousFieldCreate && (!Resume
+                    || (HideCreatedOnFirstResumeRead && ++_resumeIssueFieldsQueryCount == 1)))
                 {
                     return Json("""{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
                 }
@@ -1171,14 +1239,14 @@ public class ProjectImporterResumeTests
             if (query.Contains("updateIssueField(", StringComparison.Ordinal))
             {
                 IssueFieldUpdateMutationCount++;
+                UpdateOptionsWereNull = variables.GetProperty("options").ValueKind == JsonValueKind.Null;
                 return Json(
                     """
                     {"data":{"updateIssueField":{"issueField":{
                       "__typename":"IssueFieldMultiSelect","id":"IFM_created","name":"Teams",
                       "dataType":"MULTI_SELECT","description":"Updated teams","visibility":"ALL",
                       "options":[
-                        {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null},
-                        {"id":"IFO_sdk","name":"SDK","color":"GREEN","description":null}
+                        {"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null}
                       ]
                     }}}}
                     """);
