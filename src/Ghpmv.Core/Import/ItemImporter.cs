@@ -970,7 +970,7 @@ public sealed class ItemImporter
         return allApplied;
     }
 
-    private static bool IsIssueFieldValue(
+    internal static bool IsIssueFieldValue(
         FieldValueSnapshot value,
         Dictionary<string, FieldSnapshot> issueFields) =>
         value.IsIssueField == true

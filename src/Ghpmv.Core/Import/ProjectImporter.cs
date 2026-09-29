@@ -431,6 +431,7 @@ public sealed class ProjectImporter
                 ownerLogin,
                 existing,
                 cancellationToken).ConfigureAwait(false);
+            var issueFields = await PreflightIssueFieldsAsync(snapshot, ownerLogin, cancellationToken).ConfigureAwait(false);
             if (!beforeWriteInvoked)
             {
                 await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -442,6 +443,7 @@ public sealed class ProjectImporter
                 existing,
                 ProjectImportOutcome.Created,
                 linkedTeams,
+                issueFields,
                 cancellationToken).ConfigureAwait(false);
             _operationLog.PendingProject = null;
             await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
@@ -483,6 +485,7 @@ public sealed class ProjectImporter
                         ownerLogin,
                         existing,
                         cancellationToken).ConfigureAwait(false);
+                    var issueFields = await PreflightIssueFieldsAsync(snapshot, ownerLogin, cancellationToken).ConfigureAwait(false);
                     await MarkOwnedImportIncompleteAsync(existing.Id, cancellationToken).ConfigureAwait(false);
                     return await ApplySnapshotAsync(
                         snapshot,
@@ -490,6 +493,7 @@ public sealed class ProjectImporter
                         existing,
                         ProjectImportOutcome.Updated,
                         linkedTeams,
+                        issueFields,
                         cancellationToken).ConfigureAwait(false);
             }
         }
@@ -502,6 +506,7 @@ public sealed class ProjectImporter
             ownerLogin,
             project: null,
             cancellationToken).ConfigureAwait(false);
+        var targetIssueFields = await PreflightIssueFieldsAsync(snapshot, ownerLogin, cancellationToken).ConfigureAwait(false);
         var project = await CreateAndRecordProjectAsync(
             ownerLogin,
             title,
@@ -515,6 +520,7 @@ public sealed class ProjectImporter
             project,
             ProjectImportOutcome.Created,
             targetTeams,
+            targetIssueFields,
             cancellationToken).ConfigureAwait(false);
         if (_operationLog is not null)
         {
@@ -567,6 +573,7 @@ public sealed class ProjectImporter
         ValidateProjectUpdatePermission(project.ViewerCanUpdate, project.Number);
         ValidatePendingFieldOperations(snapshot, project.Id);
         ValidatePendingViewOperations(snapshot, project.Id);
+        var issueFields = await PreflightIssueFieldsAsync(snapshot, ownerLogin, cancellationToken).ConfigureAwait(false);
         OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
             $"Applying snapshot to existing project #{project.Number}..."));
         if (!beforeWriteInvoked)
@@ -586,6 +593,7 @@ public sealed class ProjectImporter
             project,
             ProjectImportOutcome.Updated,
             linkedTeams,
+            issueFields,
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -924,6 +932,7 @@ public sealed class ProjectImporter
         ProjectRef project,
         ProjectImportOutcome outcome,
         IReadOnlyList<ResolvedTeamLink> linkedTeams,
+        List<TargetIssueField> targetIssueFields,
         CancellationToken cancellationToken)
     {
         using var diagnosticScope = MigrationDiagnostics.Begin((MigrationDiagnostics.Current ?? new()) with
@@ -957,13 +966,6 @@ public sealed class ProjectImporter
         if (ShouldUpdateVisibility(project.Public, snapshot.Project.Public))
         {
             await UpdateProjectVisibilityAsync(project.Id, snapshot.Project.Public, cancellationToken).ConfigureAwait(false);
-        }
-
-        List<TargetIssueField> targetIssueFields = [];
-        if (OwnerType == ProjectOwnerType.Organization
-            && (_snapshotIssueFieldNames.Count > 0 || _snapshotMultiSelectNormalFieldNames.Count > 0))
-        {
-            targetIssueFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
         }
 
         _targetIssueFieldNames = targetIssueFields
@@ -1145,6 +1147,7 @@ public sealed class ProjectImporter
 
         await ApplyIssueFieldsAsync(
             snapshot.Fields.Where(field => field.IssueField is not null).ToList(),
+            snapshot.Items,
             ownerLogin,
             project.Id,
             existingFieldList,
@@ -1199,8 +1202,267 @@ public sealed class ProjectImporter
         OnProgress = OnProgress,
     };
 
+    private async Task<List<TargetIssueField>> PreflightIssueFieldsAsync(
+        ProjectSnapshot snapshot,
+        string ownerLogin,
+        CancellationToken cancellationToken)
+    {
+        if (OwnerType != ProjectOwnerType.Organization
+            || (_snapshotIssueFieldNames.Count == 0 && _snapshotMultiSelectNormalFieldNames.Count == 0))
+        {
+            return [];
+        }
+
+        var targetFields = await FetchIssueFieldListAsync(ownerLogin, cancellationToken).ConfigureAwait(false);
+        foreach (var field in snapshot.Fields.Where(field => field.IssueField is not null))
+        {
+            using var fieldScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "IssueField",
+                Name = field.Name,
+                DataType = field.DataType,
+            }, "preflight-issue-field");
+            try
+            {
+                var usedOptionCounts = CountUsedIssueFieldOptions(snapshot.Items, field);
+                ValidateIssueFieldSourceOptions(field, usedOptionCounts);
+                var matches = targetFields.Where(target =>
+                    string.Equals(target.Name, field.Name, StringComparison.Ordinal)).ToArray();
+                if (matches.Length <= 1
+                    && _operationLog?.PendingIssueFields.TryGetValue(field.Name, out var pendingField) == true)
+                {
+                    var reconciled = await ReconcilePendingIssueFieldAsync(
+                        ownerLogin, field, targetFields, pendingField, cancellationToken).ConfigureAwait(false);
+                    if (!targetFields.Any(target => string.Equals(target.Id, reconciled.Id, StringComparison.Ordinal)))
+                    {
+                        targetFields.Add(reconciled);
+                    }
+
+                    matches = targetFields.Where(target =>
+                        string.Equals(target.Name, field.Name, StringComparison.Ordinal)).ToArray();
+                }
+
+                if (matches.Length > 1)
+                {
+                    var pendingOperationId = _operationLog?.PendingIssueFields.GetValueOrDefault(field.Name)?.OperationId;
+                    throw new InvalidOperationException(
+                        $"Organization Issue Field '{field.Name}' conflicts with {matches.Length} same-name fields in '{ownerLogin}'"
+                        + (pendingOperationId is null ? "" : $" while resuming pending Issue Field operation '{pendingOperationId}'")
+                        + ". Reconcile the target organization before importing.");
+                }
+
+                if (matches.Length == 1)
+                {
+                    ValidateIssueFieldCompatibility(
+                        field,
+                        matches[0],
+                        usedOptionCounts);
+                }
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
+            }
+        }
+
+        return targetFields;
+    }
+
+    private static void ValidateIssueFieldSourceOptions(
+        FieldSnapshot source,
+        IReadOnlyDictionary<string, int> usedOptionCounts)
+    {
+        var sourceNames = (source.Options ?? [])
+            .Select(option => option.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var missingNames = usedOptionCounts
+            .Where(pair => !sourceNames.Contains(pair.Key))
+            .ToArray();
+        if (missingNames.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with the snapshot: Issue item values use options missing from the source field definition "
+                + $"{string.Join(", ", missingNames.Select(pair => $"'{pair.Key}' ({pair.Value} issue item(s))"))}. Re-export or correct the snapshot before importing.");
+        }
+    }
+
+    private static IssueFieldOptionClassification ValidateIssueFieldCompatibility(
+        FieldSnapshot source,
+        TargetIssueField target,
+        IReadOnlyDictionary<string, int> usedOptionCounts)
+    {
+        if (!string.Equals(target.DataType, source.DataType, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with target field '{target.Id}': data type is {target.DataType}, but the snapshot requires {source.DataType}. Rename or reconcile the shared field before importing.");
+        }
+
+        if (IsSelectIssueField(source.DataType) && target.Options is null)
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with target field '{target.Id}': its existing options could not be read. Refusing to modify the shared field without its option list.");
+        }
+
+        var options = IsSelectIssueField(source.DataType)
+            ? ClassifyIssueFieldOptions(source.Options, target.Options, usedOptionCounts)
+            : new IssueFieldOptionClassification(
+                IssueFieldOptionAction.Match, [], [], ReadOnlyDictionary<string, int>.Empty, [], false);
+        if (options.Action == IssueFieldOptionAction.Disjoint)
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with target field '{target.Id}': source and target option names have no overlap (source: {FormatOptionNames(source.Options?.Select(option => option.Name) ?? [])}; target: {FormatOptionNames(target.Options?.Select(option => option.Name) ?? [])}). Refusing to replace the organization's shared options; reconcile the field before importing.");
+        }
+
+        if (options.Action == IssueFieldOptionAction.MissingUsed)
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with target field '{target.Id}': Item values use missing target options {string.Join(", ", options.MissingUsedNames.Select(pair => $"'{pair.Key}' ({pair.Value} item(s))"))}. Add those options to the target organization before importing.");
+        }
+
+        return options;
+    }
+
+    internal enum IssueFieldOptionAction { Match, ReuseWithWarning, MissingUsed, PopulateEmpty, Disjoint }
+
+    internal sealed record IssueFieldOptionClassification(
+        IssueFieldOptionAction Action,
+        IReadOnlyList<string> MissingSourceNames,
+        IReadOnlyList<string> TargetOnlyNames,
+        IReadOnlyDictionary<string, int> MissingUsedNames,
+        IReadOnlyList<string> ChangedSharedNames,
+        bool SharedOrderDiffers);
+
+    internal static IssueFieldOptionClassification ClassifyIssueFieldOptions(
+        IReadOnlyList<SingleSelectOptionSnapshot>? sourceOptions,
+        IReadOnlyList<SingleSelectOptionSnapshot>? targetOptions,
+        IReadOnlyDictionary<string, int> usedOptionCounts)
+    {
+        sourceOptions ??= [];
+        targetOptions ??= [];
+        var sourceNames = sourceOptions.Select(option => option.Name).ToHashSet(StringComparer.Ordinal);
+        var targetNames = targetOptions.Select(option => option.Name).ToHashSet(StringComparer.Ordinal);
+        var missingSourceNames = sourceNames.Except(targetNames, StringComparer.Ordinal).ToArray();
+        var targetOnlyNames = targetNames.Except(sourceNames, StringComparer.Ordinal).ToArray();
+        var availableNames = targetOptions.Count == 0 ? sourceNames : targetNames;
+        var missingUsedNames = usedOptionCounts
+            .Where(pair => !availableNames.Contains(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        var targetOptionsByName = targetOptions
+            .GroupBy(option => option.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        var changedSharedNames = sourceOptions
+            .Where(option => targetOptionsByName.TryGetValue(option.Name, out var target)
+                && (!string.Equals(option.Color, target.Color, StringComparison.Ordinal)
+                    || !string.Equals(option.Description ?? string.Empty, target.Description ?? string.Empty, StringComparison.Ordinal)))
+            .Select(option => option.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var sharedOrderDiffers = !sourceOptions.Where(option => targetNames.Contains(option.Name))
+            .Select(option => option.Name)
+            .SequenceEqual(targetOptions.Where(option => sourceNames.Contains(option.Name))
+                .Select(option => option.Name), StringComparer.Ordinal);
+
+        IssueFieldOptionAction action;
+        if (targetOptions.Count > 0 && sourceNames.Count > 0 && !sourceNames.Overlaps(targetNames))
+        {
+            action = IssueFieldOptionAction.Disjoint;
+        }
+        else if (missingUsedNames.Count > 0)
+        {
+            action = IssueFieldOptionAction.MissingUsed;
+        }
+        else if (targetOptions.Count == 0 && sourceOptions.Count > 0)
+        {
+            action = IssueFieldOptionAction.PopulateEmpty;
+        }
+        else
+        {
+            action = IssueFieldOptionsMatch(sourceOptions, targetOptions)
+                ? IssueFieldOptionAction.Match
+                : IssueFieldOptionAction.ReuseWithWarning;
+        }
+
+        return new IssueFieldOptionClassification(
+            action, missingSourceNames, targetOnlyNames, missingUsedNames, changedSharedNames, sharedOrderDiffers);
+    }
+
+    private static Dictionary<string, int> CountUsedIssueFieldOptions(
+        IReadOnlyList<ItemSnapshot> items,
+        FieldSnapshot field)
+    {
+        if (!IsSelectIssueField(field.DataType))
+        {
+            return new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+
+        var issueFields = new Dictionary<string, FieldSnapshot>(StringComparer.Ordinal) { [field.Name] = field };
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var item in items.Where(item => item.Type == "ISSUE"))
+        {
+            var names = item.FieldValues
+                .Where(value => string.Equals(value.FieldName, field.Name, StringComparison.Ordinal)
+                    && ItemImporter.IsIssueFieldValue(value, issueFields))
+                .SelectMany(value => value.SingleSelectOptionName is { } name
+                    ? [name]
+                    : value.MultiSelectOptionNames ?? [])
+                .Distinct(StringComparer.Ordinal);
+            foreach (var name in names)
+            {
+                counts[name] = counts.GetValueOrDefault(name) + 1;
+            }
+        }
+
+        return counts;
+    }
+
+    private static string FormatOptionNames(IEnumerable<string> names)
+    {
+        var formatted = string.Join(", ", names.Select(name => $"'{name}'"));
+        return formatted.Length == 0 ? "(none)" : formatted;
+    }
+
+    private async Task<TargetIssueField> ReconcileExistingIssueFieldAsync(
+        FieldSnapshot source,
+        TargetIssueField target,
+        IReadOnlyDictionary<string, int> usedOptionCounts,
+        CancellationToken cancellationToken)
+    {
+        var options = ValidateIssueFieldCompatibility(source, target, usedOptionCounts);
+        if (options.Action == IssueFieldOptionAction.ReuseWithWarning)
+        {
+            var differences = new List<string>();
+            if (options.MissingSourceNames.Count > 0)
+            {
+                differences.Add($"source-only unused options: {FormatOptionNames(options.MissingSourceNames)}");
+            }
+
+            if (options.TargetOnlyNames.Count > 0)
+            {
+                differences.Add($"target-only options: {FormatOptionNames(options.TargetOnlyNames)}");
+            }
+
+            if (options.ChangedSharedNames.Count > 0)
+            {
+                differences.Add($"color/description differs for {FormatOptionNames(options.ChangedSharedNames)}");
+            }
+
+            if (options.SharedOrderDiffers)
+            {
+                differences.Add("shared option order differs");
+            }
+
+            Warn($"Organization Issue Field '{source.Name}' reuses target field '{target.Id}' without changing its shared options. "
+                + $"{string.Join("; ", differences)}. Verify will report the remaining differences.");
+        }
+
+        return IssueFieldNeedsUpdate(source, target, options.Action)
+            ? await UpdateIssueFieldAsync(target, source, options.Action, cancellationToken).ConfigureAwait(false)
+            : target;
+    }
+
     private async Task ApplyIssueFieldsAsync(
         List<FieldSnapshot> fields,
+        IReadOnlyList<ItemSnapshot> items,
         string ownerLogin,
         string projectId,
         List<TargetField> projectFields,
@@ -1232,6 +1494,7 @@ public sealed class ProjectImporter
 
         foreach (var field in fields)
         {
+            var usedOptionCounts = CountUsedIssueFieldOptions(items, field);
             using var fieldScope = MigrationDiagnostics.ForElement(new()
             {
                 Kind = "IssueField",
@@ -1258,13 +1521,8 @@ public sealed class ProjectImporter
                         issueFields,
                         pendingField,
                         cancellationToken).ConfigureAwait(false);
-                    if (IssueFieldNeedsUpdate(field, targetIssueField))
-                    {
-                        targetIssueField = await UpdateIssueFieldAsync(
-                            targetIssueField.Id,
-                            field,
-                            cancellationToken).ConfigureAwait(false);
-                    }
+                    targetIssueField = await ReconcileExistingIssueFieldAsync(
+                        field, targetIssueField, usedOptionCounts, cancellationToken).ConfigureAwait(false);
 
                     issueFields.Add(targetIssueField);
                     issueFieldsByName[field.Name] = targetIssueField;
@@ -1278,15 +1536,8 @@ public sealed class ProjectImporter
                 }
                 else if (issueFieldsByName.TryGetValue(field.Name, out var existing))
                 {
-                    if (!string.Equals(existing.DataType, field.DataType, StringComparison.Ordinal))
-                    {
-                        Warn($"Issue Field '{field.Name}' exists with data type {existing.DataType} (snapshot: {field.DataType}); leaving it unchanged and skipping its values.");
-                        continue;
-                    }
-
-                    targetIssueField = IssueFieldNeedsUpdate(field, existing)
-                        ? await UpdateIssueFieldAsync(existing.Id, field, cancellationToken).ConfigureAwait(false)
-                        : existing;
+                    targetIssueField = await ReconcileExistingIssueFieldAsync(
+                        field, existing, usedOptionCounts, cancellationToken).ConfigureAwait(false);
                     issueFieldsByName[field.Name] = targetIssueField;
                 }
                 else
@@ -1394,8 +1645,9 @@ public sealed class ProjectImporter
     }
 
     private async Task<TargetIssueField> UpdateIssueFieldAsync(
-        string issueFieldId,
+        TargetIssueField targetIssueField,
         FieldSnapshot field,
+        IssueFieldOptionAction optionAction,
         CancellationToken cancellationToken)
     {
         using var fieldScope = MigrationDiagnostics.ForElement(new()
@@ -1403,21 +1655,23 @@ public sealed class ProjectImporter
             Kind = "IssueField",
             Name = field.Name,
             DataType = field.DataType,
-            TargetId = issueFieldId,
+            TargetId = targetIssueField.Id,
         }, "updateIssueField");
-        OnProgress?.Invoke($"Updating organization Issue Field '{field.Name}' metadata and options...");
+        OnProgress?.Invoke($"Updating organization-wide Issue Field '{field.Name}'; this affects every project using the shared field.");
         var data = await _client.MutationAsync(
             "updateIssueField",
             UpdateIssueFieldMutation,
             new
             {
-                id = issueFieldId,
+                id = targetIssueField.Id,
                 description = field.IssueField?.Description,
-                options = IsSelectIssueField(field.DataType) ? BuildIssueFieldOptionInputs(field.Options ?? []) : null,
+                options = optionAction == IssueFieldOptionAction.PopulateEmpty
+                    ? BuildIssueFieldOptionInputs(field.Options ?? [])
+                    : null,
                 visibility = field.IssueField?.Visibility,
             },
             MutationRetryPolicy.Idempotent,
-            target: issueFieldId,
+            target: targetIssueField.Id,
             requiredResultPath: "issueField.id",
             cancellationToken: cancellationToken).ConfigureAwait(false);
         return ParseTargetIssueField(data.GetProperty("updateIssueField").GetProperty("issueField"));
@@ -2557,7 +2811,10 @@ public sealed class ProjectImporter
     private static bool IsSelectIssueField(string dataType)
         => dataType is "SINGLE_SELECT" or "MULTI_SELECT";
 
-    private static bool IssueFieldNeedsUpdate(FieldSnapshot source, TargetIssueField target)
+    private static bool IssueFieldNeedsUpdate(
+        FieldSnapshot source,
+        TargetIssueField target,
+        IssueFieldOptionAction optionAction)
     {
         if (!string.Equals(source.IssueField?.Description, target.Description, StringComparison.Ordinal)
             || !string.Equals(source.IssueField?.Visibility, target.Visibility, StringComparison.Ordinal))
@@ -2565,13 +2822,20 @@ public sealed class ProjectImporter
             return true;
         }
 
-        var sourceOptions = source.Options ?? [];
-        var targetOptions = target.Options ?? [];
-        return sourceOptions.Count != targetOptions.Count
-            || sourceOptions.Zip(targetOptions).Any(pair =>
+        return optionAction == IssueFieldOptionAction.PopulateEmpty;
+    }
+
+    private static bool IssueFieldOptionsMatch(
+        IReadOnlyList<SingleSelectOptionSnapshot>? sourceOptions,
+        IReadOnlyList<SingleSelectOptionSnapshot>? targetOptions)
+    {
+        sourceOptions ??= [];
+        targetOptions ??= [];
+        return sourceOptions.Count == targetOptions.Count
+            && !sourceOptions.Zip(targetOptions).Any(pair =>
                 !string.Equals(pair.First.Name, pair.Second.Name, StringComparison.Ordinal)
                 || !string.Equals(pair.First.Color, pair.Second.Color, StringComparison.Ordinal)
-                || !string.Equals(pair.First.Description, pair.Second.Description, StringComparison.Ordinal));
+                || !string.Equals(pair.First.Description ?? string.Empty, pair.Second.Description ?? string.Empty, StringComparison.Ordinal));
     }
 
     private static TargetIssueField ParseTargetIssueField(JsonElement node)

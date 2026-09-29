@@ -347,9 +347,10 @@ public class CliImportTests
         using var server = new GraphQlStubServer(
             ExistingProjectResponse,
             """{"message":"Validation Failed SYNTHETIC-PROBE-SECRET"}""",
+            """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
             """{"errors":[{"type":"FORBIDDEN","message":"SYNTHETIC-GRAPHQL-SECRET"}]}""")
         {
-            ResponseStatusCodes = [200, 422, 200],
+            ResponseStatusCodes = [200, 422, 200, 200],
         };
         try
         {

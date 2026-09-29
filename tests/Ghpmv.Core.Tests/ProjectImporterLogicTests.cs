@@ -53,6 +53,94 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
+    public void Issue_field_options_classify_matching_names_and_metadata_as_reusable()
+    {
+        var source = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE", Description = "" },
+            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+        };
+        var target = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "target-platform", Name = "Platform", Color = "PURPLE" },
+            new SingleSelectOptionSnapshot { Id = "target-sdk", Name = "SDK", Color = "GREEN", Description = "" },
+        };
+
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.Match,
+            ProjectImporter.ClassifyIssueFieldOptions(source, target, new Dictionary<string, int>()).Action);
+    }
+
+    [Fact]
+    public void Issue_field_options_reuse_shared_names_despite_metadata_order_and_target_extras()
+    {
+        var source = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "BLUE", Description = "New" },
+            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+        };
+        var target = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "target-platform", Name = "Platform", Color = "PURPLE" },
+            new SingleSelectOptionSnapshot { Id = "target-sdk", Name = "SDK", Color = "GREEN" },
+            new SingleSelectOptionSnapshot { Id = "target-extra", Name = "Other", Color = "GRAY" },
+        };
+
+        var result = ProjectImporter.ClassifyIssueFieldOptions(source, target, new Dictionary<string, int>
+        {
+            ["SDK"] = 3,
+        });
+
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.ReuseWithWarning, result.Action);
+        Assert.Empty(result.MissingSourceNames);
+        Assert.Equal(["Other"], result.TargetOnlyNames);
+        Assert.Equal(["SDK"], result.ChangedSharedNames);
+        Assert.True(result.SharedOrderDiffers);
+    }
+
+    [Fact]
+    public void Issue_field_options_distinguish_unused_from_used_missing_names()
+    {
+        var source = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+        };
+        var target = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "target-platform", Name = "Platform", Color = "PURPLE" },
+        };
+
+        var unused = ProjectImporter.ClassifyIssueFieldOptions(source, target, new Dictionary<string, int>());
+        var used = ProjectImporter.ClassifyIssueFieldOptions(source, target, new Dictionary<string, int>
+        {
+            ["SDK"] = 2,
+        });
+
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.ReuseWithWarning, unused.Action);
+        Assert.Equal(["SDK"], unused.MissingSourceNames);
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.MissingUsed, used.Action);
+        Assert.Equal(2, used.MissingUsedNames["SDK"]);
+    }
+
+    [Fact]
+    public void Issue_field_options_populate_empty_target_but_never_replace_disjoint_options()
+    {
+        var source = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+        };
+        var target = new[]
+        {
+            new SingleSelectOptionSnapshot { Id = "target-other", Name = "Other", Color = "GRAY" },
+        };
+
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.PopulateEmpty,
+            ProjectImporter.ClassifyIssueFieldOptions(source, [], new Dictionary<string, int>()).Action);
+        Assert.Equal(ProjectImporter.IssueFieldOptionAction.Disjoint,
+            ProjectImporter.ClassifyIssueFieldOptions(source, target, new Dictionary<string, int>()).Action);
+    }
+
+    [Fact]
     public void Existing_project_update_requires_viewer_update_permission()
     {
         var exception = Assert.Throws<InvalidOperationException>(
@@ -364,7 +452,11 @@ public class ProjectImporterLogicTests
                     {
                         Name = "Teams",
                         DataType = "MULTI_SELECT",
-                        Options = [new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" }],
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
                         IssueField = new IssueFieldConfigurationSnapshot
                         {
                             Description = "Teams involved",
@@ -458,6 +550,7 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
             Assert.False(result.FieldIds.ContainsKey("Teams"));
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("updateIssueField", StringComparison.Ordinal));
             Assert.Single(
                 handler.RequestBodies,
                 body => body.Contains("createProjectV2IssueField", StringComparison.Ordinal));
@@ -729,12 +822,12 @@ public class ProjectImporterLogicTests
     }
 
     [Fact]
-    public async Task Import_updates_existing_issue_field_and_registers_replaced_options()
+    public async Task Import_populates_empty_existing_issue_field_and_registers_new_options()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
         try
         {
-            using var handler = new IssueFieldStubHandler(existing: true, requiresUpdate: true);
+            using var handler = new IssueFieldStubHandler(existing: true, targetSelectOptionsJson: "[]");
             using var client = new GitHubGraphQLClient(
                 "dummy-token",
                 new Uri("https://example.test/graphql"),
@@ -786,6 +879,497 @@ public class ProjectImporterLogicTests
             Assert.Equal("IFO_platform_updated", result.IssueFieldOptionIds["Teams"]["Platform"]);
             Assert.Equal("IFO_sdk_updated", result.IssueFieldOptionIds["Teams"]["SDK"]);
             Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createIssueField", StringComparison.Ordinal));
+            Assert.Empty(importer.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_updates_issue_field_metadata_without_resending_unchanged_options()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE", Description = "" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN", Description = "" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Updated teams",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var progress = new List<string>();
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                OnProgress = progress.Add,
+            };
+
+            await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            var updateRequest = Assert.Single(
+                handler.RequestBodies,
+                body => body.Contains("updateIssueField", StringComparison.Ordinal));
+            using var document = JsonDocument.Parse(updateRequest);
+            var variables = document.RootElement.GetProperty("variables");
+            Assert.Equal("Updated teams", variables.GetProperty("description").GetString());
+            Assert.Equal(JsonValueKind.Null, variables.GetProperty("options").ValueKind);
+            Assert.Contains(progress, message => message.Contains(
+                "organization-wide Issue Field 'Teams'; this affects every project",
+                StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, "target-only options: 'SDK'")]
+    [InlineData(true, "source-only unused options: 'SDK'")]
+    public async Task Import_reuses_existing_issue_field_options_with_one_warning(
+        bool sourceHasUnusedOption,
+        string expectedDifference)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(
+                existing: true,
+                targetSelectOptionsJson: sourceHasUnusedOption
+                    ? """[{"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null}]"""
+                    : null);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var options = new List<SingleSelectOptionSnapshot>
+            {
+                new() { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+            };
+            if (sourceHasUnusedOption)
+            {
+                options.Add(new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" });
+            }
+
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options = options,
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+                Items = sourceHasUnusedOption
+                    ?
+                    [
+                        new ItemSnapshot
+                        {
+                            Type = "PULL_REQUEST", Position = 0, IsArchived = false,
+                            Repository = "source/repo", Number = 1,
+                            FieldValues =
+                            [
+                                new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                            ],
+                        },
+                        new ItemSnapshot
+                        {
+                            Type = "DRAFT_ISSUE", Position = 1, IsArchived = false,
+                            Draft = new DraftIssueSnapshot { Title = "Draft", Assignees = [] },
+                            FieldValues =
+                            [
+                                new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                            ],
+                        },
+                    ]
+                    : [],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            Assert.Equal("IFM_teams", result.IssueFieldIds["Teams"]);
+            Assert.Equal("IFO_platform", result.IssueFieldOptionIds["Teams"]["Platform"]);
+            Assert.Equal(!sourceHasUnusedOption, result.IssueFieldOptionIds["Teams"].ContainsKey("SDK"));
+            Assert.Contains(expectedDifference, Assert.Single(importer.Warnings), StringComparison.Ordinal);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("updateIssueField(", StringComparison.Ordinal));
+            var log = new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_target",
+                ImportCompleted = false,
+                HasUnresolvedWarnings = false,
+            };
+            Assert.False(log.TryMarkImportCompleted(false, importer.Warnings.Count, 0, 0, 0));
+            Assert.True(log.HasUnresolvedWarnings);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_preserves_existing_option_color_without_update()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: true);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "RED" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            Assert.Contains("color/description differs for 'Platform'",
+                Assert.Single(importer.Warnings), StringComparison.Ordinal);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("updateIssueField(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_stops_before_writes_when_items_use_missing_issue_field_options()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(
+                existing: true,
+                targetSelectOptionsJson: """[{"id":"IFO_platform","name":"Platform","color":"PURPLE","description":null}]""");
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+                Items =
+                [
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE", Position = 0, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", MultiSelectOptionNames = ["SDK", "SDK"] },
+                        ],
+                    },
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE", Position = 1, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                        ],
+                    },
+                    new ItemSnapshot
+                    {
+                        Type = "ISSUE", Position = 2, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", IsIssueField = false, MultiSelectOptionNames = ["SDK"] },
+                        ],
+                    },
+                    new ItemSnapshot
+                    {
+                        Type = "PULL_REQUEST", Position = 3, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                        ],
+                    },
+                    new ItemSnapshot
+                    {
+                        Type = "DRAFT_ISSUE", Position = 4, IsArchived = false, FieldValues =
+                        [
+                            new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                        ],
+                    },
+                ],
+            };
+            var beforeWriteCalls = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken));
+
+            Assert.Contains("'SDK' (2 item(s))", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, beforeWriteCalls);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("mutation(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Import_rejects_issue_values_missing_from_source_options_before_project_writes(
+        bool targetFieldExists)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(existing: targetFieldExists);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var beforeWriteCalls = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportIntoAsync(
+                    SnapshotWithUndefinedIssueFieldOption(),
+                    "target",
+                    7,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("source field definition 'SDK' (1 issue item(s))", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, beforeWriteCalls);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("mutation(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_rejects_undefined_source_issue_option_before_creating_project()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                """{"data":{"organization":{"issueFields":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportAsync(
+                    SnapshotWithUndefinedIssueFieldOption(),
+                    "target",
+                    TestContext.Current.CancellationToken));
+
+            Assert.Contains("source field definition 'SDK' (1 issue item(s))", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(2, handler.RequestBodies.Count);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("mutation(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, false, false, false, "data type is TEXT")]
+    [InlineData(false, true, false, false, "same-name fields")]
+    [InlineData(false, false, true, false, "source and target option names have no overlap")]
+    [InlineData(false, false, false, true, "existing options could not be read")]
+    public async Task Import_rejects_issue_field_conflicts_before_project_writes(
+        bool differentType,
+        bool duplicateNames,
+        bool disjointOptions,
+        bool missingTargetOptions,
+        string expectedConflict)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new IssueFieldStubHandler(
+                existing: true,
+                textIssueField: differentType,
+                duplicateIssueFields: duplicateNames,
+                requiresUpdate: disjointOptions,
+                omitTargetOptions: missingTargetOptions);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot { Name = "Notes", DataType = "TEXT" },
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options =
+                        [
+                            new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "RED" },
+                            new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" },
+                        ],
+                        IssueField = new IssueFieldConfigurationSnapshot
+                        {
+                            Description = "Teams involved",
+                            Visibility = "ALL",
+                        },
+                    },
+                ],
+            };
+            var beforeWriteCalls = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => importer.ImportIntoAsync(
+                snapshot, "target", 7, TestContext.Current.CancellationToken));
+
+            Assert.Contains(expectedConflict, exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, beforeWriteCalls);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("mutation(", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Import_rejects_issue_field_conflict_before_creating_project()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-project-import-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""",
+                """
+                {"data":{"organization":{"issueFields":{"nodes":[{
+                  "__typename":"IssueFieldText","id":"IFT_teams","name":"Teams",
+                  "dataType":"TEXT","description":null,"visibility":"ALL"
+                }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """);
+            using var client = new GitHubGraphQLClient(
+                "dummy-token",
+                new Uri("https://example.test/graphql"),
+                handler,
+                delayAsync: null);
+            var snapshot = MinimalSnapshot("Roadmap") with
+            {
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Teams",
+                        DataType = "MULTI_SELECT",
+                        Options = [new SingleSelectOptionSnapshot { Id = "source-sdk", Name = "SDK", Color = "GREEN" }],
+                        IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ImportAsync(snapshot, "target", TestContext.Current.CancellationToken));
+
+            Assert.Contains("data type is TEXT", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(2, handler.RequestBodies.Count);
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("mutation(", StringComparison.Ordinal));
         }
         finally
         {
@@ -1393,6 +1977,33 @@ public class ProjectImporterLogicTests
         Items = [],
     };
 
+    private static ProjectSnapshot SnapshotWithUndefinedIssueFieldOption() => MinimalSnapshot("Roadmap") with
+    {
+        Fields =
+        [
+            new FieldSnapshot
+            {
+                Name = "Teams",
+                DataType = "MULTI_SELECT",
+                Options = [new SingleSelectOptionSnapshot { Id = "source-platform", Name = "Platform", Color = "PURPLE" }],
+                IssueField = new IssueFieldConfigurationSnapshot { Visibility = "ALL" },
+            },
+        ],
+        Items =
+        [
+            new ItemSnapshot
+            {
+                Type = "ISSUE",
+                Position = 0,
+                IsArchived = false,
+                FieldValues =
+                [
+                    new FieldValueSnapshot { FieldName = "Teams", IsIssueField = true, MultiSelectOptionNames = ["SDK"] },
+                ],
+            },
+        ],
+    };
+
     private sealed class StubHandler(params string[] responses) : HttpMessageHandler
     {
         private readonly Queue<string> _responses = new(responses);
@@ -1482,7 +2093,10 @@ public class ProjectImporterLogicTests
         bool textIssueField = false,
         bool fieldByNameReturnsLinked = false,
         bool ordinaryMultiSelect = false,
-        bool ordinaryMultiSelectIssueFieldCollision = false) : HttpMessageHandler
+        bool ordinaryMultiSelectIssueFieldCollision = false,
+        bool duplicateIssueFields = false,
+        string? targetSelectOptionsJson = null,
+        bool omitTargetOptions = false) : HttpMessageHandler
     {
         public List<string> RequestBodies { get; } = [];
 
@@ -1551,7 +2165,33 @@ public class ProjectImporterLogicTests
                             ? NormalDataTypeResponse()
                             : """{"data":{"nodes":[null]},"errors":[{"message":"Something went wrong while executing your query on the preview API."}]}""",
                 _ when body.Contains("issueFields(first:", StringComparison.Ordinal) =>
-                    ordinaryMultiSelectIssueFieldCollision
+                    duplicateIssueFields
+                        ? """
+                          {"data":{"organization":{"issueFields":{"nodes":[
+                            {"__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams","dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL","options":[]},
+                            {"__typename":"IssueFieldMultiSelect","id":"IFM_teams_2","name":"Teams","dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL","options":[]}
+                          ],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                          """
+                    : targetSelectOptionsJson is not null
+                        ? string.Concat(
+                            """
+                            {"data":{"organization":{"issueFields":{"nodes":[{
+                              "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                              "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL",
+                              "options":
+                            """,
+                            targetSelectOptionsJson,
+                            """
+                            }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                            """)
+                    : omitTargetOptions
+                        ? """
+                          {"data":{"organization":{"issueFields":{"nodes":[{
+                            "__typename":"IssueFieldMultiSelect","id":"IFM_teams","name":"Teams",
+                            "dataType":"MULTI_SELECT","description":"Teams involved","visibility":"ALL"
+                          }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                          """
+                    : ordinaryMultiSelectIssueFieldCollision
                         ? """
                           {"data":{"organization":{"issueFields":{"nodes":[{
                             "__typename":"IssueFieldMultiSelect","id":"IFM_areas","name":"Areas",
