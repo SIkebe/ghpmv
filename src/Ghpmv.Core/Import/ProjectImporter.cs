@@ -1224,6 +1224,8 @@ public sealed class ProjectImporter
             }, "preflight-issue-field");
             try
             {
+                var usedOptionCounts = CountUsedIssueFieldOptions(snapshot.Items, field);
+                ValidateIssueFieldSourceOptions(field, usedOptionCounts);
                 var matches = targetFields.Where(target =>
                     string.Equals(target.Name, field.Name, StringComparison.Ordinal)).ToArray();
                 if (matches.Length <= 1
@@ -1254,7 +1256,7 @@ public sealed class ProjectImporter
                     ValidateIssueFieldCompatibility(
                         field,
                         matches[0],
-                        CountUsedIssueFieldOptions(snapshot.Items, field));
+                        usedOptionCounts);
                 }
             }
             catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
@@ -1264,6 +1266,24 @@ public sealed class ProjectImporter
         }
 
         return targetFields;
+    }
+
+    private static void ValidateIssueFieldSourceOptions(
+        FieldSnapshot source,
+        IReadOnlyDictionary<string, int> usedOptionCounts)
+    {
+        var sourceNames = (source.Options ?? [])
+            .Select(option => option.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var missingNames = usedOptionCounts
+            .Where(pair => !sourceNames.Contains(pair.Key))
+            .ToArray();
+        if (missingNames.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"Organization Issue Field '{source.Name}' conflicts with the snapshot: Issue item values use options missing from the source field definition "
+                + $"{string.Join(", ", missingNames.Select(pair => $"'{pair.Key}' ({pair.Value} issue item(s))"))}. Re-export or correct the snapshot before importing.");
+        }
     }
 
     private static IssueFieldOptionClassification ValidateIssueFieldCompatibility(
