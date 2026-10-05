@@ -1061,6 +1061,13 @@ public sealed class ProjectImporter
                     {
                         if (ShouldUpdateSelectOptions(selectOptions, target.Options))
                         {
+                            if (field.DataType == "SINGLE_SELECT" && selectOptions.Count == 0)
+                            {
+                                throw new InvalidDataException(
+                                    $"Snapshot Project single-select field '{field.Name}' cannot clear the existing target options. " +
+                                    "GitHub ignores empty single-select option updates.");
+                            }
+
                             OnProgress?.Invoke(string.Create(CultureInfo.InvariantCulture,
                                 $"Overwriting options of existing field '{field.Name}' with {selectOptions.Count} snapshot options..."));
                             await UpdateSelectOptionsAsync(target.Id, field.Name, field.DataType, selectOptions, maps, cancellationToken).ConfigureAwait(false);
@@ -1093,6 +1100,13 @@ public sealed class ProjectImporter
                 }
                 else
                 {
+                    if (field.DataType == "SINGLE_SELECT" && field.Options is not { Count: > 0 })
+                    {
+                        throw new InvalidDataException(
+                            $"Snapshot Project single-select field '{field.Name}' must define at least one option when creating a new target field. " +
+                            "GitHub requires at least one option when creating a single-select field.");
+                    }
+
                     OnProgress?.Invoke($"Creating {field.DataType} field '{field.Name}'...");
                     var operationId = Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
                     if (_operationLog is not null)

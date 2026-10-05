@@ -121,6 +121,99 @@ public class UserProjectTests
         }
     }
 
+    [Fact]
+    public async Task Single_select_requires_options_for_creation_and_ignores_empty_option_updates()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = IntegrationTestSettings.CreateClient(Token);
+        var viewer = await client.QueryAsync("query { viewer { id } }", cancellationToken: cancellationToken);
+        var viewerId = viewer.GetProperty("viewer").GetProperty("id").GetString()!;
+        string? projectId = null;
+        try
+        {
+            var created = await client.QueryAsync(
+                """
+                mutation($ownerId: ID!, $title: String!) {
+                  createProjectV2(input: { ownerId: $ownerId, title: $title }) {
+                    projectV2 { id }
+                  }
+                }
+                """,
+                new { ownerId = viewerId, title = "ghpmv-empty-select-test-" + Guid.NewGuid().ToString("N") },
+                cancellationToken);
+            projectId = created.GetProperty("createProjectV2").GetProperty("projectV2").GetProperty("id").GetString()!;
+
+            foreach (var optionsInput in new[] { "", ", singleSelectOptions: null", ", singleSelectOptions: []" })
+            {
+                var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(() => client.QueryAsync(
+                    """
+                    mutation($projectId: ID!) {
+                      createProjectV2Field(input: { projectId: $projectId, name: "Priority", dataType: SINGLE_SELECT
+                    """ + optionsInput + """
+                      }) {
+                        projectV2Field { ... on ProjectV2FieldCommon { id } }
+                      }
+                    }
+                    """,
+                    new { projectId },
+                    cancellationToken));
+                Assert.Equal("UNPROCESSABLE", exception.ErrorType);
+            }
+
+            var fieldData = await client.QueryAsync(
+                """
+                mutation($projectId: ID!) {
+                  createProjectV2Field(input: {
+                    projectId: $projectId, name: "Priority", dataType: SINGLE_SELECT,
+                    singleSelectOptions: [{ name: "Low", color: GREEN, description: "Low priority" }]
+                  }) {
+                    projectV2Field { ... on ProjectV2SingleSelectField { id options { id name } } }
+                  }
+                }
+                """,
+                new { projectId },
+                cancellationToken);
+            var field = fieldData.GetProperty("createProjectV2Field").GetProperty("projectV2Field");
+            var fieldId = field.GetProperty("id").GetString()!;
+            var sourceOption = Assert.Single(field.GetProperty("options").EnumerateArray());
+            var optionId = sourceOption.GetProperty("id").GetString();
+            Assert.Equal("Low", sourceOption.GetProperty("name").GetString());
+
+            var updated = await client.QueryAsync(
+                """
+                mutation($fieldId: ID!) {
+                  updateProjectV2Field(input: { fieldId: $fieldId, singleSelectOptions: [] }) {
+                    projectV2Field { ... on ProjectV2SingleSelectField { id options { id name } } }
+                  }
+                }
+                """,
+                new { fieldId },
+                cancellationToken);
+            var updatedOption = Assert.Single(updated.GetProperty("updateProjectV2Field").GetProperty("projectV2Field").GetProperty("options").EnumerateArray());
+            Assert.Equal(optionId, updatedOption.GetProperty("id").GetString());
+            Assert.Equal("Low", updatedOption.GetProperty("name").GetString());
+
+            var readBack = await client.QueryAsync(
+                """
+                query($fieldId: ID!) {
+                  node(id: $fieldId) { ... on ProjectV2SingleSelectField { options { id name } } }
+                }
+                """,
+                new { fieldId },
+                cancellationToken);
+            var readBackOption = Assert.Single(readBack.GetProperty("node").GetProperty("options").EnumerateArray());
+            Assert.Equal(optionId, readBackOption.GetProperty("id").GetString());
+            Assert.Equal("Low", readBackOption.GetProperty("name").GetString());
+        }
+        finally
+        {
+            if (projectId is not null)
+            {
+                await DeleteProjectAsync(client, projectId);
+            }
+        }
+    }
+
     private static async Task DeleteProjectAsync(GitHubGraphQLClient client, string projectId)
     {
         await client.QueryAsync(
