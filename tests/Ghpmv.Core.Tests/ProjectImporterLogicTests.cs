@@ -1634,7 +1634,7 @@ public class ProjectImporterLogicTests
 
     [Theory]
     [InlineData("DATE", "TEXT", "exists with data type TEXT")]
-    [InlineData("ITERATION", "ITERATION", "iterations are not merged")]
+    [InlineData("ITERATION", "ITERATION", "has no captured configuration")]
     public async Task Existing_field_gaps_are_collected_as_warnings(
         string snapshotDataType,
         string targetDataType,

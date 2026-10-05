@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Text.Json;
+using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Snapshot;
 
@@ -1076,14 +1077,19 @@ public sealed class ProjectImporter
                             field.Name,
                             out var createdFieldId) is true
                             && string.Equals(createdFieldId, target.Id, StringComparison.Ordinal);
-                        if (operationOwned)
+                        if (field.IterationConfiguration is { } configuration)
+                        {
+                            await UpdateIterationConfigurationAsync(
+                                target.Id, field.Name, configuration, maps, cancellationToken).ConfigureAwait(false);
+                        }
+                        else if (operationOwned)
                         {
                             OnProgress?.Invoke(
                                 $"Iteration field '{field.Name}' was created by this operation; resuming without re-creating it.");
                         }
                         else
                         {
-                            Warn($"iteration field '{field.Name}' already exists; iterations are not merged, leaving it unchanged.");
+                            Warn($"iteration field '{field.Name}' has no captured configuration; leaving it unchanged.");
                         }
                     }
                     else
@@ -2728,6 +2734,128 @@ public sealed class ProjectImporter
             $"Pending field operation '{pending.OperationId}' is not visible after reconciliation polling. Do not resend it until the target is reconciled manually.");
     }
 
+    private async Task UpdateIterationConfigurationAsync(
+        string fieldId,
+        string fieldName,
+        IterationConfigurationSnapshot source,
+        FieldMaps maps,
+        CancellationToken cancellationToken)
+    {
+        var data = await _client.QueryAsync(
+            """
+            query($id: ID!) {
+              node(id: $id) {
+                ... on ProjectV2IterationField {
+                  id name dataType
+                  configuration {
+                    duration startDay
+                    iterations { id title startDate duration }
+                    completedIterations { id title startDate duration }
+                  }
+                }
+              }
+            }
+            """,
+            new { id = fieldId },
+            cancellationToken).ConfigureAwait(false);
+        var node = data.GetProperty("node");
+        var target = ProjectExporter.ParseIterationConfiguration(node.GetProperty("configuration"));
+        maps.Register(node);
+        if (IsUninitializedIterationConfiguration(source))
+        {
+            if (!IsUninitializedIterationConfiguration(target))
+            {
+                Warn($"iteration field '{fieldName}' has an initialized target schedule; preserving it instead of clearing existing iterations.");
+            }
+            else
+            {
+                OnProgress?.Invoke($"Iteration field '{fieldName}' is already uninitialized; skipping.");
+            }
+
+            return;
+        }
+
+        var merged = MergeIterationConfigurations(source, target);
+        var targetIterations = target.Iterations.Concat(target.CompletedIterations)
+            .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+            .ThenBy(iteration => iteration.Title, StringComparer.Ordinal);
+        if (merged.Duration == target.Duration && merged.StartDay == target.StartDay
+            && merged.Iterations.SequenceEqual(targetIterations))
+        {
+            OnProgress?.Invoke($"Iteration field '{fieldName}' already matches; skipping.");
+            return;
+        }
+
+        OnProgress?.Invoke($"Updating iteration field '{fieldName}' while preserving existing target iteration IDs and target-only iterations...");
+        var input = BuildIterationConfigurationInput(fieldName, merged, preserveIterationIds: true);
+        var hasNewIterations = merged.Iterations.Any(iteration => string.IsNullOrEmpty(iteration.Id));
+        var updated = await _client.MutationAsync(
+            "updateProjectV2Field",
+            """
+            mutation($fieldId: ID!, $configuration: ProjectV2IterationFieldConfigurationInput!, $clientMutationId: String!) {
+              updateProjectV2Field(input: { fieldId: $fieldId, iterationConfiguration: $configuration, clientMutationId: $clientMutationId }) {
+                projectV2Field {
+                  ... on ProjectV2IterationField {
+                    id name dataType
+                    configuration {
+                      iterations { id title }
+                      completedIterations { id title }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            new { fieldId, configuration = input },
+            // Replaying ID-less entries can replace newly created identities and clear item references.
+            hasNewIterations ? MutationRetryPolicy.Create : MutationRetryPolicy.Idempotent,
+            target: fieldId,
+            requiredResultPath: "projectV2Field.id",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        maps.Register(updated.GetProperty("updateProjectV2Field").GetProperty("projectV2Field"));
+    }
+
+    internal static IterationConfigurationSnapshot MergeIterationConfigurations(
+        IterationConfigurationSnapshot source,
+        IterationConfigurationSnapshot target)
+    {
+        ValidateIterationConfiguration(source);
+        ValidateIterationConfiguration(target);
+        var existing = UniqueIterations(target, requireIds: true);
+        var desired = UniqueIterations(source, requireIds: false);
+        var merged = existing.Values.Where(iteration => !desired.ContainsKey(iteration.Title))
+            .Concat(desired.Values.Select(iteration => iteration with
+            {
+                Id = existing.TryGetValue(iteration.Title, out var match) ? match.Id : string.Empty,
+            }))
+            .OrderBy(iteration => iteration.StartDate, StringComparer.Ordinal)
+            .ThenBy(iteration => iteration.Title, StringComparer.Ordinal)
+            .ToArray();
+        return source with { Iterations = merged, CompletedIterations = [] };
+    }
+
+    private static Dictionary<string, IterationSnapshot> UniqueIterations(
+        IterationConfigurationSnapshot configuration,
+        bool requireIds)
+    {
+        var result = new Dictionary<string, IterationSnapshot>(StringComparer.Ordinal);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var iteration in configuration.Iterations.Concat(configuration.CompletedIterations))
+        {
+            if (!result.TryAdd(iteration.Title, iteration))
+            {
+                throw new InvalidDataException("Iteration titles must be unique within an active and completed schedule before merging.");
+            }
+
+            if (requireIds && (string.IsNullOrWhiteSpace(iteration.Id) || !ids.Add(iteration.Id)))
+            {
+                throw new InvalidDataException("Target iterations must have nonempty, unique IDs before merging.");
+            }
+        }
+
+        return result;
+    }
+
     private async Task UpdateSelectOptionsAsync(
         string fieldId,
         string fieldName,
@@ -2883,7 +3011,8 @@ public sealed class ProjectImporter
     internal object? BuildIterationConfigurationInput(
         string fieldName,
         IterationConfigurationSnapshot configuration,
-        DateOnly? referenceDate = null)
+        DateOnly? referenceDate = null,
+        bool preserveIterationIds = false)
     {
         ValidateIterationConfiguration(configuration);
         if (IsUninitializedIterationConfiguration(configuration))
@@ -2916,7 +3045,21 @@ public sealed class ProjectImporter
         {
             duration = configuration.Duration,
             startDate,
-            iterations = ordered.Select(i => new { title = i.Title, startDate = i.StartDate, duration = i.Duration }).ToArray(),
+            iterations = ordered.Select(iteration =>
+            {
+                var input = new Dictionary<string, object>
+                {
+                    ["title"] = iteration.Title,
+                    ["startDate"] = iteration.StartDate,
+                    ["duration"] = iteration.Duration,
+                };
+                if (preserveIterationIds && !string.IsNullOrEmpty(iteration.Id))
+                {
+                    input["id"] = iteration.Id;
+                }
+
+                return input;
+            }).ToArray(),
         };
     }
 

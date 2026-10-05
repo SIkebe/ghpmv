@@ -115,6 +115,138 @@ public class ProjectImporterTests
     }
 
     [Fact]
+    public async Task Iteration_merge_preserves_existing_item_assignments_and_is_repeatable()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var client = IntegrationTestSettings.CreateClient(Token);
+        static IterationSnapshot Iteration(string title, string date, int duration) =>
+            new() { Id = "source-" + title, Title = title, StartDate = date, Duration = duration };
+        var initialConfiguration = new IterationConfigurationSnapshot
+        {
+            Duration = 7,
+            StartDay = 1,
+            Iterations =
+            [
+                Iteration("Shared", "2030-01-07", 7),
+                Iteration("Target only", "2030-02-04", 7),
+            ],
+            CompletedIterations = [Iteration("Past", "2020-01-06", 7)],
+        };
+        var snapshot = MinimalSnapshot(NewTestTitle()) with
+        {
+            Fields = [new FieldSnapshot { Name = "Sprint", DataType = "ITERATION", IterationConfiguration = initialConfiguration }],
+        };
+        var directory = IntegrationTestSettings.CreateOperationLogDirectory();
+        var result = await new ProjectImporter(client) { OperationLogDirectory = directory }
+            .ImportAsync(snapshot, TargetOrg, cancellationToken);
+        try
+        {
+            var itemIds = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (title, iterationId) in result.IterationIds["Sprint"])
+            {
+                var draft = await client.MutationAsync(
+                    "addProjectV2DraftIssue",
+                    """
+                    mutation($projectId: ID!, $title: String!, $clientMutationId: String!) {
+                      addProjectV2DraftIssue(input: { projectId: $projectId, title: $title, clientMutationId: $clientMutationId }) {
+                        projectItem { id }
+                      }
+                    }
+                    """,
+                    new { projectId = result.ProjectId, title },
+                    requiredResultPath: "projectItem.id",
+                    cancellationToken: cancellationToken);
+                var itemId = draft.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString()!;
+                itemIds.Add(title, itemId);
+                await client.MutationAsync(
+                    "updateProjectV2ItemFieldValue",
+                    """
+                    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $iterationId: String!, $clientMutationId: String!) {
+                      updateProjectV2ItemFieldValue(input: {
+                        projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+                        value: { iterationId: $iterationId }, clientMutationId: $clientMutationId
+                      }) { projectV2Item { id } }
+                    }
+                    """,
+                    new { projectId = result.ProjectId, itemId, fieldId = result.FieldIds["Sprint"], iterationId },
+                    MutationRetryPolicy.Idempotent,
+                    requiredResultPath: "projectV2Item.id",
+                    cancellationToken: cancellationToken);
+            }
+
+            var sourceConfiguration = initialConfiguration with
+            {
+                Duration = 14,
+                StartDay = 4,
+                Iterations =
+                [
+                    Iteration("Shared", "2030-01-14", 14),
+                    Iteration("New", "2030-03-04", 14),
+                ],
+                CompletedIterations = [Iteration("Past", "2020-01-09", 3)],
+            };
+            var update = snapshot with
+            {
+                Fields = [snapshot.Fields[0] with { IterationConfiguration = sourceConfiguration }],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+            for (var attempt = 0; attempt < 2; attempt++)
+            {
+                var merged = await importer.ImportIntoAsync(update, TargetOrg, result.ProjectNumber, cancellationToken);
+                Assert.Empty(importer.Warnings);
+                Assert.Equal(4, merged.IterationIds["Sprint"].Count);
+                foreach (var (title, iterationId) in result.IterationIds["Sprint"])
+                {
+                    Assert.Equal(iterationId, merged.IterationIds["Sprint"][title]);
+                }
+
+                var expectedConfiguration = sourceConfiguration with
+                {
+                    Iterations = [.. sourceConfiguration.Iterations, initialConfiguration.Iterations[1]],
+                };
+                await AssertIterationConfigurationsAsync(
+                    client,
+                    update with { Fields = [update.Fields[0] with { IterationConfiguration = expectedConfiguration }] },
+                    merged,
+                    cancellationToken);
+                var items = await client.QueryAsync(
+                    """
+                    query($ids: [ID!]!) {
+                      nodes(ids: $ids) {
+                        ... on ProjectV2Item {
+                          id
+                          fieldValues(first: 20) {
+                            nodes { ... on ProjectV2ItemFieldIterationValue { iterationId } }
+                          }
+                        }
+                      }
+                    }
+                    """,
+                    new { ids = itemIds.Values.ToArray() },
+                    cancellationToken);
+                foreach (var item in items.GetProperty("nodes").EnumerateArray())
+                {
+                    var title = itemIds.Single(pair => pair.Value == item.GetProperty("id").GetString()).Key;
+                    var iterationValue = Assert.Single(item.GetProperty("fieldValues").GetProperty("nodes").EnumerateArray(),
+                        value => value.TryGetProperty("iterationId", out _));
+                    Assert.Equal(result.IterationIds["Sprint"][title], iterationValue.GetProperty("iterationId").GetString());
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                await DeleteProjectAsync(client, result.ProjectId);
+            }
+            finally
+            {
+                TryDeleteDirectory(directory);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Import_with_conflict_fail_throws_when_title_exists()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

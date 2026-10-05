@@ -334,6 +334,8 @@ If an interrupted import already created a new Project, resume with `--on-confli
 
 An uninitialized Iteration state (duration `0`, start day `0`, no active/completed iterations) is recreated without explicit settings. An initialized empty schedule retains its configured start day. Other nonpositive durations or invalid days fail validation before Project writes. Start dates for all active/completed iterations are also validated as real `yyyy-MM-dd` dates before API calls. Invalid date values themselves are not included in error messages. **This fix does not discard pending operations from earlier failures.**
 
+Existing Iteration configurations are merged by exact title using the target IDs, including completed and target-only iterations. Updates that add any ID-less iteration stop on ambiguous responses rather than automatically resending a replacement configuration. Inspect the target before rerunning with the same snapshot and logs: the importer rereads the configuration, reuses the new IDs, and skips already-applied changes. Updates containing only existing target IDs may be retried idempotently. Duplicate titles or missing/duplicate target IDs block the merge. Uncaptured configurations remain unchanged; an uninitialized source does not clear an initialized target and reports a warning.
+
 ## Implementation and tests
 
 | Concern | Main files |

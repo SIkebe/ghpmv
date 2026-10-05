@@ -166,6 +166,8 @@ ghpmv import --org target-org --in ./snapshot --project-title "Roadmap (migrated
 
 `--project-number` is mutually exclusive with `--on-conflict` and `--project-title`.
 
+Existing Iteration fields are merged by exact title. Matching iterations retain their **target IDs** while adopting the snapshot's dates and durations; missing iterations are added, and target-only active/completed iterations are preserved. Default duration and start weekday follow the snapshot. An uncaptured configuration is left unchanged, and an uninitialized snapshot does not clear an initialized target schedule (a warning is reported). Verification still reports target-only iterations as differences from the snapshot.
+
 When a project with the same title already exists, `--on-conflict` controls the entire import:
 
 | Value | Result | Existing project changes |
@@ -178,7 +180,7 @@ Creating a new project emits `result=created`. The result line also includes the
 
 ### Recovering from an ambiguous mutation result
 
-If a create mutation may have succeeded but its result is unknown, `ghpmv` stops automatic retries to avoid duplicates. Inspect the target before resuming with the **same snapshot and import logs**. Use `--on-conflict update` for a project created by an interrupted import, or the same `--project-number` when updating an existing project. Do not delete pending operation records to force a retry.
+If a create mutation may have succeeded but its result is unknown, `ghpmv` stops automatic retries to avoid duplicates. This also applies to Iteration configuration updates that add new iterations: resumption rereads the target and reuses any newly created IDs. Inspect the target before resuming with the **same snapshot and import logs**. Use `--on-conflict update` for a project created by an interrupted import, or the same `--project-number` when updating an existing project. Do not delete pending operation records to force a retry.
 
 See [Recovery and resume rules](docs/DIAGNOSTICS.md#recovery-and-resume) for reconciliation, Status Update restrictions, and uninitialized Iteration handling.
 
