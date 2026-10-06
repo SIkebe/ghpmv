@@ -439,7 +439,7 @@ public sealed class ProjectExporter
         return result;
     }
 
-    private static IterationConfigurationSnapshot ParseIterationConfiguration(JsonElement configuration) => new()
+    internal static IterationConfigurationSnapshot ParseIterationConfiguration(JsonElement configuration) => new()
     {
         Duration = configuration.GetProperty("duration").GetInt32(),
         StartDay = configuration.GetProperty("startDay").GetInt32(),
