@@ -1716,6 +1716,144 @@ public class ProjectImporterLogicTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    public async Task Empty_single_select_options_reject_unrepresentable_changes_but_preserve_existing_noops(
+        bool optionsAreNull,
+        bool existing,
+        bool existingHasOptions)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-empty-select-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Regression fixture","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                !existing
+                    ? """{"data":{"node":{"fields":{"nodes":[]}}}}"""
+                    : existingHasOptions
+                    ? """
+                      {"data":{"node":{"fields":{"nodes":[{
+                        "__typename":"ProjectV2SingleSelectField","id":"PVTF_priority","name":"Priority","dataType":"SINGLE_SELECT",
+                        "options":[{"id":"target-low","name":"Low","color":"GREEN","description":""}]
+                      }]}}}}
+                      """
+                    : """
+                      {"data":{"node":{"fields":{"nodes":[{
+                        "__typename":"ProjectV2SingleSelectField","id":"PVTF_priority","name":"Priority","dataType":"SINGLE_SELECT","options":[]
+                      }]}}}}
+                      """);
+            using var client = new GitHubGraphQLClient("dummy-token", new Uri("https://example.test/graphql"), handler, null);
+            var snapshot = MinimalSnapshot("Regression fixture") with
+            {
+                Project = new ProjectInfoSnapshot { Title = "Regression fixture", Public = false, Closed = false, Template = false },
+                Fields =
+                [
+                    new FieldSnapshot { Name = "Priority", DataType = "SINGLE_SELECT", Options = optionsAreNull ? null : [] },
+                ],
+            };
+            await SnapshotFile.SaveAsync(snapshot, directory, TestContext.Current.CancellationToken);
+            snapshot = await SnapshotFile.LoadAsync(directory, TestContext.Current.CancellationToken);
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            if (existing && (optionsAreNull || !existingHasOptions))
+            {
+                var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+                Assert.Equal("PVTF_priority", result.FieldIds["Priority"]);
+                if (existingHasOptions)
+                {
+                    Assert.Equal("target-low", result.OptionIds["Priority"]["Low"]);
+                }
+                else
+                {
+                    Assert.Empty(result.OptionIds["Priority"]);
+                }
+
+                Assert.Empty(importer.Warnings);
+            }
+            else
+            {
+                var exception = await Assert.ThrowsAsync<InvalidDataException>(
+                    () => importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken));
+                Assert.Contains("single-select field 'Priority'", exception.Message, StringComparison.Ordinal);
+                Assert.Contains(
+                    existing ? "cannot clear the existing target options" : "must define at least one option when creating a new target field",
+                    exception.Message,
+                    StringComparison.Ordinal);
+            }
+
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("createProjectV2Field(", StringComparison.Ordinal));
+            Assert.DoesNotContain(handler.RequestBodies, body => body.Contains("updateProjectV2Field(", StringComparison.Ordinal));
+            var log = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            Assert.Empty(log.PendingFields);
+            Assert.Empty(log.CreatedFields);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Single_select_creation_preserves_nonempty_option_metadata_and_maps_target_ids()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-single-select-").FullName;
+        try
+        {
+            using var handler = new StubHandler(
+                """{"data":{"organization":{"projectV2":{"id":"PVT_target","number":7,"title":"Regression fixture","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""",
+                """{"data":{"updateProjectV2":{"projectV2":{"id":"PVT_target"}}}}""",
+                """{"data":{"node":{"fields":{"nodes":[]}}}}""",
+                """
+                {"data":{"createProjectV2Field":{"projectV2Field":{
+                  "__typename":"ProjectV2SingleSelectField","id":"PVTF_priority","name":"Priority","dataType":"SINGLE_SELECT",
+                  "options":[{"id":"target-low","name":"Low"}]
+                }}}}
+                """);
+            using var client = new GitHubGraphQLClient("dummy-token", new Uri("https://example.test/graphql"), handler, null);
+            var snapshot = MinimalSnapshot("Regression fixture") with
+            {
+                Project = new ProjectInfoSnapshot { Title = "Regression fixture", Public = false, Closed = false, Template = false },
+                Fields =
+                [
+                    new FieldSnapshot
+                    {
+                        Name = "Priority",
+                        DataType = "SINGLE_SELECT",
+                        Options = [new SingleSelectOptionSnapshot { Id = "source-low", Name = "Low", Color = "GREEN", Description = "Low priority" }],
+                    },
+                ],
+            };
+            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+
+            var result = await importer.ImportIntoAsync(snapshot, "target", 7, TestContext.Current.CancellationToken);
+
+            using var request = JsonDocument.Parse(Assert.Single(handler.RequestBodies, body => body.Contains("createProjectV2Field(", StringComparison.Ordinal)));
+            var variables = request.RootElement.GetProperty("variables");
+            var option = Assert.Single(variables.GetProperty("options").EnumerateArray());
+            Assert.Equal("Low", option.GetProperty("name").GetString());
+            Assert.Equal("GREEN", option.GetProperty("color").GetString());
+            Assert.Equal("Low priority", option.GetProperty("description").GetString());
+            Assert.False(option.TryGetProperty("id", out _));
+            Assert.Equal(JsonValueKind.Null, variables.GetProperty("multiSelectOptions").ValueKind);
+            Assert.Equal("PVTF_priority", result.FieldIds["Priority"]);
+            Assert.Equal("target-low", result.OptionIds["Priority"]["Low"]);
+            var log = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            Assert.Empty(log.PendingFields);
+            Assert.Equal("PVTF_priority", log.CreatedFields["Priority"]);
+            Assert.Empty(importer.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Operation_owned_iteration_field_resumes_without_a_warning()
     {
