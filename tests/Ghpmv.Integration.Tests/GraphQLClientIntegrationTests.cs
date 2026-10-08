@@ -80,14 +80,16 @@ public class GraphQLClientIntegrationTests
             var createdTitles = Enumerable.Range(1, 120)
                 .Select(i => $"Draft {i:D3}")
                 .ToArray();
+            var createdIds = new List<string>();
 
             // Serial on purpose: parallel writes would trip the secondary rate limit.
             foreach (var draftTitle in createdTitles)
             {
-                await client.QueryAsync(
+                var created = await client.QueryAsync(
                     "mutation($projectId: ID!, $title: String!) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) { projectItem { id } } }",
                     new { projectId, title = draftTitle },
                     cancellationToken);
+                createdIds.Add(created.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString()!);
             }
 
             // The items connection is eventually consistent right after writes,
@@ -130,6 +132,8 @@ public class GraphQLClientIntegrationTests
                     break;
                 }
             }
+
+            await DiagnoseItemConnectionsAsync(client, projectId, createdIds, cancellationToken);
 
             Assert.Equal(120, directTitles.Count);
             Assert.Equal(120, directTitles.Distinct(StringComparer.Ordinal).Count());
@@ -176,6 +180,64 @@ public class GraphQLClientIntegrationTests
                 new { projectId },
                 CancellationToken.None);
         }
+    }
+
+    private static async Task DiagnoseItemConnectionsAsync(
+        GitHubGraphQLClient client,
+        string projectId,
+        List<string> createdIds,
+        CancellationToken cancellationToken)
+    {
+        foreach (var filter in new[]
+        {
+            "",
+            ", archivedStates: [NOT_ARCHIVED]",
+            ", archivedStates: [ARCHIVED]",
+            ", archivedStates: [ARCHIVED, NOT_ARCHIVED]",
+            ", archivedStates: [NOT_ARCHIVED, ARCHIVED]",
+        })
+        {
+            var count = 0;
+            await foreach (var _ in client.QueryPaginatedAsync(
+                $$"""
+                query($projectId: ID!, $first: Int!, $after: String) {
+                  node(id: $projectId) {
+                    ... on ProjectV2 {
+                      items(first: $first, after: $after{{filter}}) {
+                        nodes { id }
+                        pageInfo { hasNextPage endCursor }
+                      }
+                    }
+                  }
+                }
+                """,
+                new { projectId, first = 50 },
+                "node.items",
+                cancellationToken: cancellationToken))
+            {
+                count++;
+            }
+
+            Console.WriteLine($"Item connection diagnostic: filter='{filter}', enumerated={count}, expected={createdIds.Count}.");
+        }
+
+        var found = 0;
+        foreach (var ids in createdIds.Chunk(50))
+        {
+            var data = await client.QueryAsync(
+                """
+                query($ids: [ID!]!) {
+                  nodes(ids: $ids) { ... on ProjectV2Item { id project { id } } }
+                }
+                """,
+                new { ids },
+                cancellationToken);
+            found += data.GetProperty("nodes").EnumerateArray().Count(node =>
+                node.ValueKind == System.Text.Json.JsonValueKind.Object
+                && node.GetProperty("project").GetProperty("id").GetString() == projectId);
+        }
+
+        Console.WriteLine($"Item node diagnostic: created={createdIds.Count}, stillInProject={found}.");
     }
 
     [Fact]
