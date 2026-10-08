@@ -104,6 +104,9 @@ public sealed class ApplicationBuildIdentityTests
         public async Task AssertMetadataAsync(string? sha, bool? dirty, string? root = null)
         {
             var projectDirectory = Path.Combine(root ?? Root, "src", "Ghpmv.Cli");
+            var repositoryRoot = await RunAsync("dotnet", projectDirectory,
+                ["msbuild", "Identity.csproj", "-nologo", "-getProperty:_ApplicationRepositoryRoot"]);
+            Assert.Equal(Path.GetFullPath(root ?? Root), repositoryRoot.Trim());
             await RunAsync("dotnet", projectDirectory,
                 ["msbuild", "Identity.csproj", "-nologo", "-verbosity:quiet", "-t:GenerateAssemblyInfo"]);
             var source = await File.ReadAllTextAsync(
