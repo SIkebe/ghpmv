@@ -80,15 +80,20 @@ public class GraphQLClientIntegrationTests
             var createdTitles = Enumerable.Range(1, 120)
                 .Select(i => $"Draft {i:D3}")
                 .ToArray();
+            var createdIds = new List<string>();
 
             // Serial on purpose: parallel writes would trip the secondary rate limit.
             foreach (var draftTitle in createdTitles)
             {
-                await client.QueryAsync(
+                var created = await client.QueryAsync(
                     "mutation($projectId: ID!, $title: String!) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) { projectItem { id } } }",
                     new { projectId, title = draftTitle },
                     cancellationToken);
+                createdIds.Add(created.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString()!);
             }
+
+            Assert.Equal(120, createdIds.Distinct(StringComparer.Ordinal).Count());
+            await ProjectItemReadiness.WaitAsync(client, projectId, createdIds, cancellationToken);
 
             // The items connection is eventually consistent right after writes,
             // so poll until all 120 items are visible (up to ~75s).
