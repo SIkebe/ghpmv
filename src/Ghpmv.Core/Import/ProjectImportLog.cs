@@ -76,33 +76,13 @@ public sealed record ProjectImportLog
 
     public async Task SaveAsync(string directory, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(directory);
-        var path = Path.Combine(directory, FileName);
-        var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await using (var stream = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4096,
-                FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await JsonSerializer.SerializeAsync(
-                    stream,
-                    this,
-                    ProjectImportLogJsonContext.Default.ProjectImportLog,
-                    cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            File.Move(temporaryPath, path, overwrite: true);
-        }
-        finally
-        {
-            File.Delete(temporaryPath);
-        }
+        await ResumeLogFile.SaveAsync(
+            directory,
+            FileName,
+            backupFileName: null,
+            (stream, token) => JsonSerializer.SerializeAsync(
+                stream, this, ProjectImportLogJsonContext.Default.ProjectImportLog, token),
+            cancellationToken).ConfigureAwait(false);
     }
 }
 

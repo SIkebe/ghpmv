@@ -325,6 +325,8 @@ internal sealed class ImportFailureDiagnostics : IDisposable
             Depth = depth,
             Context = MigrationDiagnostics.Get(exception),
             Type = exception.GetType().FullName ?? exception.GetType().Name,
+            HResult = $"0x{exception.HResult:X8}",
+            ResumeLogSaveFailure = ResumeLogSaveFailure.Get(exception),
             Message = FormatExceptionForReport(exception),
             StackTrace = exception.StackTrace,
             ErrorType = GraphQLDiagnosticSanitizer.ErrorType(graphQlException?.ErrorType),
@@ -439,6 +441,10 @@ internal sealed record ImportExceptionDetail
     public required int Depth { get; init; }
 
     public required string Type { get; init; }
+
+    public string? HResult { get; init; }
+
+    public ResumeLogSaveFailure? ResumeLogSaveFailure { get; init; }
 
     public required string Message { get; init; }
 
