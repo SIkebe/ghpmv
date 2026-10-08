@@ -132,6 +132,12 @@ public class ProjectItemReadinessTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            if (Bodies.Count > responses.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected request #{Bodies.Count}; only {responses.Length} responses were configured.");
+            }
+
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responses[Bodies.Count - 1], Encoding.UTF8, "application/json"),

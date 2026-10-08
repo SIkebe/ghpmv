@@ -195,11 +195,9 @@ public class ItemImporterTests
                 """,
                 new { projectId = sourceProjectId, contentId = issueId },
                 cancellationToken);
-            await ProjectItemReadiness.WaitAsync(
-                client,
-                sourceProjectId,
-                [addedIssue.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString()!],
-                cancellationToken);
+            var addedIssueItemId = addedIssue.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString()
+                ?? throw new InvalidOperationException("addProjectV2ItemById returned a null item.id.");
+            await ProjectItemReadiness.WaitAsync(client, sourceProjectId, [addedIssueItemId], cancellationToken);
 
             var exported = await ExportUntilAsync(
                 exporter,
