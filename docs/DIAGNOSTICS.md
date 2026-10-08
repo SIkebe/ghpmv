@@ -124,10 +124,28 @@ Inspect the target state, then rerun with the same snapshot and import log.
 | `inputValidation` | Whether Iteration settings were validated, active/completed counts, and whether settings were present or omitted on send; not the complete settings |
 | `operationName`, `clientMutationId`, `attemptedAtUtc`, `target`, `recoveryHint` | Information for investigating and recovering an ambiguous creation |
 | `runId`, `attemptId`, `sensitiveResponseCapture` | This exception's own attempt and raw-body capture result |
+| `hResult` | This exception's HRESULT as an eight-digit hexadecimal value, including local I/O failures |
+| `resumeLogSaveFailure` | Present on an exception from saving `import-log.json` or `project-import-log.json`; contains the local save operation context |
 
 Common `failureReason` values are `graphql-error-with-mutation-payload` (errors coexist with a mutation-result key), `missing-mutation-result` (required result absent), `malformed-response` (invalid response format), and `transport-failure` (transport failed). The classification alone does not authorize a retry.
 
 In addition to existing string fields, Item errors used for resumption may store optional `fieldValuesErrorContext`, `positionErrorContext`, `archiveErrorContext`, and `fieldValueFailures`. A successful retry clears the corresponding diagnostics. Source diagnostic information is excluded from the snapshot fingerprint so older resume state remains compatible.
+
+### Resume-log save failures
+
+`exceptions[].resumeLogSaveFailure` distinguishes the failed local operation from the report's migration `stage`. It uses the existing report `runId`; no additional correlation ID is generated.
+
+| Save `stage` | Involved paths |
+| --- | --- |
+| `creating-directory` | `directoryPath`; `logPath` identifies the intended log |
+| `opening-temporary-file`, `writing-temporary-file`, `flushing-temporary-file`, `closing-temporary-file` | `temporaryPath`; `logPath` identifies the intended log |
+| `replacing-log` | `temporaryPath` is the replacement source, `logPath` the existing destination, and `backupPath` the backup destination |
+| `moving-log` | `temporaryPath` is the source and `logPath` the destination; no backup is involved |
+| `deleting-temporary-file` | `temporaryPath` is the cleanup target; `logPath` identifies the associated log |
+
+Paths are absolute and describe the attempted operation, **not a confirmed locked file**. In particular, a replacement failure alone cannot identify whether the source, destination, or backup caused it. `executingProcessId` is the PID of the ghpmv process that attempted the save, **not the PID of a lock holder**. Paths can contain local usernames or private directory names; review the report before sharing. These diagnostics do not add log contents or snapshot payloads.
+
+The temporary file is written, flushed, and closed before committing. Item-log replacement retains the existing backup behavior; project-log writes retain overwrite-move behavior. A failed save does not trigger an automatic retry. When saving and temporary-file cleanup both fail, the original exception remains first in the aggregate's nested entries, with its original type and HRESULT; the cleanup exception has its own `resumeLogSaveFailure` and HRESULT. A cleanup-only failure is also reported as a failure, even if the log was already committed. Failure to write `import-error.json` itself is still reported on stderr; these fields cannot be recovered from a report that was not written.
 
 ## Capturing raw API responses explicitly
 

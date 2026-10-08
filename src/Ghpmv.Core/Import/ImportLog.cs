@@ -161,38 +161,13 @@ public sealed record ImportLog
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
-        Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, FileName);
-
-        var temporaryPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            await using (var stream = new FileStream(
-                temporaryPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await JsonSerializer.SerializeAsync(stream, this, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            if (File.Exists(path))
-            {
-                File.Replace(temporaryPath, path, Path.Combine(directory, BackupFileName));
-            }
-            else
-            {
-                File.Move(temporaryPath, path);
-            }
-        }
-        finally
-        {
-            File.Delete(temporaryPath);
-        }
-
+        await ResumeLogFile.SaveAsync(
+            directory,
+            FileName,
+            BackupFileName,
+            (stream, token) => JsonSerializer.SerializeAsync(stream, this, ImportLogJsonContext.Default.ImportLog, token),
+            cancellationToken).ConfigureAwait(false);
         return path;
     }
 
