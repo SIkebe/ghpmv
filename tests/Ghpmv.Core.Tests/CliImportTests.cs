@@ -307,6 +307,16 @@ public class CliImportTests
         Assert.Empty(result.Error);
     }
 
+    [Fact]
+    public async Task Version_remains_clean_and_matches_diagnostic_application_version()
+    {
+        var result = await RunIsolatedCliAsync(Environment.CurrentDirectory, ["--version"]);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(Ghpmv.Cli.ApplicationBuildInfo.Current.Version, result.Output.Trim());
+        Assert.DoesNotContain("+", result.Output, StringComparison.Ordinal);
+        Assert.Empty(result.Error);
+    }
+
     private static async Task<(int ExitCode, string Output, string Error)> RunIsolatedCliAsync(string directory, IEnumerable<string> arguments)
     {
         var startInfo = new ProcessStartInfo("dotnet")

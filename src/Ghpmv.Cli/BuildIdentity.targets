@@ -1,0 +1,45 @@
+<Project>
+  <PropertyGroup>
+    <_ApplicationRepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</_ApplicationRepositoryRoot>
+  </PropertyGroup>
+
+  <!-- Reevaluate on every build so incremental builds notice commits and worktree changes. -->
+  <Target Name="CaptureApplicationBuildIdentity" BeforeTargets="GetAssemblyAttributes" Condition="'$(DesignTimeBuild)' != 'true'">
+    <PropertyGroup>
+      <_ApplicationCommitSha />
+      <_ApplicationIsDirty />
+    </PropertyGroup>
+    <Exec Command="git rev-parse --verify HEAD"
+          WorkingDirectory="$(_ApplicationRepositoryRoot)"
+          Condition="Exists('$(_ApplicationRepositoryRoot).git')"
+          ConsoleToMSBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_ApplicationGitRevision" />
+      <Output TaskParameter="ExitCode" PropertyName="_ApplicationGitRevisionExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <_ApplicationGitRevisionText>@(_ApplicationGitRevision)</_ApplicationGitRevisionText>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(_ApplicationGitRevisionExitCode)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(_ApplicationGitRevisionText)', '\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z'))">
+      <_ApplicationCommitSha>$(_ApplicationGitRevisionText)</_ApplicationCommitSha>
+    </PropertyGroup>
+    <Exec Command="git status --porcelain=v1 --untracked-files=normal --ignore-submodules=none"
+          WorkingDirectory="$(_ApplicationRepositoryRoot)"
+          Condition="'$(_ApplicationCommitSha)' != ''"
+          ConsoleToMSBuild="true" IgnoreExitCode="true" IgnoreStandardErrorWarningFormat="true"
+          StandardOutputImportance="Low" StandardErrorImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_ApplicationGitStatus" />
+      <Output TaskParameter="ExitCode" PropertyName="_ApplicationGitStatusExitCode" />
+    </Exec>
+    <PropertyGroup Condition="'$(_ApplicationGitStatusExitCode)' == '0'">
+      <_ApplicationIsDirty Condition="'@(_ApplicationGitStatus)' == ''">false</_ApplicationIsDirty>
+      <_ApplicationIsDirty Condition="'@(_ApplicationGitStatus)' != ''">true</_ApplicationIsDirty>
+    </PropertyGroup>
+    <Message Importance="High" Condition="'$(_ApplicationCommitSha)' == '' or '$(_ApplicationIsDirty)' == ''"
+             Text="Application build identity: Git information is unavailable; unknown values will be recorded as null." />
+    <ItemGroup>
+      <AssemblyMetadata Include="CommitSha" Value="$(_ApplicationCommitSha)" />
+      <AssemblyMetadata Include="IsDirty" Value="$(_ApplicationIsDirty)" />
+    </ItemGroup>
+  </Target>
+</Project>

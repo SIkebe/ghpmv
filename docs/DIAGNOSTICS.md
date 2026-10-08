@@ -12,6 +12,7 @@ Use `ghpmv` logs to identify which migration failed, what failed, and which API 
 | Question | Where to look |
 | --- | --- |
 | Which Organization, Project, or element failed? | `source` / `target` / `element` on stderr; `context` in the report |
+| Which application build produced the stack trace? | `application.version`, `application.commitSha`, and `application.isDirty` in `import-error.json` |
 | What stage, HTTP status, and error category? | `stage`, `operation`, and safe diagnostics in `exceptions[]` |
 | Was it the original failure or a cleanup failure? | `exceptions[]` versus `cleanupFailures[]` |
 | Do I need the raw API response? | The dedicated JSONL created with explicit permission; it is not in the normal report |
@@ -106,6 +107,7 @@ Inspect the target state, then rerun with the same snapshot and import log.
 
 | Field | Description |
 | --- | --- |
+| `application` | Running CLI's build-time version, full source commit SHA, and worktree dirty state; independent of the runtime machine's checkout |
 | `occurredAtUtc`, `command`, `stage` | Report creation time, command, and stage of the original failure |
 | `context` | Original failure context; not overwritten by cleanup failures |
 | `targetOwner`, `ownerType`, `requestedTargetProjectNumber`, `targetProjectNumber`, `targetProjectUrl` | Existing-format target details retained |
@@ -115,6 +117,12 @@ Inspect the target state, then rerun with the same snapshot and import log.
 | `cleanupFailures` | Failures restoring a template, releasing resources, etc.; each has its own `context` and `exceptions` |
 | `runId` | Correlation ID for this run |
 | `sensitiveDiagnosticsFile`, `sensitiveDiagnosticsState` | Absolute path to the detailed file actually created, and its state |
+
+For example, `"application": {"version": "0.1.0", "commitSha": "0123456789abcdef0123456789abcdef01234567", "isDirty": false}` identifies a clean build from that commit. Use the full SHA to locate the source corresponding to stack-trace line numbers. When `isDirty` is `true`, the build included staged, unstaged, or non-ignored untracked changes (including submodule changes); the commit alone does **not** reproduce those changes.
+
+Git is consulted only at build time, at the source repository root, and the results are embedded as assembly metadata. This also applies to portable, self-contained, and .NET tool packages; running the application requires neither Git nor a source checkout. `--version` remains the clean SemVer without a commit suffix. `publish --no-build` retains the identity of the existing binary, not the current checkout.
+
+If the source root has no `.git` (for example, a source archive), Git is unavailable, or HEAD cannot be resolved, `commitSha` and `isDirty` are `null`, not a fabricated SHA or a claim that the build was clean. If the commit is known but the status query fails, only `isDirty` is `null`. The build prints a notice when identity is unavailable. Older reports may omit `application` entirely. Ignored files are not included in dirty detection, so builds that consume ignored inputs or externally supplied build properties cannot be reproduced from this identity alone.
 
 | Exception diagnostic field | Description |
 | --- | --- |
