@@ -356,6 +356,10 @@ Operation names, fragment names, type names, variables, argument/input-object ke
 | Linking a Project and Issue Field | Idempotent; resend with the recorded client mutation ID and clear pending only after confirmed success. Stop if the target differs from the record |
 | Creating Status Updates | Stricter: consider complete only after the returned target ID is saved to `import-log.json`. Do not infer and adopt an existing update by body, status, or date |
 
+Pending View creations are reconciled and their target IDs reserved before any View updates. Other source Views cannot reuse these targets by name or as the default View. Zero, multiple, or overlapping candidates stop the View stage before writes; keep the pending records for inspection. A missing original default View may be recreated without overwriting a reserved candidate.
+
+Cancellation recognized before sending a request is not an ambiguous creation result. A new View operation that fails before sending, including a pending-log save failure, attempts to clear only its own pending record without cancellation. If that cleanup also fails, both exceptions are reported. Cancellation or timeout after sending starts remains ambiguous and keeps the pending record. These rules do not clear pending records from earlier interrupted runs.
+
 If an interrupted import already created a new Project, resume with `--on-conflict update`. If the import originally targeted an existing Project, use the same `--project-number`. `fail` and `skip` do not modify existing Projects and cannot continue pending Fields or Items.
 
 An uninitialized Iteration state (duration `0`, start day `0`, no active/completed iterations) is recreated without explicit settings. An initialized empty schedule retains its configured start day. Other nonpositive durations or invalid days fail validation before Project writes. Start dates for all active/completed iterations are also validated as real `yyyy-MM-dd` dates before API calls. Invalid date values themselves are not included in error messages. **This fix does not discard pending operations from earlier failures.**
