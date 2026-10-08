@@ -15,6 +15,7 @@ permissions:
 concurrency:
   group: live-github-api-shared-fixture
   cancel-in-progress: false
+  queue: max
 
 defaults:
   run:
