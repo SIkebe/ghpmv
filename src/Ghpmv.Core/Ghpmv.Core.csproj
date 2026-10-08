@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Ghpmv.Core.Tests" />
+    <InternalsVisibleTo Include="Ghpmv.Integration.Tests" />
     <InternalsVisibleTo Include="Ghpmv.Browser.Tests" />
   </ItemGroup>
 

@@ -133,7 +133,7 @@ public class GraphQLClientIntegrationTests
                 }
             }
 
-            await DiagnoseItemConnectionsAsync(client, projectId, createdIds, cancellationToken);
+            await DiagnoseItemConnectionsAsync(client, projectId, projectNumber, createdIds, cancellationToken);
 
             Assert.Equal(120, directTitles.Count);
             Assert.Equal(120, directTitles.Distinct(StringComparer.Ordinal).Count());
@@ -185,9 +185,37 @@ public class GraphQLClientIntegrationTests
     private static async Task DiagnoseItemConnectionsAsync(
         GitHubGraphQLClient client,
         string projectId,
+        int projectNumber,
         List<string> createdIds,
         CancellationToken cancellationToken)
     {
+        Console.WriteLine($"Created IDs: total={createdIds.Count}, distinct={createdIds.Distinct(StringComparer.Ordinal).Count()}.");
+        var census = await client.QueryAsync(
+            """
+            query($projectId: ID!) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  head: items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    totalCount nodes { id } pageInfo { hasNextPage }
+                  }
+                  tail: items(last: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    totalCount nodes { id } pageInfo { hasPreviousPage }
+                  }
+                  descending: items(first: 100, orderBy: {field: POSITION, direction: DESC}, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    totalCount nodes { id } pageInfo { hasNextPage }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            cancellationToken);
+        foreach (var name in new[] { "head", "tail", "descending" })
+        {
+            var connection = census.GetProperty("node").GetProperty(name);
+            Console.WriteLine($"Item census {name}: totalCount={connection.GetProperty("totalCount")}, nodes={connection.GetProperty("nodes").GetArrayLength()}, pageInfo={connection.GetProperty("pageInfo")}.");
+        }
+
         foreach (var filter in new[]
         {
             "",
@@ -227,7 +255,7 @@ public class GraphQLClientIntegrationTests
             var data = await client.QueryAsync(
                 """
                 query($ids: [ID!]!) {
-                  nodes(ids: $ids) { ... on ProjectV2Item { id project { id } } }
+                  nodes(ids: $ids) { ... on ProjectV2Item { id project { id } isArchived type content { ... on DraftIssue { title } } } }
                 }
                 """,
                 new { ids },
@@ -238,6 +266,48 @@ public class GraphQLClientIntegrationTests
         }
 
         Console.WriteLine($"Item node diagnostic: created={createdIds.Count}, stillInProject={found}.");
+
+        using var noPreview = IntegrationTestSettings.CreateClient(Token, new NoPreviewHandler());
+        var withoutPreview = 0;
+        await foreach (var _ in noPreview.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  items(first: 50, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
+                    nodes { id }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.items",
+            cancellationToken: cancellationToken))
+        {
+            withoutPreview++;
+        }
+
+        Console.WriteLine($"Item connection without issue_fields preview: enumerated={withoutPreview}.");
+        using var rest = IntegrationTestSettings.CreateRestClient(Token);
+        var restItems = await rest.GetAsync(
+            $"orgs/{Org}/projectsV2/{projectNumber}/items?per_page=100",
+            cancellationToken);
+        Console.WriteLine($"REST item first page: {(restItems is null ? "endpoint unavailable" : restItems.Value.GetArrayLength().ToString(System.Globalization.CultureInfo.InvariantCulture))}.");
+    }
+
+    private sealed class NoPreviewHandler : DelegatingHandler
+    {
+        public NoPreviewHandler() : base(new HttpClientHandler())
+        {
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            request.Headers.Remove("GraphQL-Features");
+            return base.SendAsync(request, cancellationToken);
+        }
     }
 
     [Fact]
