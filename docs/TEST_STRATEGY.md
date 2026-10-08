@@ -107,6 +107,8 @@ branch ruleset が要求する既存 check 名は維持します。非該当の 
 
 通常の `Test deterministic suites` step では、`tests/Ghpmv.Core.Tests` と `tests/Ghpmv.Browser.Tests` の非 E2E テストだけを実行します。実 API 統合テストは専用の `Live GitHub API` check に分離し、repository secrets / variables がある PR で実行します。fork PR など資格情報を利用できない PR では安全に実行を省略し、`pull_request_target` は使用しません。
 
+Live API integration suite はテストを直列実行し、`--stop-on-fail on` で最初の失敗後に残りのテストを開始しません。失敗したテストの `finally` による disposable resource の後片付けと TRX 出力は完了させ、失敗結果の artifact upload と原因の報告も維持します。プロセスの強制終了や workflow 全体のキャンセルではありません。失敗が確定した後も残りのテストの API 操作や polling timeout を待ち続けることを避けます。
+
 `.github/workflows/live-api.yml` は毎日 18:17 UTC（03:17 JST）にも default branch から実行され、`workflow_dispatch` で手動実行できます。scheduled/manual run では token 未設定と test skip を失敗扱いにします。共有 fixture への mutation が競合しないよう、PR を含むすべての live API run は同じ concurrency group で直列化します。`cancel-in-progress: false` と `queue: max` により実行中の run を維持し、後続 run は待機開始順に最大100件まで保持します。新しい待機 run が既存の待機 run を置き換えることはありませんが、待機枠が満杯の場合は追加の run がキャンセルされます。キューはこのリポジトリの同じ concurrency group にのみ適用され、ローカルの手動実行は排他しません。
 
 ## 変更内容別の検証目安
