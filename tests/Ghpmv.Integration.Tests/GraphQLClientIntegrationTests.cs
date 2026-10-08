@@ -92,6 +92,9 @@ public class GraphQLClientIntegrationTests
                 createdIds.Add(created.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString()!);
             }
 
+            Assert.Equal(120, createdIds.Distinct(StringComparer.Ordinal).Count());
+            await ProjectItemReadiness.WaitAsync(client, projectId, createdIds, cancellationToken);
+
             // The items connection is eventually consistent right after writes,
             // so poll until all 120 items are visible (up to ~75s).
             List<string> directTitles = [];
@@ -132,8 +135,6 @@ public class GraphQLClientIntegrationTests
                     break;
                 }
             }
-
-            await DiagnoseItemConnectionsAsync(client, projectId, projectNumber, createdIds, cancellationToken);
 
             Assert.Equal(120, directTitles.Count);
             Assert.Equal(120, directTitles.Distinct(StringComparer.Ordinal).Count());
@@ -179,134 +180,6 @@ public class GraphQLClientIntegrationTests
                 "mutation($projectId: ID!) { deleteProjectV2(input: {projectId: $projectId}) { projectV2 { id } } }",
                 new { projectId },
                 CancellationToken.None);
-        }
-    }
-
-    private static async Task DiagnoseItemConnectionsAsync(
-        GitHubGraphQLClient client,
-        string projectId,
-        int projectNumber,
-        List<string> createdIds,
-        CancellationToken cancellationToken)
-    {
-        Console.WriteLine($"Created IDs: total={createdIds.Count}, distinct={createdIds.Distinct(StringComparer.Ordinal).Count()}.");
-        var census = await client.QueryAsync(
-            """
-            query($projectId: ID!) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  head: items(first: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
-                    totalCount nodes { id } pageInfo { hasNextPage }
-                  }
-                  tail: items(last: 100, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
-                    totalCount nodes { id } pageInfo { hasPreviousPage }
-                  }
-                  descending: items(first: 100, orderBy: {field: POSITION, direction: DESC}, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
-                    totalCount nodes { id } pageInfo { hasNextPage }
-                  }
-                }
-              }
-            }
-            """,
-            new { projectId },
-            cancellationToken);
-        foreach (var name in new[] { "head", "tail", "descending" })
-        {
-            var connection = census.GetProperty("node").GetProperty(name);
-            Console.WriteLine($"Item census {name}: totalCount={connection.GetProperty("totalCount")}, nodes={connection.GetProperty("nodes").GetArrayLength()}, pageInfo={connection.GetProperty("pageInfo")}.");
-        }
-
-        foreach (var filter in new[]
-        {
-            "",
-            ", archivedStates: [NOT_ARCHIVED]",
-            ", archivedStates: [ARCHIVED]",
-            ", archivedStates: [ARCHIVED, NOT_ARCHIVED]",
-            ", archivedStates: [NOT_ARCHIVED, ARCHIVED]",
-        })
-        {
-            var count = 0;
-            await foreach (var _ in client.QueryPaginatedAsync(
-                $$"""
-                query($projectId: ID!, $first: Int!, $after: String) {
-                  node(id: $projectId) {
-                    ... on ProjectV2 {
-                      items(first: $first, after: $after{{filter}}) {
-                        nodes { id }
-                        pageInfo { hasNextPage endCursor }
-                      }
-                    }
-                  }
-                }
-                """,
-                new { projectId, first = 50 },
-                "node.items",
-                cancellationToken: cancellationToken))
-            {
-                count++;
-            }
-
-            Console.WriteLine($"Item connection diagnostic: filter='{filter}', enumerated={count}, expected={createdIds.Count}.");
-        }
-
-        var found = 0;
-        foreach (var ids in createdIds.Chunk(50))
-        {
-            var data = await client.QueryAsync(
-                """
-                query($ids: [ID!]!) {
-                  nodes(ids: $ids) { ... on ProjectV2Item { id project { id } isArchived type content { ... on DraftIssue { title } } } }
-                }
-                """,
-                new { ids },
-                cancellationToken);
-            found += data.GetProperty("nodes").EnumerateArray().Count(node =>
-                node.ValueKind == System.Text.Json.JsonValueKind.Object
-                && node.GetProperty("project").GetProperty("id").GetString() == projectId);
-        }
-
-        Console.WriteLine($"Item node diagnostic: created={createdIds.Count}, stillInProject={found}.");
-
-        using var noPreview = IntegrationTestSettings.CreateClient(Token, new NoPreviewHandler());
-        var withoutPreview = 0;
-        await foreach (var _ in noPreview.QueryPaginatedAsync(
-            """
-            query($projectId: ID!, $after: String) {
-              node(id: $projectId) {
-                ... on ProjectV2 {
-                  items(first: 50, after: $after, archivedStates: [ARCHIVED, NOT_ARCHIVED]) {
-                    nodes { id }
-                    pageInfo { hasNextPage endCursor }
-                  }
-                }
-              }
-            }
-            """,
-            new { projectId },
-            "node.items",
-            cancellationToken: cancellationToken))
-        {
-            withoutPreview++;
-        }
-
-        Console.WriteLine($"Item connection without issue_fields preview: enumerated={withoutPreview}.");
-        using var rest = IntegrationTestSettings.CreateRestClient(Token);
-        var restItems = await rest.GetAsync(
-            $"orgs/{Org}/projectsV2/{projectNumber}/items?per_page=100",
-            cancellationToken);
-        Console.WriteLine($"REST item first page: {(restItems is null ? "endpoint unavailable" : restItems.Value.GetArrayLength().ToString(System.Globalization.CultureInfo.InvariantCulture))}.");
-    }
-
-    private sealed class NoPreviewHandler : DelegatingHandler
-    {
-        public NoPreviewHandler() : base(new HttpClientHandler())
-        {
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            request.Headers.Remove("GraphQL-Features");
-            return base.SendAsync(request, cancellationToken);
         }
     }
 

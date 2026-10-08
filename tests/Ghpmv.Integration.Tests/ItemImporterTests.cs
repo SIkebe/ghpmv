@@ -86,6 +86,8 @@ public class ItemImporterTests
 
             var itemImporter = new ItemImporter(client) { RepositoryMapping = TargetRepoMapping, UserMapping = userMapping };
             var itemResult = await itemImporter.ImportAsync(snapshot, result, logDirectory, cancellationToken);
+            await ProjectItemReadiness.WaitForImportAsync(
+                client, result.ProjectId, logDirectory, snapshot.Items.Count, cancellationToken);
             var expectedSnapshot = snapshot with
             {
                 Items = snapshot.Items.Select(item =>
@@ -185,13 +187,18 @@ public class ItemImporterTests
         try
         {
             var issueId = await GetIssueIdAsync(client, SourceOrg, IntegrationTestSettings.FixtureRepositoryName, 1, cancellationToken);
-            await client.QueryAsync(
+            var addedIssue = await client.QueryAsync(
                 """
                 mutation($projectId: ID!, $contentId: ID!) {
                   addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) { item { id } }
                 }
                 """,
                 new { projectId = sourceProjectId, contentId = issueId },
+                cancellationToken);
+            await ProjectItemReadiness.WaitAsync(
+                client,
+                sourceProjectId,
+                [addedIssue.GetProperty("addProjectV2ItemById").GetProperty("item").GetProperty("id").GetString()!],
                 cancellationToken);
 
             var exported = await ExportUntilAsync(
@@ -225,6 +232,8 @@ public class ItemImporterTests
                 .ImportAsync(snapshot, result, logDirectory, cancellationToken);
             Assert.Equal(1, itemResult.Created);
             Assert.Equal(0, itemResult.Skipped);
+            await ProjectItemReadiness.WaitForImportAsync(
+                client, result.ProjectId, logDirectory, 1, cancellationToken);
             await IntegrationFixtureSnapshot.RemoveUnexpectedItemsAsync(
                 client, TargetOrg, result.ProjectNumber, snapshot, cancellationToken);
 
@@ -397,6 +406,8 @@ public class ItemImporterTests
             Assert.Equal(0, itemResult.Skipped);
             Assert.Empty(itemResult.Warnings);
 
+            await ProjectItemReadiness.WaitForImportAsync(
+                graphQl, targetProject.ProjectId, itemLogDirectory, 1, cancellationToken);
             var exporter = new ProjectExporter(graphQl);
             var targetExport = await ExportUntilAsync(
                 exporter,

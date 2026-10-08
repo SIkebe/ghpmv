@@ -110,6 +110,8 @@ public class VerifyTests
             Assert.NotNull(importLog);
             Assert.Equal(snapshot.Items.Count, importLog.Items.Count);
             Assert.Equal(source.StatusUpdates.Count, importLog.StatusUpdates.Count);
+            await ProjectItemReadiness.WaitAsync(
+                client, result.ProjectId, importLog.Items.Values.ToArray(), cancellationToken);
             var verificationSnapshot = snapshot with
             {
                 LinkedRepositories = snapshot.LinkedRepositories.Select(repository =>

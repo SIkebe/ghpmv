@@ -109,6 +109,8 @@ branch ruleset が要求する既存 check 名は維持します。非該当の 
 
 Live API integration suite はテストを直列実行し、`--stop-on-fail on` で最初の失敗後に残りのテストを開始しません。失敗したテストの `finally` による disposable resource の後片付けと TRX 出力は完了させ、失敗結果の artifact upload と原因の報告も維持します。プロセスの強制終了や workflow 全体のキャンセルではありません。失敗が確定した後も残りのテストの API 操作や polling timeout を待ち続けることを避けます。
 
+Item を作成した直後の読取テストは、mutation の返却 ID または `import-log.json` の target ID がすべて `items` connection に現れることを `ProjectItemReadiness` で確認してから export / verify します。GraphQL の直接 ID lookup では120件が存在するのに一覧の `totalCount`・nodes が72件しかなく、REST 一覧や preview 無効化でも同じ欠落があることを実 API で確認しています。一覧件数だけでは準備完了を判定できません。各 polling は先頭から全ページを読み直し、一回の観測で全 ID が揃うことを要求します。archived item も対象に含め、異なる観測の部分結果を合成しません。5秒間隔・最大5分で打ち切り、未反映件数と経過時間を記録します。この準備待ちはテストの assertion や製品の export / import 動作を変更しません。
+
 `.github/workflows/live-api.yml` は毎日 18:17 UTC（03:17 JST）にも default branch から実行され、`workflow_dispatch` で手動実行できます。scheduled/manual run では token 未設定と test skip を失敗扱いにします。共有 fixture への mutation が競合しないよう、PR を含むすべての live API run は同じ concurrency group で直列化します。`cancel-in-progress: false` と `queue: max` により実行中の run を維持し、後続 run は待機開始順に最大100件まで保持します。新しい待機 run が既存の待機 run を置き換えることはありませんが、待機枠が満杯の場合は追加の run がキャンセルされます。キューはこのリポジトリの同じ concurrency group にのみ適用され、ローカルの手動実行は排他しません。
 
 ## 変更内容別の検証目安
