@@ -353,6 +353,77 @@ public sealed class PendingViewRecoveryTests
     }
 
     [Fact]
+    public async Task Same_named_pending_target_survives_failure_after_earlier_creation_and_second_resume()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-view-recovery-").FullName;
+        try
+        {
+            using var handler = new Handler
+            {
+                Created = true,
+                BaselineMissing = true,
+                FailAdditionalUpdate = true,
+            };
+            using var client = Client(handler);
+            var log = Pending();
+            await log.SaveAsync(directory, TestContext.Current.CancellationToken);
+            var views = new[] { View(1, "Board", "BOARD_LAYOUT"), View(2, "Board", "BOARD_LAYOUT") };
+            var importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
+            await Assert.ThrowsAsync<GitHubGraphQLException>(() => importer.ImportAsync(
+                views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken));
+            Assert.Equal(1, handler.Creates);
+            var persisted = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            Assert.Equal("PVTV_created", Assert.Single(persisted.PendingViews).Value.ReconciledViewId);
+            Assert.Equal(["PVTV_default"], persisted.PendingViews[2].ExistingViewIds);
+
+            handler.FailAdditionalUpdate = false;
+            var resumed = new ProjectViewImporter(client, persisted, ct => persisted.SaveAsync(directory, ct));
+            var result = await resumed.ImportAsync(
+                views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(10, result[1]);
+            Assert.Equal(8, result[2]);
+            Assert.Equal(1, handler.Creates);
+            Assert.Empty((await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken)).PendingViews);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Failed_reservation_save_blocks_all_view_writes()
+    {
+        using var handler = new Handler { Created = true };
+        using var client = Client(handler);
+        var log = Pending();
+        var importer = new ProjectViewImporter(client, log, _ => throw new IOException("Injected reservation save failure"));
+        await Assert.ThrowsAsync<IOException>(() => Import(importer));
+        await Assert.ThrowsAsync<IOException>(() => Import(importer));
+        Assert.Equal(0, handler.Creates);
+        Assert.Equal(0, handler.Updates);
+        Assert.Single(log.PendingViews);
+    }
+
+    [Theory]
+    [InlineData("PVTV_deleted")]
+    [InlineData("PVTV_default")]
+    public async Task Recorded_target_is_not_replaced_by_another_matching_candidate(string targetId)
+    {
+        using var handler = new Handler { Created = true };
+        using var client = Client(handler);
+        var log = Pending();
+        log.PendingViews[2] = log.PendingViews[2] with { ReconciledViewId = targetId };
+        var importer = new ProjectViewImporter(client, log, _ => Task.CompletedTask);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Import(importer));
+        Assert.Equal(0, handler.Creates);
+        Assert.Equal(0, handler.Updates);
+        Assert.Equal(targetId, Assert.Single(log.PendingViews).Value.ReconciledViewId);
+    }
+
+    [Fact]
     public async Task Ambiguous_create_then_default_deletion_then_resume_preserves_pending_candidate()
     {
         var directory = Directory.CreateTempSubdirectory("ghpmv-pending-investigation-").FullName;
@@ -442,6 +513,8 @@ public sealed class PendingViewRecoveryTests
         public bool Paginated { get; init; }
         public bool BaselineMissing { get; set; }
         public bool FailCreateAmbiguously { get; set; }
+        public bool FailAdditionalUpdate { get; set; }
+        private object? _additionalView;
         public CancellationTokenSource? CancelAtCreate { get; set; }
         public int RevealOnQuery { get; init; } = int.MaxValue;
         public string? CreateError { get; init; }
@@ -478,6 +551,10 @@ public sealed class PendingViewRecoveryTests
                         nodes.Add(new { id = "PVTV_duplicate", number = 9, name = "Board", layout = "BOARD_LAYOUT" });
                     }
                 }
+                if (_additionalView is not null && (!Paginated || secondPage))
+                {
+                    nodes.Add(_additionalView);
+                }
                 return Json(JsonSerializer.Serialize(new
                 {
                     data = new { node = new { views = new
@@ -504,6 +581,10 @@ public sealed class PendingViewRecoveryTests
                     CreatedName = name;
                     CreatedLayout = layout;
                 }
+                else
+                {
+                    _additionalView = new { id, number, name, layout };
+                }
                 if (FailCreateAmbiguously)
                 {
                     throw new HttpRequestException("Injected lost response after create side effect");
@@ -524,6 +605,10 @@ public sealed class PendingViewRecoveryTests
                 var id = variables.GetProperty("viewId").GetString()!;
                 var name = variables.GetProperty("name").GetString()!;
                 var layout = variables.GetProperty("layout").GetString()!;
+                if (id == "PVTV_additional" && FailAdditionalUpdate)
+                {
+                    return Json("""{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Injected update failure"}]}""");
+                }
                 if (id == "PVTV_created")
                 {
                     CreatedName = name;

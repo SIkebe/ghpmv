@@ -109,6 +109,19 @@ internal sealed class ProjectViewImporter
             }
         }
 
+        if (reconciledViews.Count > 0)
+        {
+            foreach (var (sourceNumber, reconciled) in reconciledViews)
+            {
+                _operationLog.PendingViews[sourceNumber] = _operationLog.PendingViews[sourceNumber] with
+                {
+                    ReconciledViewId = reconciled.Id,
+                };
+            }
+
+            await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         for (var index = 0; index < orderedSourceViews.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -333,6 +346,8 @@ internal sealed class ProjectViewImporter
             var views = await FetchViewsAsync(pending.ProjectId, cancellationToken).ConfigureAwait(false);
             var candidates = views.Where(view =>
                 !pending.ExistingViewIds.Contains(view.Id, StringComparer.Ordinal)
+                && (pending.ReconciledViewId is null
+                    || string.Equals(view.Id, pending.ReconciledViewId, StringComparison.Ordinal))
                 && string.Equals(view.Name, source.Name, StringComparison.Ordinal)
                 && string.Equals(view.Layout, source.Layout, StringComparison.Ordinal)).ToArray();
             if (candidates.Length == 1)
