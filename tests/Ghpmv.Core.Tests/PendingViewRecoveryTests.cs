@@ -399,6 +399,84 @@ public sealed class PendingViewRecoveryTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Failed_reconciled_clear_save_restores_reservation_for_retry(
+        bool cancelSave, bool reloadLog)
+    {
+        var directory = Directory.CreateDirectory($"ghpmv-view-recovery-{Guid.NewGuid():N}").FullName;
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            using var handler = new Handler { Created = true, BaselineMissing = true };
+            using var client = Client(handler);
+            var log = Pending();
+            await log.SaveAsync(directory, TestContext.Current.CancellationToken);
+            Exception original = cancelSave
+                ? new OperationCanceledException("Injected clear cancellation", cancellation.Token)
+                : new IOException("Injected clear save failure");
+            PendingViewOperation? reservation = null;
+            var failClear = true;
+            var importer = new ProjectViewImporter(client, log, ct =>
+            {
+                if (log.PendingViews.TryGetValue(2, out var pending))
+                {
+                    reservation = pending;
+                }
+                else if (failClear)
+                {
+                    failClear = false;
+                    if (cancelSave)
+                    {
+                        cancellation.Cancel();
+                    }
+
+                    throw original;
+                }
+
+                return log.SaveAsync(directory, ct);
+            });
+            var views = new[] { View(1, "Board", "BOARD_LAYOUT"), View(2, "Board", "BOARD_LAYOUT") };
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() => importer.ImportAsync(
+                views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
+                cancellation.Token));
+            Assert.Same(original, failure);
+            Assert.Same(reservation, Assert.Single(log.PendingViews).Value);
+            Assert.Equal("PVTV_created", log.PendingViews[2].ReconciledViewId);
+            Assert.Equal("investigation-operation", log.PendingViews[2].OperationId);
+            Assert.Equal(["PVTV_default"], log.PendingViews[2].ExistingViewIds);
+            Assert.Equal(1, handler.Creates);
+            Assert.Equal(2, handler.Updates);
+
+            var persisted = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            Assert.Equal("PVTV_created", Assert.Single(persisted.PendingViews).Value.ReconciledViewId);
+            Assert.Equal("investigation-operation", persisted.PendingViews[2].OperationId);
+            Assert.Equal(["PVTV_default"], persisted.PendingViews[2].ExistingViewIds);
+            if (reloadLog)
+            {
+                log = persisted;
+                importer = new ProjectViewImporter(client, log, ct => log.SaveAsync(directory, ct));
+            }
+
+            var result = await importer.ImportAsync(
+                views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
+                TestContext.Current.CancellationToken);
+            Assert.Equal(10, result[1]);
+            Assert.Equal(8, result[2]);
+            Assert.Equal(1, handler.Creates);
+            Assert.Equal(4, handler.Updates);
+            Assert.Empty(log.PendingViews);
+            Assert.Empty((await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken)).PendingViews);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Failed_reservation_save_blocks_all_view_writes()
     {

@@ -159,9 +159,17 @@ internal sealed class ProjectViewImporter
                     TargetId = target.Id,
                 }, "updateProjectV2View");
                 target = await UpdateViewAsync(source, target.Id, visibleFieldIds, cancellationToken).ConfigureAwait(false);
-                if (_operationLog.PendingViews.Remove(source.Number))
+                if (_operationLog.PendingViews.Remove(source.Number, out var pending))
                 {
-                    await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        _operationLog.PendingViews[source.Number] = pending;
+                        throw;
+                    }
                 }
 
                 ReplaceOrAdd(targetViews, target);
