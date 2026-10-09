@@ -159,6 +159,11 @@ internal sealed class ProjectViewImporter
                     TargetId = target.Id,
                 }, "updateProjectV2View");
                 target = await UpdateViewAsync(source, target.Id, visibleFieldIds, cancellationToken).ConfigureAwait(false);
+                if (_operationLog.PendingViews.Remove(source.Number))
+                {
+                    await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                }
+
                 ReplaceOrAdd(targetViews, target);
                 usedTargetIds.Add(target.Id);
                 viewNumbers[source.Number] = target.Number;
@@ -228,8 +233,6 @@ internal sealed class ProjectViewImporter
     {
         if (reconciledViews.TryGetValue(source.Number, out var reconciled))
         {
-            _operationLog.PendingViews.Remove(source.Number);
-            await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             return reconciled;
         }
 

@@ -352,17 +352,21 @@ public sealed class PendingViewRecoveryTests
         Assert.Empty(log.PendingViews);
     }
 
-    [Fact]
-    public async Task Same_named_pending_target_survives_failure_after_earlier_creation_and_second_resume()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Same_named_pending_target_survives_failure_after_earlier_creation_and_second_resume(
+        bool failReconciledUpdate)
     {
-        var directory = Directory.CreateTempSubdirectory("ghpmv-view-recovery-").FullName;
+        var directory = Directory.CreateDirectory($"ghpmv-view-recovery-{Guid.NewGuid():N}").FullName;
         try
         {
             using var handler = new Handler
             {
                 Created = true,
                 BaselineMissing = true,
-                FailAdditionalUpdate = true,
+                FailAdditionalUpdate = !failReconciledUpdate,
+                FailReconciledUpdate = failReconciledUpdate,
             };
             using var client = Client(handler);
             var log = Pending();
@@ -373,11 +377,13 @@ public sealed class PendingViewRecoveryTests
                 views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
                 TestContext.Current.CancellationToken));
             Assert.Equal(1, handler.Creates);
+            Assert.Equal(failReconciledUpdate ? 2 : 1, handler.Updates);
             var persisted = await ProjectImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
             Assert.Equal("PVTV_created", Assert.Single(persisted.PendingViews).Value.ReconciledViewId);
             Assert.Equal(["PVTV_default"], persisted.PendingViews[2].ExistingViewIds);
 
             handler.FailAdditionalUpdate = false;
+            handler.FailReconciledUpdate = false;
             var resumed = new ProjectViewImporter(client, persisted, ct => persisted.SaveAsync(directory, ct));
             var result = await resumed.ImportAsync(
                 views, "PVT_target", new Dictionary<string, string>(), ProjectImportOutcome.Created,
@@ -514,6 +520,7 @@ public sealed class PendingViewRecoveryTests
         public bool BaselineMissing { get; set; }
         public bool FailCreateAmbiguously { get; set; }
         public bool FailAdditionalUpdate { get; set; }
+        public bool FailReconciledUpdate { get; set; }
         private object? _additionalView;
         public CancellationTokenSource? CancelAtCreate { get; set; }
         public int RevealOnQuery { get; init; } = int.MaxValue;
@@ -605,7 +612,8 @@ public sealed class PendingViewRecoveryTests
                 var id = variables.GetProperty("viewId").GetString()!;
                 var name = variables.GetProperty("name").GetString()!;
                 var layout = variables.GetProperty("layout").GetString()!;
-                if (id == "PVTV_additional" && FailAdditionalUpdate)
+                if ((id == "PVTV_additional" && FailAdditionalUpdate)
+                    || (id == "PVTV_created" && FailReconciledUpdate))
                 {
                     return Json("""{"data":null,"errors":[{"type":"BAD_USER_INPUT","message":"Injected update failure"}]}""");
                 }
