@@ -118,7 +118,7 @@ Inspect the target state, then rerun with the same snapshot and import log.
 | `runId` | Correlation ID for this run |
 | `sensitiveDiagnosticsFile`, `sensitiveDiagnosticsState` | Absolute path to the detailed file actually created, and its state |
 
-For example, `"application": {"version": "0.1.0", "commitSha": "0123456789abcdef0123456789abcdef01234567", "isDirty": false}` identifies a clean build from that commit. Use the full SHA to locate the source corresponding to stack-trace line numbers. When `isDirty` is `true`, the build included staged, unstaged, or non-ignored untracked changes (including submodule changes); the commit alone does **not** reproduce those changes.
+For example, `"application": {"version": "0.1.0", "commitSha": "0123456789abcdef0123456789abcdef01234567", "isDirty": false}` identifies a build from that commit with a clean worktree. Use the full SHA to locate the source corresponding to stack-trace line numbers. When `isDirty` is `true`, the repository worktree contained staged, unstaged, or non-ignored untracked changes (including submodule changes) at build time. This does **not** mean every change contributed to the binary; for example, an untracked Markdown file also sets `isDirty` to `true`. The commit alone does not reproduce the changed worktree or identify which changes were used by the build.
 
 Git is consulted only at build time, at the source repository root, and the results are embedded as assembly metadata. This also applies to portable, self-contained, and .NET tool packages; running the application requires neither Git nor a source checkout. `--version` remains the clean SemVer without a commit suffix. `publish --no-build` retains the identity of the existing binary, not the current checkout.
 
