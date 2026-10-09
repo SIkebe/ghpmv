@@ -229,6 +229,7 @@ internal sealed class ImportFailureDiagnostics : IDisposable
 
         var report = new ImportFailureReport
         {
+            Application = ApplicationBuildInfo.Current,
             RunId = _apiDiagnostics.RunId,
             SensitiveDiagnosticsFile = _apiDiagnostics.SensitiveDiagnosticsFile,
             SensitiveDiagnosticsState = _apiDiagnostics.SensitiveDiagnosticsState,
@@ -395,6 +396,7 @@ internal sealed class ImportFailureDiagnostics : IDisposable
 
 internal sealed record ImportFailureReport
 {
+    public ApplicationBuildInfo? Application { get; init; }
     public string? RunId { get; init; }
     public string? SensitiveDiagnosticsFile { get; init; }
     public string? SensitiveDiagnosticsState { get; init; }

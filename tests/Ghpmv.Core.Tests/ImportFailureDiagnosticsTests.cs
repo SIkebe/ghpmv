@@ -8,6 +8,63 @@ namespace Ghpmv.Core.Tests;
 public sealed class ImportFailureDiagnosticsTests
 {
     [Fact]
+    public async Task Failure_report_records_the_running_cli_build_identity()
+    {
+        var directory = CreateDirectory();
+        using var diagnostics = CreateDiagnostics();
+        try
+        {
+            await diagnostics.SaveFailureAsync(directory, new IOException("failed"), TestContext.Current.CancellationToken);
+            using var report = await LoadReportAsync(directory, TestContext.Current.CancellationToken);
+            var application = report.RootElement.GetProperty("application");
+            Assert.Equal(ApplicationBuildInfo.Current.Version, application.GetProperty("version").GetString());
+            Assert.Equal(ApplicationBuildInfo.Current.CommitSha, application.GetProperty("commitSha").GetString());
+            Assert.Equal(ApplicationBuildInfo.Current.IsDirty,
+                application.GetProperty("isDirty").Deserialize<bool?>());
+            Assert.NotNull(ApplicationBuildInfo.Current.Version);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("", "false")]
+    [InlineData("abcdef0", "false")]
+    [InlineData("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "true")]
+    public void Missing_or_invalid_revision_does_not_claim_a_clean_build(string? sha, string? dirty)
+    {
+        var application = ApplicationBuildInfo.FromMetadata("0.1.0", sha, dirty);
+        Assert.Null(application.CommitSha);
+        Assert.Null(application.IsDirty);
+        var json = JsonSerializer.Serialize(new ImportFailureReport
+        {
+            Application = application, OccurredAtUtc = DateTimeOffset.UtcNow, Command = "import",
+            TargetOwner = "target", OwnerType = "organization", BrowserAutomationEnabled = false,
+            Stage = "initializing", Progress = [], CleanupFailures = [], Exceptions = [],
+        }, ImportFailureJsonContext.Default.ImportFailureReport);
+        using var report = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("application").GetProperty("commitSha").ValueKind);
+        Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("application").GetProperty("isDirty").ValueKind);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    [InlineData("", null)]
+    [InlineData("unknown", null)]
+    public void Known_revision_preserves_dirty_or_unknown_status(string dirty, bool? expected)
+    {
+        const string sha = "0123456789abcdef0123456789abcdef01234567";
+        var application = ApplicationBuildInfo.FromMetadata("0.1.0", sha, dirty);
+        Assert.Equal("0.1.0", application.Version);
+        Assert.Equal(sha, application.CommitSha);
+        Assert.Equal(expected, application.IsDirty);
+    }
+
+    [Fact]
     public async Task Cleanup_retains_distinct_context_and_escapes_identity_in_real_report_and_stderr_formatter()
     {
         var directory = Path.Combine(Environment.CurrentDirectory, "cleanup-identity-" + Guid.NewGuid().ToString("N"));
@@ -68,6 +125,7 @@ public sealed class ImportFailureDiagnosticsTests
              "exceptions":[{"depth":0,"type":"System.InvalidOperationException","message":"old error"}]}
             """, ImportFailureJsonContext.Default.ImportFailureReport);
         Assert.NotNull(report);
+        Assert.Null(report.Application);
         Assert.Null(report.Context);
         Assert.Null(Assert.Single(report.Exceptions).Context);
         Assert.Null(report.RunId);

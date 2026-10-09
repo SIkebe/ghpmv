@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <None Include="..\..\src\Ghpmv.Cli\BuildIdentity.targets" Link="BuildIdentity.targets" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

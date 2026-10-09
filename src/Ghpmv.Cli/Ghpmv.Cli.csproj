@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <Import Project="BuildIdentity.targets" />
+
   <ItemGroup>
     <ProjectReference Include="..\Ghpmv.Core\Ghpmv.Core.csproj" />
   </ItemGroup>
