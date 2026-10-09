@@ -382,6 +382,7 @@ public sealed class GitHubGraphQLClient : IDisposable
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var retryCount = nextAttempt();
             using var request = CreateRequest();
             var requestAttempt = DiagnosticSession.BeginAttempt();

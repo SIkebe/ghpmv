@@ -140,6 +140,8 @@ public sealed record PendingIssueFieldLinkOperation
 
 public sealed record PendingViewOperation
 {
+    public string? ReconciledViewId { get; init; }
+
     public required string OperationId { get; init; }
 
     public required string ProjectId { get; init; }

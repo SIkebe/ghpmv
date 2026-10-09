@@ -76,6 +76,51 @@ internal sealed class ProjectViewImporter
         var initiallyExistingTargetIds = targetViews.Select(view => view.Id).ToHashSet(StringComparer.Ordinal);
         var viewNumbers = new Dictionary<int, int>();
         var orderedSourceViews = OrderSourceViews(sourceViews).ToArray();
+        var reconciledViews = new Dictionary<int, TargetView>();
+        var reservedTargetIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var source in orderedSourceViews)
+        {
+            if (!_operationLog.PendingViews.TryGetValue(source.Number, out var pending))
+            {
+                continue;
+            }
+
+            using var viewScope = MigrationDiagnostics.ForElement(new()
+            {
+                Kind = "View",
+                Name = source.Name,
+                Number = source.Number,
+            }, "reconcile-view");
+            try
+            {
+                var reconciled = await ReconcilePendingViewAsync(source, pending, cancellationToken).ConfigureAwait(false);
+                if (!reservedTargetIds.Add(reconciled.Id))
+                {
+                    throw new InvalidOperationException(
+                        $"Pending view operation '{pending.OperationId}' matches a view reserved by another operation. Reconcile the target manually.");
+                }
+
+                reconciledViews.Add(source.Number, reconciled);
+                ReplaceOrAdd(targetViews, reconciled);
+            }
+            catch (Exception exception) when (MigrationDiagnostics.Capture(exception))
+            {
+                throw;
+            }
+        }
+
+        if (reconciledViews.Count > 0)
+        {
+            foreach (var (sourceNumber, reconciled) in reconciledViews)
+            {
+                _operationLog.PendingViews[sourceNumber] = _operationLog.PendingViews[sourceNumber] with
+                {
+                    ReconciledViewId = reconciled.Id,
+                };
+            }
+
+            await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         for (var index = 0; index < orderedSourceViews.Length; index++)
         {
@@ -99,6 +144,8 @@ internal sealed class ProjectViewImporter
                     projectId,
                     targetViews,
                     usedTargetIds,
+                    reconciledViews,
+                    reservedTargetIds,
                     projectOutcome == ProjectImportOutcome.Created && index == 0,
                     visibleFieldIds,
                     cancellationToken).ConfigureAwait(false);
@@ -112,6 +159,20 @@ internal sealed class ProjectViewImporter
                     TargetId = target.Id,
                 }, "updateProjectV2View");
                 target = await UpdateViewAsync(source, target.Id, visibleFieldIds, cancellationToken).ConfigureAwait(false);
+                if (_operationLog.PendingViews.Remove(source.Number, out var pending))
+                {
+                    try
+                    {
+                        await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        _operationLog.PendingViews[source.Number] = pending;
+                        throw;
+                    }
+                }
+
+                ReplaceOrAdd(targetViews, target);
                 usedTargetIds.Add(target.Id);
                 viewNumbers[source.Number] = target.Number;
 
@@ -172,21 +233,20 @@ internal sealed class ProjectViewImporter
         string projectId,
         List<TargetView> targetViews,
         HashSet<string> usedTargetIds,
+        IReadOnlyDictionary<int, TargetView> reconciledViews,
+        HashSet<string> reservedTargetIds,
         bool mayReuseDefault,
         IReadOnlyList<string> visibleFieldIds,
         CancellationToken cancellationToken)
     {
-        if (_operationLog.PendingViews.TryGetValue(source.Number, out var pending))
+        if (reconciledViews.TryGetValue(source.Number, out var reconciled))
         {
-            var reconciled = await ReconcilePendingViewAsync(source, pending, cancellationToken).ConfigureAwait(false);
-            _operationLog.PendingViews.Remove(source.Number);
-            await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-            ReplaceOrAdd(targetViews, reconciled);
             return reconciled;
         }
 
         var namedMatch = targetViews
             .Where(view => !usedTargetIds.Contains(view.Id)
+                && !reservedTargetIds.Contains(view.Id)
                 && string.Equals(view.Name, source.Name, StringComparison.Ordinal))
             .OrderBy(view => view.Number)
             .FirstOrDefault();
@@ -198,7 +258,7 @@ internal sealed class ProjectViewImporter
         if (mayReuseDefault)
         {
             var reusable = targetViews
-                .Where(view => !usedTargetIds.Contains(view.Id))
+                .Where(view => !usedTargetIds.Contains(view.Id) && !reservedTargetIds.Contains(view.Id))
                 .OrderBy(view => view.Number)
                 .FirstOrDefault();
             if (reusable is not null)
@@ -233,11 +293,10 @@ internal sealed class ProjectViewImporter
             Layout = source.Layout,
             ExistingViewIds = [.. targetViews.Select(view => view.Id)],
         };
-        await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
-
         JsonElement data;
         try
         {
+            await _saveOperationLogAsync(cancellationToken).ConfigureAwait(false);
             data = await _client.MutationAsync(
                 "createProjectV2View",
                 CreateViewMutation,
@@ -258,10 +317,21 @@ internal sealed class ProjectViewImporter
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             _operationLog.PendingViews.Remove(source.Number);
-            await _saveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await _saveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception saveException)
+            {
+                throw new AggregateException(
+                    "View creation failed and its pending operation could not be cleared.",
+                    exception,
+                    saveException);
+            }
+
             throw;
         }
 
@@ -287,6 +357,8 @@ internal sealed class ProjectViewImporter
             var views = await FetchViewsAsync(pending.ProjectId, cancellationToken).ConfigureAwait(false);
             var candidates = views.Where(view =>
                 !pending.ExistingViewIds.Contains(view.Id, StringComparer.Ordinal)
+                && (pending.ReconciledViewId is null
+                    || string.Equals(view.Id, pending.ReconciledViewId, StringComparison.Ordinal))
                 && string.Equals(view.Name, source.Name, StringComparison.Ordinal)
                 && string.Equals(view.Layout, source.Layout, StringComparison.Ordinal)).ToArray();
             if (candidates.Length == 1)
