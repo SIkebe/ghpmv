@@ -382,6 +382,7 @@ public sealed class GitHubGraphQLClient : IDisposable
 
         while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var retryCount = nextAttempt();
             using var request = CreateRequest();
             var requestAttempt = DiagnosticSession.BeginAttempt();
@@ -390,7 +391,6 @@ public sealed class GitHubGraphQLClient : IDisposable
                 HttpResponseMessage? response = null;
                 string body;
                 HttpStatusCode status;
-                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);

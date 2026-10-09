@@ -400,11 +400,12 @@ public sealed class PendingViewRecoveryTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         using var client = new GitHubGraphQLClient("token", new Uri("http://127.0.0.1:1/graphql"));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.MutationAsync(
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.MutationAsync(
             "createProjectV2View",
             "mutation { createProjectV2View { projectV2View { id } } }",
             requiredResultPath: "projectV2View.id",
             cancellationToken: cancellation.Token));
+        Assert.Null(ApiDiagnosticSession.GetAttempt(failure));
     }
 
     private static GitHubGraphQLClient Client(HttpMessageHandler handler)
