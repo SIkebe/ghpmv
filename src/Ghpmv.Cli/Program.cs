@@ -83,6 +83,10 @@ var allowSensitiveDiagnosticsOption = new Option<bool>("--allow-sensitive-diagno
 {
     Description = "For this invocation only, save failed API response bodies to a unique ghpmv-sensitive-api-<id>.jsonl in the current directory (created only on failure). Sensitive; review before sharing. Ordinary API errors stay sanitized.",
 };
+var noHtmlReportOption = new Option<bool>("--no-html-report")
+{
+    Description = "Do not write HTML reports automatically beside import failure logs or the verify --report-json file.",
+};
 
 var exportCommand = new Command("export", "Export one project (or all projects of an owner) from the source to JSON snapshots.")
 {
@@ -299,6 +303,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     browserBaseUrlOption,
     noUpdateCheckOption,
     allowSensitiveDiagnosticsOption,
+    noHtmlReportOption,
 };
 
 importCommand.Validators.Add(result =>
@@ -338,7 +343,10 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
         ownerType.ToString().ToLowerInvariant(),
         projectNumber,
         enableBrowserAutomation,
-        apiDiagnostics);
+        apiDiagnostics)
+    {
+        WriteHtmlReports = !parseResult.GetValue(noHtmlReportOption),
+    };
     if (!ConflictActions.TryParse(parseResult.GetValue(onConflictOption), out var onConflict))
     {
         return await diagnostics.ReportEarlyFailureAsync(inDirectory,
@@ -913,6 +921,55 @@ requirementsCommand.SetAction(async (parseResult, cancellationToken) =>
 });
 rootCommand.Subcommands.Add(requirementsCommand);
 
+// report
+var reportInputOption = new Option<string>("--input")
+{
+    Description = "JSON file to convert: verify --report-json output, import-error.json, import-log.json or project-import-log.json.",
+    Required = true,
+};
+var reportOutputOption = new Option<string?>("--output")
+{
+    Description = "HTML file to write. Defaults to the input path with an .html extension.",
+};
+var reportOverwriteOption = new Option<bool>("--overwrite")
+{
+    Description = "Explicitly replace an existing HTML output file. The input file is never overwritten.",
+};
+var reportLanguageOption = new Option<string>("--language")
+{
+    Description = "Report display language: en (default) or ja. JSON values and evidence are shown as recorded.",
+    DefaultValueFactory = _ => "en",
+};
+reportLanguageOption.AcceptOnlyFromAmong(HtmlReportGenerator.SupportedLanguages);
+var reportCommand = new Command("report", "Convert a ghpmv JSON log into a self-contained HTML report (no network access).")
+{
+    reportInputOption,
+    reportOutputOption,
+    reportOverwriteOption,
+    reportLanguageOption,
+};
+reportCommand.SetAction(async (parseResult, cancellationToken) =>
+{
+    try
+    {
+        var output = await HtmlReportFile.WriteAsync(
+            parseResult.GetValue(reportInputOption)!,
+            parseResult.GetValue(reportOutputOption),
+            parseResult.GetValue(reportLanguageOption)!,
+            parseResult.GetValue(reportOverwriteOption),
+            Console.Error.WriteLine,
+            cancellationToken);
+        Console.WriteLine($"report={output}");
+        return 0;
+    }
+    catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+});
+rootCommand.Subcommands.Add(reportCommand);
+
 // verify
 var verifyOrgOption = new Option<string>("--org")
 {
@@ -968,6 +1025,7 @@ var verifyCommand = new Command("verify", "Verify a migrated project against the
     verifyCategoriesOption,
     noUpdateCheckOption,
     allowSensitiveDiagnosticsOption,
+    noHtmlReportOption,
 };
 
 verifyCommand.SetAction(async (parseResult, cancellationToken) =>
@@ -1117,6 +1175,10 @@ verifyCommand.SetAction(async (parseResult, cancellationToken) =>
         if (reportJsonPath is not null)
         {
             await VerifyReportFile.SaveAsync(report, reportJsonPath, cancellationToken);
+            if (!parseResult.GetValue(noHtmlReportOption))
+            {
+                await HtmlReportFile.WriteBesideAsync([reportJsonPath], Console.Error.WriteLine, cancellationToken);
+            }
         }
 
         WriteVerifyReport(report, categoryScoped: includedCategories is not null);

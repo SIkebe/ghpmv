@@ -42,6 +42,7 @@ Use `ghpmv` logs to identify which migration failed, what failed, and which API 
 | `ghpmv-sensitive-api-<unique-id>.jsonl` | **Working directory at execution time**, when explicitly allowed and a qualifying response exists | Raw failed API responses | Separate file per run; no automatic deletion or encryption. Review before sharing |
 | `snapshot.json` / mapping CSV | Export destination or user-specified location | Migration data and mappings | Not logs; may contain bodies and values, so do not assume the protections of diagnostic logs |
 | Verify JSON report | Location specified by `--report-json` | Differences in migration results | Different format from `import-error.json`; differences may contain business data |
+| HTML report | Automatically next to the JSON after a failed `import` (`import-error.html`, `import-log.html`, `project-import-log.html`) or beside `verify --report-json`; otherwise `report --output` location, or the input path with `.html` | Read-only analysis of one supported JSON output | Includes the complete input; review before sharing. Does not replace JSON resume logs. Automatic reports overwrite the previous automatic report; `import-error.html` is deleted together with `import-error.json`. Disable with `--no-html-report` |
 
 An earlier `import-error.json` may remain after a skip or a run that finishes with warnings. **Do not infer that this run failed merely because the file exists; check its `runId` and timestamp.** If writing the report fails, retain the stderr error as well.
 
@@ -366,11 +367,37 @@ An uninitialized Iteration state (duration `0`, start day `0`, no active/complet
 
 Existing Iteration configurations are merged by exact title using the target IDs, including completed and target-only iterations. Updates that add any ID-less iteration stop on ambiguous responses rather than automatically resending a replacement configuration. Inspect the target before rerunning with the same snapshot and logs: the importer rereads the configuration, reuses the new IDs, and skips already-applied changes. Updates containing only existing target IDs may be retried idempotently. Duplicate titles or missing/duplicate target IDs block the merge. Uncaptured configurations remain unchanged; an uninitialized source does not clear an initialized target and reports a warning.
 
+## Reading JSON outputs as HTML
+
+Run `ghpmv report --input <json-file> [--output <html-file>] [--overwrite] [--language en|ja]` and open the generated file in a browser. Without `--output`, the report uses the input path with an `.html` extension. The source must be one of the four formats below, and the output must differ from the input even with `--overwrite`. Existing outputs are protected by default; use `--overwrite` to explicitly replace a previous report. The HTML is staged to a unique temporary file in the output directory before publication. Invalid JSON or malformed collection/flag shapes fail with an `error:` message rather than rendering an empty successful result. Every report embeds both English and Japanese analysis and switches between them with the header buttons without regenerating; `--language` selects the initial language (`en` by default, or `ja`). Translation covers generated analysis text only, never recorded messages, identifiers or source JSON, and does not change the outcome logic. For `import-error.json`, the report maps the recorded `stage` to a plain-language description and a step table (`initializing`, `loading-snapshot`, `preflight`, `importing-project`, `importing-items`, `importing-status-updates`, `importing-browser-enrichment`, `finalizing-template-state`) showing steps finished before the failure and steps not started; cleanup stages (`restoring-template-state`, `disposing-browser-session`, `disposing-api-diagnostics`) are labeled separately. Unrecognized stage names are shown verbatim without inferring progress.
+
+`import` and `verify` also generate these reports automatically: a failed `import` writes HTML next to `import-error.json` and any existing resume logs, and `verify --report-json` writes HTML beside the JSON. Each written path is printed to stderr as `HTML report: <path>`. Automatic generation uses the initial language `en`, overwrites the previous automatic report, and reports problems only as `warning:` lines without changing the exit code or stdout. Pass `--no-html-report` to disable it.
+
+| Input | Main questions answered |
+| --- | --- |
+| `verify --report-json` output | Which differences need attention? Which categories match, partially match or were not verified? How many errors and warnings concern each category? |
+| `import-error.json` | At what stage did import stop? What exceptions and recovery hints were recorded? Did cleanup also fail? What were the last recorded progress messages? |
+| `import-log.json` | Which tracked items still need field values, positioning or archive-state application? Which errors were recorded? Which creates remain unconfirmed? |
+| `project-import-log.json` | Is completion recorded? Are unresolved warnings known? Which project, field, link or View operations remain unconfirmed, including pending deletion? |
+
+The conclusion precedes details and suggested checks. These checks are guidance, not automatic recovery actions or inferred root causes. Progress timestamps are shown in UTC; the recorded time span is not the duration of the entire migration. Missing or null completion/warning flags are shown as **Unknown**. A complete resume checkpoint is not equivalent to a successful verification.
+
+An unverified category is displayed as an error because `ghpmv verify` fails for `NotVerified` independently of `--fail-on-warning`. Warnings are distinct and fail the CLI check only when that flag is set. For aggregate failures, the summary names the first concrete exception in recorded traversal order, not an inferred root cause, and separately summarizes cleanup failures.
+
+Any recorded `resumeLogSaveFailure`, including one nested in cleanup details, is highlighted with its log path and save stage: the checkpoint may not reflect successful target writes, so inspect and reconcile the target before retrying. Executing process IDs identify the process attempting the save, not a proven lock owner. Per-field contexts show the field and operation without inventing error reasons that are absent from the checkpoint.
+
+Item logs with an explicit `schemaVersion` other than the current supported version (`2`) are rejected rather than interpreted using potentially incompatible assumptions. Missing/null versions receive a legacy compatibility caution; rendering such a file does not establish resumability.
+
+Every detail table participates in text search and state filtering. Searches include expandable evidence, which retains source keys, baseline IDs, contexts and stack traces. The page shows both per-table and overall visible counts, a no-results message and a reset control. Summaries remain unfiltered. On desktop widths, section navigation with per-section counts and the filters stay in a fixed sidebar; navigation counts follow the active filters.
+
+The report embeds the full input as escaped text and never fetches referenced files or external resources. This preserves diagnostic information but does **not** anonymize it or sanitize arbitrary input supplied by a user. Review the input and HTML before sharing. Raw sensitive API JSONL files are not supported. Keep the JSON resume logs; the HTML is a read-only derivative and cannot be used for resumption.
+
 ## Implementation and tests
 
 | Concern | Main files |
 | --- | --- |
 | Run and attempt IDs | [ApiDiagnosticSession.cs](../src/Ghpmv.Core/GitHub/ApiDiagnosticSession.cs) |
+| HTML report (`ghpmv report`) | [HtmlReportGenerator.cs](../src/Ghpmv.Cli/HtmlReportGenerator.cs), [HtmlReportTests.cs](../tests/Ghpmv.Core.Tests/HtmlReportTests.cs) |
 | Detailed JSONL, capture states, limits | [SensitiveApiDiagnostics.cs](../src/Ghpmv.Core/GitHub/SensitiveApiDiagnostics.cs) |
 | Safe GraphQL errors | [GraphQLErrorDiagnostic.cs](../src/Ghpmv.Core/GitHub/GraphQLErrorDiagnostic.cs) |
 | Context retention and formatting | [MigrationDiagnosticContext.cs](../src/Ghpmv.Core/Import/MigrationDiagnosticContext.cs) |
