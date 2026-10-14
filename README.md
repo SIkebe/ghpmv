@@ -190,6 +190,28 @@ Start with stderr and `<snapshot-directory>/import-error.json`: they identify th
 
 See the [Logging and diagnostics guide](docs/DIAGNOSTICS.md) for output examples, file/schema tables, correlation diagrams, capture states and privacy limits.
 
+#### HTML reports
+
+`ghpmv report --input <file> [--output <file.html>] [--overwrite] [--language en|ja]` converts `import-error.json`, `verify --report-json` output, `import-log.json` or `project-import-log.json` into a self-contained HTML report with a conclusion, suggested checks, analysis and expandable evidence. It works offline without external scripts. The input type is detected automatically; the output defaults to the input path with `.html` and must differ from the input. Existing output files are protected unless `--overwrite` is explicitly supplied. Reports are staged in a temporary file before publication, so a failed generation does not truncate the previous output. Each report contains both English and Japanese; switch instantly with the **English | 日本語** buttons in the header. `--language ja` only selects the initial language (default: `en`). Headings, conclusions, suggested checks and labels are translated; recorded messages, names and evidence are shown as recorded. Failure reports explain in plain language which import step stopped (for example, `importing-items` = adding issues, pull requests and drafts and applying their values), which steps finished and which did not start.
+
+```powershell
+ghpmv report --input .\snapshot\import-error.json
+ghpmv report --input .\verify-result.json --output .\reports\verification.html --language ja
+```
+
+HTML reports are also written automatically, so the `report` command is only needed to regenerate one or to choose another output path or initial language:
+
+- When `import` fails, `import-error.html` plus `import-log.html` and `project-import-log.html` (for the resume logs that exist) are written next to the JSON files in the `--in` directory.
+- When `verify` runs with `--report-json <path>`, the HTML is written beside it with the `.html` extension.
+
+Automatic reports overwrite the previous automatic report with the same name and the path is printed to stderr as `HTML report: <path>`. A failure to write an HTML report is only a `warning:` and never changes the exit code or stdout. A successful import that deletes `import-error.json` also deletes `import-error.html`. Use `--no-html-report` on `import` or `verify` to disable automatic HTML output.
+
+Verification reports separate errors, warnings and coverage gaps. Failure reports show exceptions, cleanup failures and a progress timeline. Resume reports identify unconfirmed operations and incomplete item stages without equating a pending write with a failed write. Missing completion or warning flags remain **Unknown**, not "No". A resume report cannot prove that the whole migration is complete; verify the target separately.
+
+`NotVerified` categories are failures, matching the CLI's nonzero exit regardless of `--fail-on-warning`. Compound failures show the first concrete recorded failure alongside cleanup failures without claiming a root cause. Resume-log save failures receive a prominent warning because persisted state may lag actual target writes. Field-value failure contexts expose field names and operations, but cannot supply reasons missing from the log. Unsupported item-log schema versions are rejected; unversioned legacy files are labeled with a compatibility caution.
+
+Search and state filters apply to all detail tables, including expanded evidence; visible row counts and reset controls make the scope explicit. The conclusion and summary always refer to the complete input, not the filtered subset. Each report includes the complete source JSON, so it contains the same business data and diagnostic details as that file: review before sharing. It never loads referenced files, changes resume state or accesses GitHub. Sensitive API JSONL files are intentionally not supported.
+
 #### Sensitive API diagnostics (explicit opt-in)
 
 `export`, `import`, `verify` and API operations under `setup` accept `--allow-sensitive-diagnostics` for that invocation only. It writes eligible failed API response bodies to a separate `ghpmv-sensitive-api-<unique-id>.jsonl` in the **current working directory**, after a warning; ordinary API diagnostics stay sanitized. These files may contain secrets and must be reviewed before sharing. See [capture policy and file handling](docs/DIAGNOSTICS.md#capturing-raw-api-responses-explicitly).

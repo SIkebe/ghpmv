@@ -84,17 +84,34 @@ internal sealed class ImportFailureFinalizer(
 
         if (importFailure is not null && Directory.Exists(directory))
         {
+            var reportInputs = new List<string>();
             try
             {
                 var diagnosticPath = await _saveFailureAsync(
                     importFailure,
                     CancellationToken.None).ConfigureAwait(false);
                 _writeError($"Detailed error log: {diagnosticPath}");
+                reportInputs.Add(diagnosticPath);
             }
             catch (Exception diagnosticException)
             {
                 _writeError(
                     $"warning: failed to write {ImportFailureDiagnostics.FileName}: {diagnosticException.Message}");
+            }
+
+            if (diagnostics.WriteHtmlReports)
+            {
+                reportInputs.AddRange(HtmlReportFile.ResumeLogFileNames
+                    .Select(name => Path.Combine(directory, name)));
+                try
+                {
+                    await HtmlReportFile.WriteBesideAsync(reportInputs, _writeError, CancellationToken.None)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception reportException)
+                {
+                    _writeError($"warning: failed to write HTML reports: {reportException.Message}");
+                }
             }
         }
 

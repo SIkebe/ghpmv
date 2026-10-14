@@ -11,6 +11,9 @@ internal sealed class ImportFailureDiagnostics : IDisposable
 {
     public const string FileName = "import-error.json";
 
+    /// <summary>Whether to write HTML reports beside the failure and resume logs after a failed import.</summary>
+    public bool WriteHtmlReports { get; init; }
+
     private const int MaximumProgressEntries = 200;
     private readonly Lock _sync = new();
     private readonly Queue<ImportProgressEntry> _progress = new();
@@ -289,6 +292,8 @@ internal sealed class ImportFailureDiagnostics : IDisposable
         {
             WriteProgress($"warning: failed to remove stale {FileName}: {exception.Message}");
         }
+
+        HtmlReportFile.DeleteStale(path, message => WriteProgress(message));
     }
 
     public static bool CanDeletePreviousFailure(
