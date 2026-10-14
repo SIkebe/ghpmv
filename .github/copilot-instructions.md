@@ -45,6 +45,16 @@ go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@v1.5.6
 ghalint run
 ```
 
+Actions dependency lockfiles are being piloted for `ci.yml` and `live-api.yml`, with existing full-SHA references preserved. CI verifies these workflows with `github/gh-actions-lock` v0.2.0 through the existing workflow lint gate.
+
+When changing dependencies in either workflow, regenerate `.github/workflows/actions.lock` with the extension; never edit it by hand. Keep the explicit workflow paths during the pilot so Release is not onboarded unintentionally:
+
+```powershell
+gh extension install github/gh-actions-lock --pin v0.2.0
+gh actions-lock .github\workflows\ci.yml .github\workflows\live-api.yml --no-narrow --no-interactive
+gh actions-lock .github\workflows\ci.yml .github\workflows\live-api.yml --verify --no-interactive
+```
+
 For CLI packaging changes, reproduce CI's self-contained and portable smoke tests:
 
 ```powershell
