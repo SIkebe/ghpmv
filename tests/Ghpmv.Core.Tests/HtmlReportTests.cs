@@ -69,6 +69,22 @@ public sealed class HtmlReportTests
     }
 
     [Fact]
+    public void Generated_camel_case_labels_resolve_through_the_japanese_translation_table()
+    {
+        const string json = """
+            {"occurredAtUtc":"2026-01-01T00:00:00Z","stage":"importing-items","targetProjectNumber":34,"targetProjectUrl":"https://example.test/p/34","exceptions":[{"depth":0,"type":"IOException","message":"boom"}]}
+            """;
+
+        var html = HtmlReportGenerator.Generate(json, "import-error.json", "ja");
+        var japanese = html[html.IndexOf("data-l=\"ja\"", StringComparison.Ordinal)..];
+
+        Assert.Contains("移行先プロジェクト番号", japanese, StringComparison.Ordinal);
+        Assert.Contains("移行先プロジェクト URL", japanese, StringComparison.Ordinal);
+        Assert.DoesNotContain("Target Project Number", html, StringComparison.Ordinal);
+        Assert.Contains("Target project number", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Unrecognized_failure_stage_is_shown_verbatim_without_guessing_progress()
     {
         const string json = """

@@ -586,7 +586,8 @@ internal static class HtmlReportGenerator
         {
             if (char.IsUpper(character) && result.Length > 0)
             {
-                result.Append(' ');
+                result.Append(' ').Append(char.ToLowerInvariant(character));
+                continue;
             }
             result.Append(character);
         }
