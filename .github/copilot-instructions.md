@@ -45,6 +45,16 @@ go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@v1.5.6
 ghalint run
 ```
 
+Actions dependency lockfiles cover all workflows under `.github/workflows/`, with existing full-SHA references preserved. CI verifies the entire workflow directory with `github/gh-actions-lock` v0.2.0 through the existing workflow lint gate.
+
+When adding, deleting, or changing workflow dependencies or local actions, regenerate `.github/workflows/actions.lock` with the extension; never edit it by hand. Run without workflow paths so new workflows are onboarded and deleted workflows are pruned:
+
+```powershell
+gh extension install github/gh-actions-lock --pin v0.2.0
+gh actions-lock --no-narrow --no-interactive
+gh actions-lock --verify --no-interactive
+```
+
 For CLI packaging changes, reproduce CI's self-contained and portable smoke tests:
 
 ```powershell
