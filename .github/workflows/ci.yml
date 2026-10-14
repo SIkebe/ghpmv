@@ -121,7 +121,7 @@ jobs:
         if: ${{ needs.changes.outputs.workflows == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh actions-lock .github/workflows/ci.yml .github/workflows/live-api.yml --verify --no-interactive
+        run: gh actions-lock --verify --no-interactive
 
   extensions:
     name: Extensions
