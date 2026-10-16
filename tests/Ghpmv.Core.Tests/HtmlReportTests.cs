@@ -3,6 +3,7 @@ using System.Text.Json;
 using Ghpmv.Cli;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Verify;
+using Microsoft.Data.Sqlite;
 
 namespace Ghpmv.Core.Tests;
 
@@ -579,6 +580,49 @@ public sealed class HtmlReportTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("{ invalid JSON")]
+    [InlineData("""{"createdFields":[]}""")]
+    public async Task Report_command_handles_invalid_selected_payload_as_a_normal_error(string payload)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-cli-invalid-payload-").FullName;
+        try
+        {
+            await new ProjectImportLog().SaveAsync(directory, TestContext.Current.CancellationToken);
+            var database = Path.Combine(directory, ResumeStateStore.FileName);
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = database,
+                Pooling = false,
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE resume_logs SET payload=$payload WHERE name=$name;";
+                command.Parameters.AddWithValue("$payload", payload);
+                command.Parameters.AddWithValue("$name", ProjectImportLog.FileName);
+                command.ExecuteNonQuery();
+            }
+            var output = Path.Combine(directory, "project-import-log.html");
+            await File.WriteAllTextAsync(output, "previous report", TestContext.Current.CancellationToken);
+            var bytes = await File.ReadAllBytesAsync(database, TestContext.Current.CancellationToken);
+
+            var result = await RunCliAsync(directory,
+                ["report", "--input", database, "--log", "project", "--overwrite"]);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.StartsWith("error:", result.Error, StringComparison.Ordinal);
+            Assert.Empty(result.Output);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("previous report", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(database, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
         }
     }
 

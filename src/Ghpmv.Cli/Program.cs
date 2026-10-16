@@ -981,7 +981,7 @@ reportCommand.SetAction(async (parseResult, cancellationToken) =>
         Console.WriteLine($"report={output}");
         return 0;
     }
-    catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+    catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or JsonException)
     {
         Console.Error.WriteLine($"error: {exception.Message}");
         return 1;
