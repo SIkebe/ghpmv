@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text.Json;
 using Ghpmv.Core.Export;
 using Ghpmv.Core.GitHub;
 using Ghpmv.Core.Import;
@@ -343,19 +344,58 @@ public class VerifyTests
             Assert.DoesNotContain(matchReport.Differences, d => d.Category == "StatusUpdate");
 
             // Drift the target with one EXTRA status update created directly.
-            await client.MutationAsync(
-                "createProjectV2StatusUpdate",
-                """
-                mutation($projectId: ID!, $body: String!, $status: ProjectV2StatusUpdateStatus!, $clientMutationId: String!) {
-                  createProjectV2StatusUpdate(input: { projectId: $projectId, body: $body, status: $status, clientMutationId: $clientMutationId }) {
-                    statusUpdate { id }
-                  }
+            var importedLog = await ImportLog.LoadAsync(logDirectory, cancellationToken)
+                ?? throw new InvalidDataException("The completed status-update import has no checkpoint.");
+            var beforeDrift = importedLog.StatusUpdates.Values.ToHashSet(StringComparer.Ordinal);
+            try
+            {
+                await client.MutationAsync(
+                    "createProjectV2StatusUpdate",
+                    """
+                    mutation($projectId: ID!, $body: String!, $status: ProjectV2StatusUpdateStatus!, $clientMutationId: String!) {
+                      createProjectV2StatusUpdate(input: { projectId: $projectId, body: $body, status: $status, clientMutationId: $clientMutationId }) {
+                        statusUpdate { id }
+                      }
+                    }
+                    """,
+                    new { projectId, body = "Drifted target-only status update.", status = "ON_TRACK" },
+                    target: projectId,
+                    requiredResultPath: "statusUpdate.id",
+                    cancellationToken: cancellationToken);
+            }
+            catch (GitHubGraphQLException exception)
+            {
+                Console.Error.WriteLine("Status-update drift mutation failed: " + JsonSerializer.Serialize(new
+                {
+                    exception.FailureReason,
+                    HttpStatus = (int?)exception.StatusCode,
+                    exception.ErrorType,
+                    exception.RequestId,
+                    exception.RetryCount,
+                    exception.RequestAttempt,
+                    exception.GraphQlErrors,
+                    ClientMutationId = (exception as AmbiguousMutationResultException)?.ClientMutationId,
+                    BeforeCount = beforeDrift.Count,
+                }));
+                try
+                {
+                    using var readbackCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    readbackCancellation.CancelAfter(TimeSpan.FromSeconds(15));
+                    var afterDrift = await ReadStatusUpdateIdsAsync(client, projectId, readbackCancellation.Token);
+                    Console.Error.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                        $"Status-update drift readback: before={beforeDrift.Count}, after={afterDrift.Count}, newIds={afterDrift.Except(beforeDrift, StringComparer.Ordinal).Count()}. This observation does not prove absence of an eventually consistent write; the mutation was not retried."));
                 }
-                """,
-                new { projectId, body = "Drifted target-only status update.", status = "ON_TRACK" },
-                target: projectId,
-                requiredResultPath: "statusUpdate.id",
-                cancellationToken: cancellationToken);
+                catch (Exception readbackFailure)
+                {
+                    Console.Error.WriteLine(
+                        $"Status-update drift readback failed ({readbackFailure.GetType().Name}); preserving the original mutation failure.");
+                    if (readbackFailure is GitHubGraphQLException apiFailure)
+                    {
+                        Console.Error.WriteLine(apiFailure.Message);
+                    }
+                }
+                throw;
+            }
 
             var driftReport = await VerifyUntilAsync(
                 verifier,
@@ -404,6 +444,33 @@ public class VerifyTests
                 }
             }
         }
+    }
+
+    private static async Task<HashSet<string>> ReadStatusUpdateIdsAsync(
+        GitHubGraphQLClient client, string projectId, CancellationToken cancellationToken)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        await foreach (var node in client.QueryPaginatedAsync(
+            """
+            query($projectId: ID!, $after: String) {
+              node(id: $projectId) {
+                ... on ProjectV2 {
+                  statusUpdates(first: 100, after: $after) {
+                    nodes { id }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }
+            """,
+            new { projectId },
+            "node.statusUpdates",
+            cancellationToken: cancellationToken))
+        {
+            ids.Add(node.GetProperty("id").GetString()
+                ?? throw new InvalidDataException("A status-update readback returned a null ID."));
+        }
+        return ids;
     }
 
     private static VerifyStatus StatusUpdateStatus(VerifyReport report)

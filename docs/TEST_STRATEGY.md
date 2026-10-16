@@ -113,6 +113,8 @@ Item を作成した直後の読取テストは、mutation の返却 ID また�
 
 `ResumeStateStoreTests` は旧 JSON の一括移行、破損 DB の fail-closed、busy timeout、rollback と hot journal 復旧、キャンセル、操作全体の排他、旧 JSON / `.bak` のロックからの独立性を検証します。レポートは同じ確定済み DB revision から JSON / HTML を別々に出力し、出力失敗が DB commit や元の例外を取り消さないこと、JSON がなくても CLI で DB から HTML を生成できることを確認します。
 
+Status Update の drift 作成が実 API で失敗した場合は、HTTP status、request ID、failure reason、再送回数、サニタイズ済み GraphQL error の種別・要約・path を標準エラーへ記録します。追加の read-only 取得は最大15秒で打ち切り、import-log の確定済み target ID に対する件数・新規 ID 数だけを記録します。本文、token、raw API response は出力しません。readback が失敗しても元の mutation 例外を保持し、作成の自動再送やテスト成功への読み替えは行いません。取得時点で増分がないことは eventual consistency 下で副作用がなかった証明にはなりません。
+
 `.github/workflows/live-api.yml` は毎日 18:17 UTC（03:17 JST）にも default branch から実行され、`workflow_dispatch` で手動実行できます。scheduled/manual run では token 未設定と test skip を失敗扱いにします。共有 fixture への mutation が競合しないよう、PR を含むすべての live API run は同じ concurrency group で直列化します。`cancel-in-progress: false` と `queue: max` により実行中の run を維持し、後続 run は待機開始順に最大100件まで保持します。新しい待機 run が既存の待機 run を置き換えることはありませんが、待機枠が満杯の場合は追加の run がキャンセルされます。キューはこのリポジトリの同じ concurrency group にのみ適用され、ローカルの手動実行は排他しません。
 
 ## 変更内容別の検証目安

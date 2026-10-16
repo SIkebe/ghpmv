@@ -711,6 +711,9 @@ public class GitHubGraphQLClientTests
                     cancellationToken: cancellationToken));
             Assert.Equal("INTERNAL", exception.ErrorType);
             Assert.NotNull(exception.ErrorsJson);
+            Assert.Contains("GitHub reported an internal error while executing the query.", exception.Message, StringComparison.Ordinal);
+            Assert.Contains("Server message redacted (unrecognized format).", exception.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-", exception.ToString(), StringComparison.Ordinal);
             Assert.Single(handler.RequestBodies);
             Assert.Empty(delays);
 
