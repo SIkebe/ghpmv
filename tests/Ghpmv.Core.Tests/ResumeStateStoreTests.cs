@@ -344,6 +344,41 @@ public sealed class ResumeStateStoreTests : IDisposable
         Assert.Empty(Directory.GetFiles(directory, ".ghpmv-report-*.tmp"));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Nested_duplicate_properties_warn_without_changing_import_result_or_checkpoint(bool importFails)
+    {
+        const string legacy = """
+            {"createdFields":{"Text":"PVTF_first","Text":"PVTF_last"}}
+            """;
+        await File.WriteAllTextAsync(Path.Combine(directory, ProjectImportLog.FileName), legacy, Token);
+        Assert.Equal("PVTF_last", (await ProjectImportLog.LoadAsync(directory, Token)).CreatedFields["Text"]);
+        await Log.SaveAsync(directory, Token);
+        var snapshot = ResumeStateStore.ReadSnapshot(directory, ProjectImportLog.FileName, Token)!;
+        var json = snapshot.ToDiagnosticJson();
+        Assert.Contains("\"createdFields\"", json, StringComparison.Ordinal);
+        var renderFailure = Assert.Throws<InvalidDataException>(() =>
+            HtmlReportGenerator.Generate(json, ResumeStateStore.FileName));
+        Assert.IsType<ArgumentException>(renderFailure.InnerException);
+        var previousHtml = Path.Combine(directory, "project-import-log.html");
+        await File.WriteAllTextAsync(previousHtml, "previous report", Token);
+        var database = Path.Combine(directory, ResumeStateStore.FileName);
+        var bytes = await File.ReadAllBytesAsync(database, Token);
+        using var diagnostics = new ImportFailureDiagnostics("target", "organization", null, false) { WriteHtmlReports = true };
+        var primary = importFails ? new InvalidOperationException("primary") : null;
+        var messages = new List<string>();
+
+        Assert.Same(primary, await new ImportFailureFinalizer(diagnostics, directory, messages.Add)
+            .CompleteAsync(primary, null, null));
+
+        Assert.Contains(messages, message => message.StartsWith(
+            $"warning: failed to refresh HTML for {ProjectImportLog.FileName}", StringComparison.Ordinal));
+        Assert.Equal("previous report", await File.ReadAllTextAsync(previousHtml, Token));
+        Assert.True(File.Exists(Path.Combine(directory, "import-log.html")));
+        Assert.Equal(bytes, await File.ReadAllBytesAsync(database, Token));
+    }
+
     private SqliteConnection OpenDatabase()
     {
         var connection = new SqliteConnection(new SqliteConnectionStringBuilder

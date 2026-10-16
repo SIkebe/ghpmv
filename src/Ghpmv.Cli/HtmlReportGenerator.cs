@@ -78,6 +78,11 @@ internal static class HtmlReportGenerator
                 .Append("</style></head><body>").Append(roots).Append("<script>").Append(Script).Append("</script></body></html>");
             return html.ToString();
         }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException(
+                $"The input contains invalid or duplicate JSON properties: {exception.Message}", exception);
+        }
         finally
         {
             japanese = previous;
