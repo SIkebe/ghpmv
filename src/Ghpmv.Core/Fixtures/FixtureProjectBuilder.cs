@@ -79,6 +79,7 @@ public sealed class FixtureProjectBuilder
             teamSlug);
         // Keep this order consistent so overlapping operation and repository scopes cannot deadlock.
         using var operationLock = AcquireFixtureOperationLock(operationDirectory);
+        using var resumeOperationLease = ResumeStateStore.AcquireOperationLease(operationDirectory);
         var repositoryFullName = $"{organization}/{repositoryName}";
         using var repositoryLock = AcquireFixtureRepositoryLock(
             OperationLogDirectory,

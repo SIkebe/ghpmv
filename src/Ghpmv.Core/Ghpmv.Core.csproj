@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Playwright" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
   <ItemGroup>

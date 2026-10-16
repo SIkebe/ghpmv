@@ -702,12 +702,13 @@ public sealed class ProjectImporter
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             if (_operationLog is not null)
             {
                 _operationLog.PendingProject = null;
-                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                await ResumeStateStore.PersistFailureAsync(exception,
+                    () => SaveOperationLogAsync(CancellationToken.None)).ConfigureAwait(false);
             }
 
             throw;
@@ -1137,12 +1138,13 @@ public sealed class ProjectImporter
                     {
                         throw;
                     }
-                    catch
+                    catch (Exception exception)
                     {
                         if (_operationLog is not null)
                         {
                             _operationLog.PendingFields.Remove(field.Name);
-                            await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                            await ResumeStateStore.PersistFailureAsync(exception,
+                                () => SaveOperationLogAsync(CancellationToken.None)).ConfigureAwait(false);
                         }
 
                         throw;
@@ -1587,12 +1589,13 @@ public sealed class ProjectImporter
                     {
                         throw;
                     }
-                    catch
+                    catch (Exception exception)
                     {
                         if (_operationLog is not null)
                         {
                             _operationLog.PendingIssueFields.Remove(field.Name);
-                            await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                            await ResumeStateStore.PersistFailureAsync(exception,
+                                () => SaveOperationLogAsync(CancellationToken.None)).ConfigureAwait(false);
                         }
 
                         throw;
@@ -1759,12 +1762,13 @@ public sealed class ProjectImporter
         {
             throw;
         }
-        catch
+        catch (Exception exception)
         {
             if (_operationLog is not null)
             {
                 _operationLog.PendingIssueFieldLinks.Remove(issueField.Name);
-                await SaveOperationLogAsync(CancellationToken.None).ConfigureAwait(false);
+                await ResumeStateStore.PersistFailureAsync(exception,
+                    () => SaveOperationLogAsync(CancellationToken.None)).ConfigureAwait(false);
             }
 
             throw;

@@ -338,6 +338,17 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
     var baseUrl = parseResult.GetValue(targetBaseUrlOption);
     var updateCheck = StartUpdateCheck(parseResult.GetValue(noUpdateCheckOption));
     var enableBrowserAutomation = parseResult.GetValue(enableBrowserOption);
+    IDisposable operationLease;
+    try
+    {
+        operationLease = ResumeStateStore.AcquireOperationLease(inDirectory);
+    }
+    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+    {
+        Console.Error.WriteLine($"error: {exception.Message}");
+        return 1;
+    }
+    using var resumeOperationLease = operationLease;
     using var diagnostics = new ImportFailureDiagnostics(
         org,
         ownerType.ToString().ToLowerInvariant(),
@@ -924,7 +935,7 @@ rootCommand.Subcommands.Add(requirementsCommand);
 // report
 var reportInputOption = new Option<string>("--input")
 {
-    Description = "JSON file to convert: verify --report-json output, import-error.json, import-log.json or project-import-log.json.",
+    Description = "resume-state.db or a JSON log: verify output, import-error.json, import-log.json or project-import-log.json.",
     Required = true,
 };
 var reportOutputOption = new Option<string?>("--output")
@@ -941,12 +952,19 @@ var reportLanguageOption = new Option<string>("--language")
     DefaultValueFactory = _ => "en",
 };
 reportLanguageOption.AcceptOnlyFromAmong(HtmlReportGenerator.SupportedLanguages);
-var reportCommand = new Command("report", "Convert a ghpmv JSON log into a self-contained HTML report (no network access).")
+var reportLogOption = new Option<string>("--log")
+{
+    Description = "State to report when --input is resume-state.db: item (default) or project.",
+    DefaultValueFactory = _ => "item",
+};
+reportLogOption.AcceptOnlyFromAmong("item", "project");
+var reportCommand = new Command("report", "Convert a ghpmv JSON log or resume database into a self-contained HTML report (no network access).")
 {
     reportInputOption,
     reportOutputOption,
     reportOverwriteOption,
     reportLanguageOption,
+    reportLogOption,
 };
 reportCommand.SetAction(async (parseResult, cancellationToken) =>
 {
@@ -958,7 +976,8 @@ reportCommand.SetAction(async (parseResult, cancellationToken) =>
             parseResult.GetValue(reportLanguageOption)!,
             parseResult.GetValue(reportOverwriteOption),
             Console.Error.WriteLine,
-            cancellationToken);
+            cancellationToken,
+            parseResult.GetValue(reportLogOption) == "project" ? ProjectImportLog.FileName : ImportLog.FileName);
         Console.WriteLine($"report={output}");
         return 0;
     }

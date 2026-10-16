@@ -87,7 +87,7 @@ public class StatusUpdateImporterResumeTests
             Assert.Equal(operationId, exception.OperationId);
             Assert.Equal(Target.ProjectId, exception.ProjectId);
             Assert.Equal(0, exception.SourceIndex);
-            Assert.Equal(Path.Combine(directory, ImportLog.FileName), exception.ImportLogPath);
+            Assert.Equal(Path.Combine(directory, ResumeStateStore.FileName), exception.ImportLogPath);
             Assert.Contains(
                 "Automatic content-based reconciliation is disabled",
                 exception.Message,
@@ -239,8 +239,7 @@ public class StatusUpdateImporterResumeTests
             var first = await importer.ImportAsync(snapshot, Target, directory, cancellationToken);
             Assert.Equal(2, first.Created);
 
-            File.Delete(Path.Combine(directory, ImportLog.FileName));
-            File.Delete(Path.Combine(directory, ImportLog.BackupFileName));
+            File.Delete(Path.Combine(directory, ResumeStateStore.FileName));
 
             var second = await importer.ImportAsync(snapshot, Target, directory, cancellationToken);
 

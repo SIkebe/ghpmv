@@ -6,7 +6,7 @@ namespace Ghpmv.Core.Import;
 
 /// <summary>
 /// Recreates Project status update history and persists each target node id in
-/// <c>import-log.json</c> before advancing to the next update.
+/// <c>resume-state.db</c> before advancing to the next update.
 /// </summary>
 public sealed class StatusUpdateImporter
 {
@@ -89,7 +89,7 @@ public sealed class StatusUpdateImporter
                         pending.OperationId,
                         pending.ProjectId,
                         entry.SourceIndex,
-                        Path.Combine(logDirectory, ImportLog.FileName));
+                        Path.Combine(logDirectory, ResumeStateStore.FileName));
                     MigrationDiagnostics.Attach(failure);
                     throw failure;
                 }
@@ -113,10 +113,11 @@ public sealed class StatusUpdateImporter
                     {
                         throw;
                     }
-                    catch
+                    catch (Exception exception)
                     {
                         log.PendingStatusUpdates.Remove(key);
-                        await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                        await ResumeStateStore.PersistFailureAsync(exception,
+                            () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
                         throw;
                     }
 
