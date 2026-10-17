@@ -12,7 +12,7 @@ namespace Ghpmv.Core.Import;
 /// assignees), applies field values via the option/iteration id maps of
 /// <see cref="ImportResult"/>, restores item order with <c>updateProjectV2ItemPosition</c>
 /// and re-archives archived items. Progress of created items is persisted to
-/// <see cref="ImportLog"/> (<c>import-log.json</c>) after every item so a re-run resumes
+/// <see cref="ImportLog"/> in <c>resume-state.db</c> after every item so a re-run resumes
 /// without duplicating items.
 /// </summary>
 public sealed class ItemImporter
@@ -312,24 +312,28 @@ public sealed class ItemImporter
                             completedState.ArchiveApplied = false;
                             completedState.ArchiveError = MigrationDiagnostics.Failure(restoreException);
                             completedState.ArchiveErrorContext = MigrationDiagnostics.Get(restoreException);
-                            await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
-                            throw new AggregateException(
+                            var combined = new AggregateException(
                                 $"{label}: field replay failed and the original archived state could not be restored.",
                                 exception,
                                 restoreException);
+                            await ResumeStateStore.PersistFailureAsync(combined,
+                                () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
+                            throw combined;
                         }
                     }
 
                     if (!resumedPendingOperation
                         && (log.PendingDrafts.Remove(key) | log.PendingContents.Remove(key)))
                     {
-                        await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                        await ResumeStateStore.PersistFailureAsync(exception,
+                            () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
                     }
                     else if (log.ItemStates.TryGetValue(stateKey, out var itemState))
                     {
                         itemState.FieldValuesError = MigrationDiagnostics.Failure(exception);
                         itemState.FieldValuesErrorContext = MigrationDiagnostics.Get(exception);
-                        await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                        await ResumeStateStore.PersistFailureAsync(exception,
+                            () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
                     }
 
                     throw;
@@ -1138,7 +1142,8 @@ public sealed class ItemImporter
                 {
                     state.PositionError = MigrationDiagnostics.Failure(exception);
                     state.PositionErrorContext = MigrationDiagnostics.Get(exception);
-                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                    await ResumeStateStore.PersistFailureAsync(exception,
+                        () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
                     throw;
                 }
             }
@@ -1207,13 +1212,14 @@ public sealed class ItemImporter
                     state.ArchiveApplied = true;
                     state.ArchiveError = null;
                     state.ArchiveErrorContext = null;
-                    await log.SaveAsync(logDirectory, cancellationToken).ConfigureAwait(false);
+                    await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
                     continue;
                 }
 
                 state.ArchiveError = MigrationDiagnostics.Failure(exception);
                 state.ArchiveErrorContext = MigrationDiagnostics.Get(exception);
-                await log.SaveAsync(logDirectory, CancellationToken.None).ConfigureAwait(false);
+                await ResumeStateStore.PersistFailureAsync(exception,
+                    () => log.SaveAsync(logDirectory, CancellationToken.None)).ConfigureAwait(false);
                 Warn(warnings, $"{DescribeItem(item)}: could not archive: {MigrationDiagnostics.Failure(exception)}");
             }
         }

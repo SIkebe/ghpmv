@@ -719,7 +719,9 @@ public sealed class GitHubGraphQLClient : IDisposable
             mutation.ClientMutationId,
             mutation.AttemptedAt,
             mutation.Target,
-            detail,
+            diagnostics is { Count: > 0 }
+                ? detail + " " + string.Join(" ", diagnostics.Select(error => error.Message).Distinct(StringComparer.Ordinal))
+                : detail,
             innerException)
         {
             StatusCode = statusCode,

@@ -101,8 +101,6 @@ internal sealed class ImportFailureFinalizer(
 
             if (diagnostics.WriteHtmlReports)
             {
-                reportInputs.AddRange(HtmlReportFile.ResumeLogFileNames
-                    .Select(name => Path.Combine(directory, name)));
                 try
                 {
                     await HtmlReportFile.WriteBesideAsync(reportInputs, _writeError, CancellationToken.None)
@@ -113,6 +111,16 @@ internal sealed class ImportFailureFinalizer(
                     _writeError($"warning: failed to write HTML reports: {reportException.Message}");
                 }
             }
+        }
+
+        try
+        {
+            await HtmlReportFile.WriteResumeReportsAsync(
+                directory, diagnostics.WriteHtmlReports, _writeError, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            _writeError($"warning: failed to read committed resume state for reports; existing JSON/HTML may be stale: {exception.Message}");
         }
 
         return importFailure;

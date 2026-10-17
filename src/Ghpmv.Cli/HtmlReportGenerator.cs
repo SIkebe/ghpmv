@@ -59,6 +59,14 @@ internal static class HtmlReportGenerator
                 japanese = lang == "ja";
                 var page = new Page(sourceName, obj);
                 build(page, obj);
+                if (obj["resumeState"] is JsonObject provenance)
+                {
+                    page.Sections.Add(new Section("resume-state", T("Resume state source"),
+                        T("Diagnostic snapshot only. Resume from the database, not this report. A later import may have advanced the revision."),
+                        [T("Property"), T("Recorded value")],
+                        provenance.Select(pair => new Row("info", [pair.Key, pair.Value?.ToString() ?? T("Unknown")])).ToList(),
+                        T("No context recorded.")));
+                }
                 titles[lang] = page.Title;
                 page.RenderRoot(roots, lang, includeSource: lang == language);
             }
@@ -69,6 +77,11 @@ internal static class HtmlReportGenerator
                 .Append(Encode(titles[language])).Append(" - ghpmv</title><style>").Append(Style)
                 .Append("</style></head><body>").Append(roots).Append("<script>").Append(Script).Append("</script></body></html>");
             return html.ToString();
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException(
+                $"The input contains invalid or duplicate JSON properties: {exception.Message}", exception);
         }
         finally
         {
@@ -606,7 +619,7 @@ internal static class HtmlReportGenerator
         ("importing-project", "Creating or updating the project and its settings", "creating or updating the project and its settings",
             "Creating the target project (or updating an existing one) and applying its title, description, fields and options, collaborators, linked repositories and views. Items have not been imported yet."),
         ("importing-items", "Importing items (issues, pull requests and draft issues)", "importing items (issues, pull requests and draft issues)",
-            "The project and its fields already exist. Adding issues and pull requests, creating draft issues, then applying field values, positions and archived state. Each finished item is recorded in import-log.json, so a rerun resumes from there."),
+            "The project and its fields already exist. Adding issues and pull requests, creating draft issues, then applying field values, positions and archived state. Each finished item is recorded in resume-state.db, so a rerun resumes from there."),
         ("importing-status-updates", "Importing status updates", "importing status updates",
             "Project settings and items are done. Copying the project's status updates."),
         ("importing-browser-enrichment", "Applying browser-only settings (views and workflows)", "applying browser-only settings (views and workflows)",
@@ -1181,8 +1194,8 @@ internal static class HtmlReportGenerator
             "移行先プロジェクトを作成（既存なら更新）し、タイトル、説明、フィールドと選択肢、コラボレーター、リンクされたリポジトリ、ビューを反映しています。アイテムはまだ移行されていません。",
         ["Importing items (issues, pull requests and draft issues)"] = "アイテム（Issue・プルリクエスト・ドラフト Issue）の移行",
         ["importing items (issues, pull requests and draft issues)"] = "アイテム（Issue・プルリクエスト・ドラフト Issue）の移行",
-        ["The project and its fields already exist. Adding issues and pull requests, creating draft issues, then applying field values, positions and archived state. Each finished item is recorded in import-log.json, so a rerun resumes from there."] =
-            "プロジェクトとフィールドは作成済みです。Issue とプルリクエストを追加し、ドラフト Issue を作成して、フィールド値・並び順・アーカイブ状態を反映しています。完了したアイテムは import-log.json に記録されるため、再実行するとそこから再開します。",
+        ["The project and its fields already exist. Adding issues and pull requests, creating draft issues, then applying field values, positions and archived state. Each finished item is recorded in resume-state.db, so a rerun resumes from there."] =
+            "プロジェクトとフィールドは作成済みです。Issue とプルリクエストを追加し、ドラフト Issue を作成して、フィールド値・並び順・アーカイブ状態を反映しています。完了したアイテムは resume-state.db に記録されるため、再実行するとそこから再開します。",
         ["Importing status updates"] = "ステータス更新の移行",
         ["importing status updates"] = "ステータス更新の移行",
         ["Project settings and items are done. Copying the project's status updates."] =
@@ -1383,6 +1396,8 @@ internal static class HtmlReportGenerator
         // Context and property labels
         ["Run and checkpoint context"] = "実行とチェックポイントのコンテキスト",
         ["Recorded metadata only. Unknown means the value is absent or null."] = "記録されたメタデータのみです。「不明」は値がないか null であることを示します。",
+        ["Resume state source"] = "再開状態の出力元",
+        ["Diagnostic snapshot only. Resume from the database, not this report. A later import may have advanced the revision."] = "診断用スナップショットです。再開にはこのレポートではなくデータベースを使用します。後続のインポートでリビジョンが進んでいる場合があります。",
         ["Property"] = "項目",
         ["Recorded value"] = "記録された値",
         ["No context recorded."] = "コンテキストは記録されていません。",

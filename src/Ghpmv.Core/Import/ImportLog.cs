@@ -7,7 +7,7 @@ namespace Ghpmv.Core.Import;
 
 /// <summary>
 /// Persistent mapping of imported items (source item position → target item node id),
-/// written to <c>import-log.json</c> after every created item so an interrupted or
+/// committed to <c>resume-state.db</c> after every created item so an interrupted or
 /// re-run import can skip items that were already created (resume).
 /// The log is bound to a target project id; a log for a different project is ignored.
 /// </summary>
@@ -59,116 +59,107 @@ public sealed record ImportLog
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
-        var path = Path.Combine(directory, FileName);
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        var stream = File.OpenRead(path);
-        await using (stream.ConfigureAwait(false))
-        {
-            var deserialized = await JsonSerializer.DeserializeAsync(stream, ImportLogJsonContext.Default.ImportLog, cancellationToken).ConfigureAwait(false)
-                ?? throw new JsonException($"{FileName} contained null.");
-            var log = deserialized with
-            {
-                StatusUpdates = deserialized.StatusUpdates ?? new Dictionary<string, string>(StringComparer.Ordinal),
-                PendingStatusUpdates = deserialized.PendingStatusUpdates
-                    ?? new Dictionary<string, PendingStatusUpdateOperation>(StringComparer.Ordinal),
-            };
-            if (log.SchemaVersion != CurrentSchemaVersion)
-            {
-                throw new InvalidDataException(
-                    $"{FileName} uses unsupported schema version {log.SchemaVersion}; expected {CurrentSchemaVersion}. The log cannot be resumed safely.");
-            }
-            if (string.IsNullOrWhiteSpace(log.ProjectId))
-            {
-                throw new InvalidDataException($"{FileName} does not contain a target project ID and cannot be resumed safely.");
-            }
-            if (string.IsNullOrWhiteSpace(log.SourceSnapshotFingerprint))
-            {
-                throw new InvalidDataException($"{FileName} does not contain a source snapshot fingerprint and cannot be resumed safely.");
-            }
-            if (log.Items is null
-                || log.ItemStates is null
-                || log.PendingDrafts is null
-                || log.PendingContents is null
-                || log.Items.Any(pair =>
-                    string.IsNullOrWhiteSpace(pair.Key)
-                    || string.IsNullOrWhiteSpace(pair.Value))
-                || log.ItemStates.Any(pair =>
-                    string.IsNullOrWhiteSpace(pair.Key)
-                    || pair.Value is null
-                    || string.IsNullOrWhiteSpace(pair.Value.TargetItemId)
-                    || string.IsNullOrWhiteSpace(pair.Value.TargetContentIdentity))
-                || log.PendingDrafts.Any(pair =>
-                    string.IsNullOrWhiteSpace(pair.Key)
-                    || pair.Value is null
-                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
-                    || pair.Value.AssigneeIds is null
-                    || pair.Value.ExistingItemIds is null
-                    || pair.Value.AssigneeIds.Any(string.IsNullOrWhiteSpace)
-                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
-                || log.PendingContents.Any(pair =>
-                    string.IsNullOrWhiteSpace(pair.Key)
-                    || pair.Value is null
-                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
-                    || string.IsNullOrWhiteSpace(pair.Value.ContentId)
-                    || pair.Value.ExistingItemIds is null
-                    || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
-                || log.StatusUpdates.Any(pair =>
-                    !int.TryParse(pair.Key, out var index)
-                    || index < 0
-                    || string.IsNullOrWhiteSpace(pair.Value))
-                || log.PendingStatusUpdates.Any(pair =>
-                    !int.TryParse(pair.Key, out var index)
-                    || index < 0
-                    || pair.Value is null
-                    || string.IsNullOrWhiteSpace(pair.Value.OperationId)
-                    || string.IsNullOrWhiteSpace(pair.Value.ProjectId)))
-            {
-                throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
-            }
-            var mappedIds = log.Items.Values.ToHashSet(StringComparer.Ordinal);
-            var stateIds = log.ItemStates.Values.Select(state => state.TargetItemId).ToHashSet(StringComparer.Ordinal);
-            if (mappedIds.Count != log.Items.Count
-                || stateIds.Count != log.ItemStates.Count
-                || !mappedIds.SetEquals(stateIds))
-            {
-                throw new InvalidDataException(
-                    $"{FileName} contains inconsistent item mappings and cannot be resumed safely.");
-            }
-            if (log.PendingDrafts.Keys.Any(key =>
-                    log.PendingContents.ContainsKey(key) || log.Items.ContainsKey(key))
-                || log.PendingContents.Keys.Any(log.Items.ContainsKey))
-            {
-                throw new InvalidDataException(
-                    $"{FileName} contains overlapping pending item operations and cannot be resumed safely.");
-            }
-            if (log.StatusUpdates.Values.Distinct(StringComparer.Ordinal).Count() != log.StatusUpdates.Count
-                || log.PendingStatusUpdates.Keys.Any(log.StatusUpdates.ContainsKey))
-            {
-                throw new InvalidDataException(
-                    $"{FileName} contains inconsistent status update mappings and cannot be resumed safely.");
-            }
-
-            return log;
-        }
+        var json = await ResumeStateStore.LoadAsync(directory, FileName, cancellationToken).ConfigureAwait(false);
+        return json is null ? null : Deserialize(json);
     }
 
-    /// <summary>Writes the log as indented UTF-8 JSON into <paramref name="directory"/> and returns the file path.</summary>
+    internal static ImportLog Deserialize(string json)
+    {
+        var deserialized = JsonSerializer.Deserialize(json, ImportLogJsonContext.Default.ImportLog)
+            ?? throw new JsonException($"{FileName} contained null.");
+        var log = deserialized with
+        {
+            StatusUpdates = deserialized.StatusUpdates ?? new Dictionary<string, string>(StringComparer.Ordinal),
+            PendingStatusUpdates = deserialized.PendingStatusUpdates
+                ?? new Dictionary<string, PendingStatusUpdateOperation>(StringComparer.Ordinal),
+        };
+        if (log.SchemaVersion != CurrentSchemaVersion)
+        {
+            throw new InvalidDataException(
+                $"{FileName} uses unsupported schema version {log.SchemaVersion}; expected {CurrentSchemaVersion}. The log cannot be resumed safely.");
+        }
+        if (string.IsNullOrWhiteSpace(log.ProjectId))
+        {
+            throw new InvalidDataException($"{FileName} does not contain a target project ID and cannot be resumed safely.");
+        }
+        if (string.IsNullOrWhiteSpace(log.SourceSnapshotFingerprint))
+        {
+            throw new InvalidDataException($"{FileName} does not contain a source snapshot fingerprint and cannot be resumed safely.");
+        }
+        if (log.Items is null
+            || log.ItemStates is null
+            || log.PendingDrafts is null
+            || log.PendingContents is null
+            || log.Items.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key)
+                || string.IsNullOrWhiteSpace(pair.Value))
+            || log.ItemStates.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key)
+                || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.TargetItemId)
+                || string.IsNullOrWhiteSpace(pair.Value.TargetContentIdentity))
+            || log.PendingDrafts.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key)
+                || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                || pair.Value.AssigneeIds is null
+                || pair.Value.ExistingItemIds is null
+                || pair.Value.AssigneeIds.Any(string.IsNullOrWhiteSpace)
+                || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
+            || log.PendingContents.Any(pair =>
+                string.IsNullOrWhiteSpace(pair.Key)
+                || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                || string.IsNullOrWhiteSpace(pair.Value.ContentId)
+                || pair.Value.ExistingItemIds is null
+                || pair.Value.ExistingItemIds.Any(string.IsNullOrWhiteSpace))
+            || log.StatusUpdates.Any(pair =>
+                !int.TryParse(pair.Key, out var index)
+                || index < 0
+                || string.IsNullOrWhiteSpace(pair.Value))
+            || log.PendingStatusUpdates.Any(pair =>
+                !int.TryParse(pair.Key, out var index)
+                || index < 0
+                || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId)
+                || string.IsNullOrWhiteSpace(pair.Value.ProjectId)))
+        {
+            throw new InvalidDataException($"{FileName} contains malformed item state and cannot be resumed safely.");
+        }
+        var mappedIds = log.Items.Values.ToHashSet(StringComparer.Ordinal);
+        var stateIds = log.ItemStates.Values.Select(state => state.TargetItemId).ToHashSet(StringComparer.Ordinal);
+        if (mappedIds.Count != log.Items.Count
+            || stateIds.Count != log.ItemStates.Count
+            || !mappedIds.SetEquals(stateIds))
+        {
+            throw new InvalidDataException(
+                $"{FileName} contains inconsistent item mappings and cannot be resumed safely.");
+        }
+        if (log.PendingDrafts.Keys.Any(key =>
+                log.PendingContents.ContainsKey(key) || log.Items.ContainsKey(key))
+            || log.PendingContents.Keys.Any(log.Items.ContainsKey))
+        {
+            throw new InvalidDataException(
+                $"{FileName} contains overlapping pending item operations and cannot be resumed safely.");
+        }
+        if (log.StatusUpdates.Values.Distinct(StringComparer.Ordinal).Count() != log.StatusUpdates.Count
+            || log.PendingStatusUpdates.Keys.Any(log.StatusUpdates.ContainsKey))
+        {
+            throw new InvalidDataException(
+                $"{FileName} contains inconsistent status update mappings and cannot be resumed safely.");
+        }
+
+        return log;
+    }
+
+    /// <summary>Commits the log to SQLite and returns the database path. JSON is a separate diagnostic export.</summary>
     public async Task<string> SaveAsync(string directory, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
 
-        var path = Path.Combine(directory, FileName);
-        await ResumeLogFile.SaveAsync(
-            directory,
-            FileName,
-            BackupFileName,
-            (stream, token) => JsonSerializer.SerializeAsync(stream, this, ImportLogJsonContext.Default.ImportLog, token),
-            cancellationToken).ConfigureAwait(false);
-        return path;
+        await ResumeStateStore.SaveAsync(directory, FileName,
+            JsonSerializer.Serialize(this, ImportLogJsonContext.Default.ImportLog), cancellationToken).ConfigureAwait(false);
+        return Path.Combine(directory, ResumeStateStore.FileName);
     }
 
     public static string ComputeSnapshotFingerprint(ProjectSnapshot snapshot)

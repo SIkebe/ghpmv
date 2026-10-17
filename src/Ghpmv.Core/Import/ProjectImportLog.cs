@@ -60,29 +60,59 @@ public sealed record ProjectImportLog
 
     public static async Task<ProjectImportLog> LoadAsync(string directory, CancellationToken cancellationToken)
     {
-        var path = Path.Combine(directory, FileName);
-        if (!File.Exists(path))
-        {
-            return new ProjectImportLog();
-        }
-
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync(
-            stream,
-            ProjectImportLogJsonContext.Default.ProjectImportLog,
-            cancellationToken).ConfigureAwait(false)
-            ?? throw new JsonException($"{FileName} contained null.");
+        var json = await ResumeStateStore.LoadAsync(directory, FileName, cancellationToken).ConfigureAwait(false);
+        return json is null ? new ProjectImportLog() : Deserialize(json);
     }
+
+    internal static ProjectImportLog Deserialize(string json)
+    {
+        var log = JsonSerializer.Deserialize(json, ProjectImportLogJsonContext.Default.ProjectImportLog)
+            ?? throw new JsonException($"{FileName} contained null.");
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        // Older versions omitted collections added later. Explicit null still indicates malformed state.
+        log = log with
+        {
+            PendingFields = root.TryGetProperty("pendingFields", out _) ? log.PendingFields : new(StringComparer.Ordinal),
+            CreatedFields = root.TryGetProperty("createdFields", out _) ? log.CreatedFields : new(StringComparer.Ordinal),
+            PendingIssueFields = root.TryGetProperty("pendingIssueFields", out _) ? log.PendingIssueFields : new(StringComparer.Ordinal),
+            PendingIssueFieldLinks = root.TryGetProperty("pendingIssueFieldLinks", out _) ? log.PendingIssueFieldLinks : new(StringComparer.Ordinal),
+            PendingViews = root.TryGetProperty("pendingViews", out _) ? log.PendingViews : [],
+        };
+        if (log.PendingFields is null || log.CreatedFields is null || log.PendingIssueFields is null
+            || log.PendingIssueFieldLinks is null || log.PendingViews is null
+            || log.CreatedFields.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))
+            || log.PendingFields.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId) || string.IsNullOrWhiteSpace(pair.Value.ProjectId)
+                || string.IsNullOrWhiteSpace(pair.Value.Name) || string.IsNullOrWhiteSpace(pair.Value.DataType)
+                || !ValidIds(pair.Value.ExistingFieldIds))
+            || log.PendingIssueFields.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId) || string.IsNullOrWhiteSpace(pair.Value.ProjectId)
+                || string.IsNullOrWhiteSpace(pair.Value.OwnerLogin) || string.IsNullOrWhiteSpace(pair.Value.Name)
+                || string.IsNullOrWhiteSpace(pair.Value.DataType) || !ValidIds(pair.Value.ExistingIssueFieldIds))
+            || log.PendingIssueFieldLinks.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId) || string.IsNullOrWhiteSpace(pair.Value.ProjectId)
+                || string.IsNullOrWhiteSpace(pair.Value.IssueFieldId) || string.IsNullOrWhiteSpace(pair.Value.Name)
+                || !ValidIds(pair.Value.ExistingFieldIds))
+            || log.PendingViews.Any(pair => pair.Value is null
+                || string.IsNullOrWhiteSpace(pair.Value.OperationId) || string.IsNullOrWhiteSpace(pair.Value.ProjectId)
+                || string.IsNullOrWhiteSpace(pair.Value.Name) || string.IsNullOrWhiteSpace(pair.Value.Layout)
+                || !ValidIds(pair.Value.ExistingViewIds))
+            || (log.PendingProject is { } project
+                && (string.IsNullOrWhiteSpace(project.OperationId) || string.IsNullOrWhiteSpace(project.OwnerLogin)
+                    || string.IsNullOrWhiteSpace(project.Title) || !ValidIds(project.ExistingProjectIds))))
+        {
+            throw new InvalidDataException($"{FileName} contains malformed project state and cannot be resumed safely.");
+        }
+        return log;
+    }
+
+    private static bool ValidIds(string[]? ids) => ids is not null && !ids.Any(string.IsNullOrWhiteSpace);
 
     public async Task SaveAsync(string directory, CancellationToken cancellationToken)
     {
-        await ResumeLogFile.SaveAsync(
-            directory,
-            FileName,
-            backupFileName: null,
-            (stream, token) => JsonSerializer.SerializeAsync(
-                stream, this, ProjectImportLogJsonContext.Default.ProjectImportLog, token),
-            cancellationToken).ConfigureAwait(false);
+        await ResumeStateStore.SaveAsync(directory, FileName,
+            JsonSerializer.Serialize(this, ProjectImportLogJsonContext.Default.ProjectImportLog), cancellationToken).ConfigureAwait(false);
     }
 }
 
