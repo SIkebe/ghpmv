@@ -376,7 +376,8 @@ public class ItemImporterLogicTests
             Assert.Equal(["PVTI_existing"], pending.Value.ExistingItemIds);
             Assert.Equal("I_issue", Assert.Single(loaded.PendingContents).Value.ContentId);
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
-            Assert.True(File.Exists(Path.Combine(directory, ImportLog.BackupFileName)));
+            Assert.False(File.Exists(Path.Combine(directory, ImportLog.BackupFileName)));
+            Assert.Equal(2, Assert.Single(ResumeStateStore.ReadSnapshots(directory, cancellationToken)).Revision);
         }
         finally
         {
@@ -608,7 +609,7 @@ public class ItemImporterLogicTests
     }
 
     [Fact]
-    public async Task ImportLog_replace_failure_preserves_previous_primary()
+    public async Task ImportLog_save_does_not_depend_on_old_backup_path()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-importlog-atomic-").FullName;
@@ -623,11 +624,10 @@ public class ItemImporterLogicTests
             Directory.CreateDirectory(Path.Combine(directory, ImportLog.BackupFileName));
 
             var replacement = original with { SourceSnapshotFingerprint = "replacement" };
-            var exception = await Record.ExceptionAsync(() => replacement.SaveAsync(directory, cancellationToken));
-            Assert.True(exception is IOException or UnauthorizedAccessException);
+            await replacement.SaveAsync(directory, cancellationToken);
 
             var preserved = await ImportLog.LoadAsync(directory, cancellationToken);
-            Assert.Equal("original", preserved!.SourceSnapshotFingerprint);
+            Assert.Equal("replacement", preserved!.SourceSnapshotFingerprint);
             Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
         }
         finally

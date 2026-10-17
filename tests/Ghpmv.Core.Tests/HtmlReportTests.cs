@@ -3,6 +3,7 @@ using System.Text.Json;
 using Ghpmv.Cli;
 using Ghpmv.Core.Import;
 using Ghpmv.Core.Verify;
+using Microsoft.Data.Sqlite;
 
 namespace Ghpmv.Core.Tests;
 
@@ -485,12 +486,10 @@ public sealed class HtmlReportTests
             var items = new ImportLog
             {
                 ProjectId = "P",
-                ItemStates = new() { ["0"] = new ImportItemState { TargetItemId = "I" } },
+                SourceSnapshotFingerprint = "fingerprint",
             };
-            await File.WriteAllTextAsync(Path.Combine(directory, ImportLog.FileName),
-                JsonSerializer.Serialize(items, ImportLogJsonContext.Default.ImportLog), TestContext.Current.CancellationToken);
-            await File.WriteAllTextAsync(Path.Combine(directory, ProjectImportLog.FileName), "{\"createdProjectId\":[]}",
-                TestContext.Current.CancellationToken);
+            await items.SaveAsync(directory, TestContext.Current.CancellationToken);
+            await new ProjectImportLog().SaveAsync(directory, TestContext.Current.CancellationToken);
 
             using (var disabled = new ImportFailureDiagnostics("target-org", "organization", null, false))
             {
@@ -508,9 +507,9 @@ public sealed class HtmlReportTests
                 Assert.Same(failure, await new ImportFailureFinalizer(enabled, directory, lines.Add).CompleteAsync(failure, null, null));
                 Assert.Contains("AUTO-HTML-FAILURE", await File.ReadAllTextAsync(Path.Combine(directory, "import-error.html"), TestContext.Current.CancellationToken), StringComparison.Ordinal);
                 Assert.True(File.Exists(Path.Combine(directory, "import-log.html")));
-                Assert.False(File.Exists(Path.Combine(directory, "project-import-log.html")));
-                Assert.Contains(lines, line => line.StartsWith("warning: failed to write HTML report for project-import-log.json", StringComparison.Ordinal));
-                Assert.Equal(2, lines.Count(line => line.StartsWith("HTML report:", StringComparison.Ordinal)));
+                Assert.True(File.Exists(Path.Combine(directory, "project-import-log.html")));
+                Assert.DoesNotContain(lines, line => line.StartsWith("warning:", StringComparison.Ordinal));
+                Assert.Equal(3, lines.Count(line => line.StartsWith("HTML report:", StringComparison.Ordinal)));
                 Assert.Empty(Directory.GetFiles(directory, ".ghpmv-report-*.tmp"));
 
                 enabled.DeletePreviousFailure(directory);
@@ -522,6 +521,39 @@ public sealed class HtmlReportTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Report_command_reads_selected_committed_state_without_json_exports()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-cli-db-report-").FullName;
+        try
+        {
+            await new ImportLog { ProjectId = "PVT_items", SourceSnapshotFingerprint = "source" }
+                .SaveAsync(directory, TestContext.Current.CancellationToken);
+            await new ProjectImportLog { CreatedProjectId = "PVT_project" }
+                .SaveAsync(directory, TestContext.Current.CancellationToken);
+            var database = Path.Combine(directory, ResumeStateStore.FileName);
+            var result = await RunCliAsync(directory, ["report", "--input", database, "--log", "project"]);
+            Assert.Equal(0, result.ExitCode);
+            var html = await File.ReadAllTextAsync(Path.Combine(directory, "project-import-log.html"), TestContext.Current.CancellationToken);
+            Assert.Contains("PVT_project", html, StringComparison.Ordinal);
+            Assert.Contains("resume-state.db", html, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(directory, ProjectImportLog.FileName)));
+            var itemResult = await RunCliAsync(directory, ["report", "--input", database]);
+            Assert.Equal(0, itemResult.ExitCode);
+            Assert.Contains("PVT_items", await File.ReadAllTextAsync(Path.Combine(directory, "import-log.html"),
+                TestContext.Current.CancellationToken), StringComparison.Ordinal);
+            await File.WriteAllTextAsync(database, "", TestContext.Current.CancellationToken);
+            var invalid = await RunCliAsync(directory, ["report", "--input", database, "--log", "project", "--overwrite"]);
+            Assert.Equal(1, invalid.ExitCode);
+            Assert.Contains("error:", invalid.Error, StringComparison.Ordinal);
+            Assert.Equal(html, await File.ReadAllTextAsync(Path.Combine(directory, "project-import-log.html"), TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
         }
     }
 
@@ -548,6 +580,49 @@ public sealed class HtmlReportTests
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("{ invalid JSON")]
+    [InlineData("""{"createdFields":[]}""")]
+    public async Task Report_command_handles_invalid_selected_payload_as_a_normal_error(string payload)
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-cli-invalid-payload-").FullName;
+        try
+        {
+            await new ProjectImportLog().SaveAsync(directory, TestContext.Current.CancellationToken);
+            var database = Path.Combine(directory, ResumeStateStore.FileName);
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = database,
+                Pooling = false,
+            }.ToString()))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE resume_logs SET payload=$payload WHERE name=$name;";
+                command.Parameters.AddWithValue("$payload", payload);
+                command.Parameters.AddWithValue("$name", ProjectImportLog.FileName);
+                command.ExecuteNonQuery();
+            }
+            var output = Path.Combine(directory, "project-import-log.html");
+            await File.WriteAllTextAsync(output, "previous report", TestContext.Current.CancellationToken);
+            var bytes = await File.ReadAllBytesAsync(database, TestContext.Current.CancellationToken);
+
+            var result = await RunCliAsync(directory,
+                ["report", "--input", database, "--log", "project", "--overwrite"]);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.StartsWith("error:", result.Error, StringComparison.Ordinal);
+            Assert.Empty(result.Output);
+            Assert.DoesNotContain("Unhandled exception", result.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("previous report", await File.ReadAllTextAsync(output, TestContext.Current.CancellationToken));
+            Assert.Equal(bytes, await File.ReadAllBytesAsync(database, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
         }
     }
 

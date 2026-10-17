@@ -184,6 +184,8 @@ If a create mutation may have succeeded but its result is unknown, `ghpmv` stops
 
 See [Recovery and resume rules](docs/DIAGNOSTICS.md#recovery-and-resume) for reconciliation, Status Update restrictions, and uninitialized Iteration handling.
 
+`resume-state.db` in the snapshot directory is the authoritative resume state. Supported legacy `import-log.json` and `project-import-log.json` files are validated and migrated together on first use. Once the database exists, JSON is never used as a fallback. Keep the database with the snapshot and mappings; deleting it can lose pending operations and cause duplicates. Use a local filesystem, not a network share or an actively synchronized folder. Imports sharing a directory are mutually exclusive.
+
 ### Logging and diagnostics
 
 Start with stderr and `<snapshot-directory>/import-error.json`: they identify the source, destination, failed element and operation, with sanitized API failure details. **Safe API diagnostics are not anonymous logs**; business names and known IDs remain visible.
@@ -197,14 +199,20 @@ See the [Logging and diagnostics guide](docs/DIAGNOSTICS.md) for output examples
 ```powershell
 ghpmv report --input .\snapshot\import-error.json
 ghpmv report --input .\verify-result.json --output .\reports\verification.html --language ja
+ghpmv report --input .\snapshot\resume-state.db --log item --overwrite
+ghpmv report --input .\snapshot\resume-state.db --log project --language ja --overwrite
 ```
+
+For `resume-state.db`, `--log item` (the default) or `--log project` selects the committed state to report. Outputs default to `import-log.html` or `project-import-log.html`. This offline command reads SQLite directly without requiring a JSON export or changing the database. Reports include the source database, revision, and generation time; they are diagnostic snapshots, not resume files.
 
 HTML reports are also written automatically, so the `report` command is only needed to regenerate one or to choose another output path or initial language:
 
-- When `import` fails, `import-error.html` plus `import-log.html` and `project-import-log.html` (for the resume logs that exist) are written next to the JSON files in the `--in` directory.
+- After a successful or failed `import`, committed item/project state is exported to `import-log.json` and `project-import-log.json`, with corresponding HTML reports. Failed imports also produce `import-error.html`.
 - When `verify` runs with `--report-json <path>`, the HTML is written beside it with the `.html` extension.
 
 Automatic reports overwrite the previous automatic report with the same name and the path is printed to stderr as `HTML report: <path>`. A failure to write an HTML report is only a `warning:` and never changes the exit code or stdout. A successful import that deletes `import-error.json` also deletes `import-error.html`. Use `--no-html-report` on `import` or `verify` to disable automatic HTML output.
+
+JSON export failures are also warning-only and do not roll back a committed checkpoint. HTML is generated independently from the same DB snapshot even if JSON cannot be written. An existing export may be stale after a warning or abrupt termination; regenerate from the database, not from that export. `--no-html-report` does not disable SQLite commits or JSON exports. New diagnostic JSON exports are marked as such and cannot be used to recreate a missing database.
 
 Verification reports separate errors, warnings and coverage gaps. Failure reports show exceptions, cleanup failures and a progress timeline. Resume reports identify unconfirmed operations and incomplete item stages without equating a pending write with a failed write. Missing completion or warning flags remain **Unknown**, not "No". A resume report cannot prove that the whole migration is complete; verify the target separately.
 

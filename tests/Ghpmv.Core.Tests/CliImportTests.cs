@@ -11,6 +11,29 @@ namespace Ghpmv.Core.Tests;
 public class CliImportTests
 {
     [Fact]
+    public async Task A_second_import_is_rejected_before_overwriting_diagnostics()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-cli-lease-").FullName;
+        try
+        {
+            var reportPath = Path.Combine(directory, "import-error.json");
+            await File.WriteAllTextAsync(reportPath, "previous diagnostics", TestContext.Current.CancellationToken);
+            using var lease = ResumeStateStore.AcquireOperationLease(directory);
+            var result = await RunIsolatedCliAsync(directory,
+                ["import", "--org", "target", "--in", directory, "--token", "synthetic", "--no-update-check"]);
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("Cannot acquire resume operation lease", result.Error, StringComparison.Ordinal);
+            Assert.Empty(result.Output);
+            Assert.Equal("previous diagnostics", await File.ReadAllTextAsync(reportPath, TestContext.Current.CancellationToken));
+            Assert.False(File.Exists(Path.Combine(directory, ResumeStateStore.FileName)));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task Project_title_override_does_not_relabel_an_old_snapshots_source()
     {
         var directory = Path.Combine(Environment.CurrentDirectory, "title-identity-" + Guid.NewGuid().ToString("N"));

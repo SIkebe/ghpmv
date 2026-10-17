@@ -75,7 +75,7 @@ public class ItemImporterResumeTests
             var log = (await ImportLog.LoadAsync(directory, cancellationToken))!;
             var failed = Assert.Single(log.ItemStates.Values, state => state.FieldValuesError is not null);
             Assert.Equal(context, failed.FieldValuesErrorContext);
-            var json = await File.ReadAllTextAsync(Path.Combine(directory, ImportLog.FileName), cancellationToken);
+            var json = Assert.Single(ResumeStateStore.ReadSnapshots(directory, cancellationToken)).Json;
             foreach (var secret in new[] { "SYNTHETIC-STAGE-SECRET", "SYNTHETIC-VALUE-SECRET", "SYNTHETIC-TOKEN-SECRET" })
             {
                 Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
@@ -321,7 +321,7 @@ public class ItemImporterResumeTests
             Assert.NotNull(interruptedState.LastError);
             Assert.DoesNotContain(sentinel, interruptedState.LastError, StringComparison.Ordinal);
             Assert.Contains("FORBIDDEN", interruptedState.LastError, StringComparison.Ordinal);
-            Assert.DoesNotContain(sentinel, await File.ReadAllTextAsync(Path.Combine(directory, "import-log.json"), cancellationToken), StringComparison.Ordinal);
+            Assert.DoesNotContain(sentinel, Assert.Single(ResumeStateStore.ReadSnapshots(directory, cancellationToken)).Json, StringComparison.Ordinal);
             Assert.DoesNotContain(sentinel, string.Join('\n', progress), StringComparison.Ordinal);
 
             var resumedResult = await importer.ImportAsync(snapshot, target, directory, cancellationToken);
@@ -734,6 +734,32 @@ public class ItemImporterResumeTests
     }
 
     [Fact]
+    public async Task Reconciled_archive_persists_completion_even_when_cancelled_after_confirmation()
+    {
+        var directory = Directory.CreateTempSubdirectory("ghpmv-archive-cancel-").FullName;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        try
+        {
+            using var handler = new StageResumeHandler("archive", archivedAfterFailure: true,
+                afterArchiveConfirmation: cancellation.Cancel);
+            using var client = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var failure = await Record.ExceptionAsync(() => CreateImporter(client).ImportAsync(
+                CreateStageSnapshot(archived: true, withField: false), Target, directory, cancellation.Token));
+            Assert.True(cancellation.IsCancellationRequested);
+            Assert.True(failure is null or OperationCanceledException);
+            var log = await ImportLog.LoadAsync(directory, TestContext.Current.CancellationToken);
+            var state = Assert.Single(log!.ItemStates).Value;
+            Assert.True(state.ArchiveApplied);
+            Assert.Null(state.ArchiveError);
+            Assert.Equal(1, handler.ArchiveMutationCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task Resume_rejects_changed_repository_mapping_after_creation()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -951,7 +977,8 @@ public class ItemImporterResumeTests
         bool archivedAfterFailure = false,
         bool rejectFieldMutationWhenArchived = false,
         bool failUnarchiveAfterApplying = false,
-        bool failArchiveRestore = false) : HttpMessageHandler
+        bool failArchiveRestore = false,
+        Action? afterArchiveConfirmation = null) : HttpMessageHandler
     {
         private bool _isArchived = archivedAfterFailure;
 
@@ -1042,6 +1069,13 @@ public class ItemImporterResumeTests
 
             if (query.Contains("... on ProjectV2Item { isArchived }", StringComparison.Ordinal))
             {
+                if (_isArchived && afterArchiveConfirmation is not null)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new CallbackContent("""{"data":{"node":{"isArchived":true}}}""", afterArchiveConfirmation),
+                    };
+                }
                 return _isArchived
                     ? Json("""{"data":{"node":{"isArchived":true}}}""")
                     : Json("""{"data":{"node":{"isArchived":false}}}""");
@@ -1061,5 +1095,17 @@ public class ItemImporterResumeTests
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
+    }
+
+    private sealed class CallbackContent(string body, Action afterRead) : StringContent(body, Encoding.UTF8, "application/json")
+    {
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                afterRead();
+            }
+        }
     }
 }
