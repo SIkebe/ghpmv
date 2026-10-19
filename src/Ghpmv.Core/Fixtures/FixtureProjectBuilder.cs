@@ -88,7 +88,33 @@ public sealed class FixtureProjectBuilder
             OperationLogDirectory,
             apiHost,
             repositoryFullName);
+        var beforeWriteInvoked = false;
+        async Task InvokeBeforeWriteOnceAsync(CancellationToken token)
+        {
+            if (beforeWriteInvoked)
+            {
+                return;
+            }
+
+            await (BeforeWriteAsync?.Invoke(token) ?? Task.CompletedTask).ConfigureAwait(false);
+            beforeWriteInvoked = true;
+        }
+
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        if (projectLog.PendingProjectDeletionId is not null)
+        {
+            // Settle the recorded deletion before selecting or planning against Projects so later
+            // stages never reuse the deleted Project or reject the retry over a stale same-title match.
+            await new ProjectImporter(_graphQl)
+            {
+                OnProgress = OnProgress,
+                OperationLogDirectory = operationDirectory,
+                ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
+                BeforeWriteAsync = InvokeBeforeWriteOnceAsync,
+            }.ResolvePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+            projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var referenceDate = await ResolveFixtureReferenceDateAsync(
             operationDirectory,
@@ -128,18 +154,6 @@ public sealed class FixtureProjectBuilder
         {
             throw new InvalidOperationException(
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
-        }
-
-        var beforeWriteInvoked = false;
-        async Task InvokeBeforeWriteOnceAsync(CancellationToken token)
-        {
-            if (beforeWriteInvoked)
-            {
-                return;
-            }
-
-            await (BeforeWriteAsync?.Invoke(token) ?? Task.CompletedTask).ConfigureAwait(false);
-            beforeWriteInvoked = true;
         }
 
         if (RequireNewResources && itemLog is not null)

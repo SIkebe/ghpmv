@@ -186,6 +186,17 @@ public sealed class ProjectImporter
         return true;
     }
 
+    /// <summary>
+    /// Resolves a recorded pending Project deletion so callers never select or plan against a Project
+    /// that the resumed operation is about to delete. Deletion still requires explicit authorization.
+    /// </summary>
+    internal async Task ResolvePendingProjectDeletionAsync(CancellationToken cancellationToken = default)
+    {
+        using var operationLock = AcquireStrictOperationLock();
+        await LoadOperationLogAsync(cancellationToken).ConfigureAwait(false);
+        await ReconcilePendingProjectDeletionAsync(invokeBeforeWrite: true, cancellationToken).ConfigureAwait(false);
+    }
+
     internal async Task ReleaseReservedProjectAsync(CancellationToken cancellationToken = default)
     {
         using var operationLock = AcquireStrictOperationLock();
