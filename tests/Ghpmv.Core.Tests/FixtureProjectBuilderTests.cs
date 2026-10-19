@@ -1289,6 +1289,7 @@ public class FixtureProjectBuilderTests
             var importer = new ProjectImporter(graphQl)
             {
                 OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = "PVT_1",
             };
 
             await importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken);
@@ -1412,6 +1413,7 @@ public class FixtureProjectBuilderTests
             var importer = new ProjectImporter(graphQl)
             {
                 OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = "PVT_1",
             };
 
             await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
@@ -1426,6 +1428,41 @@ public class FixtureProjectBuilderTests
             Assert.DoesNotContain(
                 graphQlHandler.RequestBodies,
                 body => body.Contains("node(id:", StringComparison.Ordinal));
+        }
+
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("PVT_other")]
+    public async Task Recorded_project_release_requires_exact_confirmation_before_recording_deletion(string? confirmedId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-untrusted-release-").FullName;
+        try
+        {
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(logRoot, cancellationToken);
+            using var handler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl)
+            {
+                OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = confirmedId,
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ReleaseReservedProjectAsync(cancellationToken));
+
+            Assert.Contains("--confirm-delete-pending-project PVT_1", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(handler.RequestBodies);
+            var log = await ProjectImportLog.LoadAsync(logRoot, cancellationToken);
+            Assert.Equal("PVT_1", log.CreatedProjectId);
+            Assert.Null(log.PendingProjectDeletionId);
         }
         finally
         {

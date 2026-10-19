@@ -271,6 +271,17 @@ var repoMappingOption = new Option<string?>("--repo-mapping")
 {
     Description = "CSV file mapping source repositories to target repositories (header: source,target; rows: org/repo,org/repo).",
 };
+var confirmDeletePendingProjectOption = new Option<string?>("--confirm-delete-pending-project")
+{
+    Description = "Authorize deletion of this exact pending Project node ID after verifying it on the target GitHub host. Resume state alone never authorizes deletion.",
+};
+confirmDeletePendingProjectOption.Validators.Add(result =>
+{
+    if (string.IsNullOrWhiteSpace(result.GetValueOrDefault<string>()))
+    {
+        result.AddError("--confirm-delete-pending-project requires a nonempty Project node ID.");
+    }
+});
 var userMappingOption = new Option<string?>("--user-mapping")
 {
     Description = "CSV file mapping source user logins to target logins (header: mannequin-user,mannequin-id,target-user; mannequin-id is ignored).",
@@ -292,6 +303,7 @@ var importCommand = new Command("import", "Import a JSON snapshot into the targe
     projectNumberOption,
     projectTitleOption,
     onConflictOption,
+    confirmDeletePendingProjectOption,
     repoMappingOption,
     userMappingOption,
     organizationMappingOption,
@@ -644,6 +656,7 @@ importCommand.SetAction(async (parseResult, cancellationToken) =>
                 BeforeWriteAsync = ValidateImportBeforeWriteAsync,
                 OperationLogDirectory = inDirectory,
                 PendingItemProjectId = pendingItemProjectId,
+                ConfirmedPendingProjectDeletionId = parseResult.GetValue(confirmDeletePendingProjectOption),
             };
 
             diagnostics.SetStage("importing-project");
@@ -1395,6 +1408,7 @@ setupCommand.Options.Add(fixtureProjectOption);
 setupCommand.Options.Add(fixtureTitleOption);
 setupCommand.Options.Add(fixtureRepoOption);
 setupCommand.Options.Add(fixtureRequireNewOption);
+setupCommand.Options.Add(confirmDeletePendingProjectOption);
 setupCommand.Options.Add(fixtureAllowExistingEmptyRepoOption);
 setupCommand.Options.Add(fixtureTeamOption);
 setupCommand.Options.Add(setupBrowserProfileOption);
@@ -1404,6 +1418,11 @@ setupCommand.Options.Add(setupApiBaseUrlOption);
 
 setupCommand.Validators.Add(result =>
 {
+    if (result.GetResult(confirmDeletePendingProjectOption) is not null && !result.GetValue(fixtureOption))
+    {
+        result.AddError("--confirm-delete-pending-project requires --fixture on setup.");
+    }
+
     if (result.GetValue(fixtureRequireNewOption) && !result.GetValue(fixtureOption))
     {
         result.AddError("--fixture-require-new requires --fixture.");
@@ -2115,6 +2134,7 @@ setupCommand.SetAction(async (parseResult, cancellationToken) =>
             OnProgress = Console.Error.WriteLine,
             OperationLogDirectory = fixtureOperationDirectory,
             RequireNewResources = parseResult.GetValue(fixtureRequireNewOption),
+            ConfirmedPendingProjectDeletionId = parseResult.GetValue(confirmDeletePendingProjectOption),
             AllowExistingEmptyRepository = parseResult.GetValue(fixtureAllowExistingEmptyRepoOption),
             IncludeRoadmapRenderingItem = parseResult.GetValue(fixtureUiOption),
             BeforeWriteAsync = ValidateFixtureBeforeWriteAsync,

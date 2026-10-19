@@ -27,6 +27,7 @@ public sealed class ProjectImporter
     private readonly GitHubGraphQLClient _client;
     private readonly List<string> _warnings = [];
     private ProjectImportLog? _operationLog;
+    private string? _projectIdCreatedByThisInstance;
     private HashSet<string> _snapshotNormalFieldNames = [];
     private HashSet<string> _snapshotMultiSelectNormalFieldNames = [];
     private HashSet<string> _snapshotIssueFieldNames = [];
@@ -83,6 +84,9 @@ public sealed class ProjectImporter
 
     /// <summary>Target project required by pending item operations loaded before project-stage writes.</summary>
     public string? PendingItemProjectId { get; init; }
+
+    /// <summary>Exact Project node ID whose deletion the operator has explicitly authorized after inspection.</summary>
+    public string? ConfirmedPendingProjectDeletionId { get; init; }
 
     internal async Task<bool> ReserveProjectAsync(
         string ownerLogin,
@@ -150,9 +154,13 @@ public sealed class ProjectImporter
                     $"A project titled '{title}' already exists in {OwnerDescription} '{ownerLogin}' (#{existing.Number})."));
         }
 
-        await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
-        var reservedProjectId = _operationLog?.CreatedProjectId
-            ?? throw new InvalidOperationException("The reserved Project ID was not recorded.");
+        var reservedProject = await CreateAndRecordProjectAsync(ownerLogin, title, matches, cancellationToken).ConfigureAwait(false);
+        var reservedProjectId = reservedProject.Id;
+        if (_operationLog is null)
+        {
+            throw new InvalidOperationException("The reserved Project operation log was not loaded.");
+        }
+
         var confirmedMatches = await ConfirmReservedProjectAsync(
             ownerLogin,
             title,
@@ -214,6 +222,8 @@ public sealed class ProjectImporter
             throw new InvalidOperationException(
                 $"Project '{projectId}' has pending import operations and cannot be released automatically.");
         }
+
+        EnsureProjectDeletionAuthorized(projectId);
 
         if (allowPendingProject)
         {
@@ -354,6 +364,7 @@ public sealed class ProjectImporter
 
         if (await ProjectExistsAsync(projectId, cancellationToken).ConfigureAwait(false))
         {
+            EnsureProjectDeletionAuthorized(projectId);
             if (invokeBeforeWrite)
             {
                 await InvokeBeforeWriteAsync(cancellationToken).ConfigureAwait(false);
@@ -370,6 +381,18 @@ public sealed class ProjectImporter
         _operationLog.PendingProjectDeletionId = null;
         await SaveOperationLogAsync(cancellationToken).ConfigureAwait(false);
         return beforeWriteInvoked;
+    }
+
+    private void EnsureProjectDeletionAuthorized(string projectId)
+    {
+        if (!string.Equals(projectId, _projectIdCreatedByThisInstance, StringComparison.Ordinal)
+            && !string.Equals(projectId, ConfirmedPendingProjectDeletionId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Refusing to delete Project '{projectId}': resume state alone does not authorize deletion. " +
+                "Inspect this Project on the target GitHub host and verify that it is safe to delete, then rerun with " +
+                $"--confirm-delete-pending-project {projectId}. Pending operation records have been preserved.");
+        }
     }
 
     /// <summary>Imports the snapshot into <paramref name="ownerLogin"/> and returns the target project identity and field mappings.</summary>
@@ -715,6 +738,7 @@ public sealed class ProjectImporter
         }
 
         var project = ParseProjectRef(createData.GetProperty("createProjectV2").GetProperty("projectV2"));
+        _projectIdCreatedByThisInstance = project.Id;
         using var resolvedTargetScope = BeginResolvedProjectDiagnostics(project);
         ReportTargetProject(project);
         if (_operationLog is not null)

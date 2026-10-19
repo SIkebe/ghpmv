@@ -44,6 +44,9 @@ public sealed class FixtureProjectBuilder
 
     public bool IncludeRoadmapRenderingItem { get; init; }
 
+    /// <summary>Exact Project node ID whose pending deletion the operator has explicitly authorized.</summary>
+    public string? ConfirmedPendingProjectDeletionId { get; init; }
+
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
 
     public async Task<FixtureProjectSetupResult> CreateAsync(
@@ -184,6 +187,7 @@ public sealed class FixtureProjectBuilder
                 {
                     OnProgress = OnProgress,
                     OperationLogDirectory = operationDirectory,
+                    ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
                 };
                 var projectReservedByThisCall = false;
                 reserveProjectAsync = async token =>
@@ -298,6 +302,7 @@ public sealed class FixtureProjectBuilder
             var projectImporter = new ProjectImporter(_graphQl)
             {
                 OnProgress = OnProgress,
+                ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
                 OnConflict = RequireNewResources || existing is not null
                     ? ConflictAction.Update
                     : ConflictAction.Fail,

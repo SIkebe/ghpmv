@@ -353,6 +353,14 @@ Stop all users of the directory before making a filesystem backup or moving it. 
 
 An import opens existing SQLite state read/write so SQLite can recover a hot rollback journal after an abrupt stop before any new remote writes. Offline reports deliberately open read-only; if journal recovery requires a write, they fail rather than modify resume state. Resolve the interruption through the normal import/reconciliation path first.
 
+**Pending Project deletion authorization**
+
+Fixture reservation cleanup records a pending Project deletion before sending it. Resume state (including matching `CreatedProjectId` and `PendingProjectDeletionId`) is not evidence that a Project is safe to delete. Automatic cleanup is permitted only for the exact ID returned by a successful create in the same `ProjectImporter` instance. This also applies to compensation of an interrupted reservation when another same-title Project appears; owner/title equality does not authorize deletion.
+
+If the Project still exists and its ID is not known from that in-process create, reconciliation stops before deletion or the import pre-write callback and retains the operation records. Independently inspect the reported node ID on the target GitHub host, confirm that it is the disposable Project intended for cleanup, then rerun the original command with `--confirm-delete-pending-project <PROJECT_NODE_ID>`. Both `ghpmv import` and `ghpmv setup --fixture` accept this option. It authorizes only the exact, case-sensitive node ID, not any same-title Project or other pending deletion. After cleanup, the command continues its normal work. A different ID or no option leaves the Project untouched. If the exact Project is already absent, reconciliation clears the deletion record without requiring confirmation.
+
+Do not blindly copy the suggested ID from an untrusted resume directory, use a blanket approval, or hand-edit the database. The option is destructive and should be removed from subsequent commands once recovery is complete.
+
 1. Use `context` to identify the source, target, and affected element; read `stage` and the original exception. Do not mistake a cleanup failure for the root cause.
 2. If needed, match the detailed response using correlation IDs. The Request ID can also help with an inquiry to GitHub.
 3. For `Mutation result is ambiguous`, inspect the target. **Failure to save a diagnostic file does not prove that creation did not occur.**
