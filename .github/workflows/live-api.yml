@@ -28,7 +28,7 @@ jobs:
   integration:
     name: Integration
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
@@ -96,9 +96,13 @@ jobs:
           $env:GHPMV_TEST_PROJECT_NUMBER = ([Uri]$fixtureUrl.Trim()).Segments[-1].TrimEnd('/')
 
           $resultsDirectory = 'tests/Ghpmv.Integration.Tests/TestResults/ci'
-          dotnet test --project tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --stop-on-fail on --results-directory $resultsDirectory --report-xunit-trx --report-xunit-trx-filename integration.trx
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          dotnet test --project tests/Ghpmv.Integration.Tests/Ghpmv.Integration.Tests.csproj -c Release --no-build --stop-on-fail on --timeout 25m --output Detailed --results-directory $resultsDirectory --report-xunit-trx --report-xunit-trx-filename integration.trx
+          $testExitCode = $LASTEXITCODE
+          if ($testExitCode -eq 3) {
+            Write-Output '::error title=Live GitHub API tests aborted::The integration test session was aborted (exit code 3), typically by the 25-minute --timeout. The test that was running is recorded as failed in integration.trx.'
+          }
+          if ($testExitCode -ne 0) {
+            exit $testExitCode
           }
 
           [xml]$results = Get-Content (Join-Path $resultsDirectory 'integration.trx')
@@ -107,8 +111,51 @@ jobs:
             $names = ($skipped | ForEach-Object { $_.testName }) -join ', '
             throw "Credentialed integration tests must not skip tests. Skipped: $names"
           }
+      - name: Summarize integration test durations
+        if: ${{ always() && steps.credentials.outputs.available == 'true' }}
+        run: |
+          $reportPath = 'tests/Ghpmv.Integration.Tests/TestResults/ci/integration.trx'
+          if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            Write-Output 'No integration TRX report was produced; per-test durations are unavailable.'
+            exit 0
+          }
+
+          $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+          [xml]$results = Get-Content -LiteralPath $reportPath
+          $tests = @($results.SelectNodes("//*[local-name()='UnitTestResult']") | ForEach-Object {
+            $duration = [TimeSpan]::Zero
+            if (-not [string]::IsNullOrEmpty($_.duration)) {
+              $duration = [TimeSpan]::Parse($_.duration, $invariant)
+            }
+            [pscustomobject]@{ Name = [string]$_.testName; Outcome = [string]$_.outcome; Duration = $duration }
+          })
+          $totalTicks = [long]0
+          foreach ($test in $tests) {
+            $totalTicks += $test.Duration.Ticks
+          }
+          $total = [TimeSpan]::FromTicks($totalTicks)
+          $outcomes = ($tests | Group-Object Outcome | Sort-Object Name | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', '
+          $rank = 0
+          $rows = @($tests | Sort-Object { $_.Duration } -Descending | Select-Object -First 10 | ForEach-Object {
+            $rank++
+            $singleLineName = [regex]::Replace($_.Name, '[\r\n\u2028\u2029]+', ' ')
+            $safeName = [regex]::Replace(
+              $singleLineName,
+              '[^\p{L}\p{N}\p{Zs}]',
+              { param($match) "&#$([int][char]$match.Value);" })
+            "| $rank | <code>$safeName</code> | $($_.Outcome) | $($_.Duration.TotalSeconds.ToString('F1', $invariant)) |"
+          })
+          $summary = @(
+            '### Live GitHub API test durations'
+            ''
+            "Tests: $($tests.Count) ($outcomes). Sum of test durations: $([int][Math]::Floor($total.TotalMinutes))m $($total.Seconds)s."
+            ''
+            '| # | Slowest tests | Outcome | Seconds |'
+            '|---:|---|---|---:|'
+          ) + $rows
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value ($summary -join "`n")
       - name: Upload integration test results
-        if: ${{ failure() && steps.credentials.outputs.available == 'true' }}
+        if: ${{ always() && steps.credentials.outputs.available == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: live-api-test-results
