@@ -890,7 +890,14 @@ public sealed class FixtureProjectBuilder
                 project => string.Equals(project.Id, claimedProjectId, StringComparison.Ordinal));
             if (claimed is not null)
             {
-                RejectUnownedDuplicateProjects(matches, claimed, title, organization, requireNewResources);
+                // The strict reservation step owns compensation for an interrupted reservation. Rejecting the
+                // duplicate here would make its exact-ID authorized cleanup unreachable; deferring keeps repository
+                // validation and the pre-write callback ahead of that cleanup, and the reservation always fails closed.
+                if (!IsInterruptedStrictReservation(projectLog, itemLog, organization, title, requireNewResources))
+                {
+                    RejectUnownedDuplicateProjects(matches, claimed, title, organization, requireNewResources);
+                }
+
                 return (claimed, true);
             }
 
@@ -918,6 +925,20 @@ public sealed class FixtureProjectBuilder
 
         return (matches.Count > 0 ? matches[0] : null, false);
     }
+
+    private static bool IsInterruptedStrictReservation(
+        ProjectImportLog projectLog,
+        ImportLog? itemLog,
+        string organization,
+        string title,
+        bool requireNewResources)
+        => requireNewResources
+            && itemLog is null
+            && projectLog.CreatedProjectId is not null
+            && projectLog.PendingProjectDeletionId is null
+            && projectLog.PendingProject is { } pending
+            && string.Equals(pending.OwnerLogin, organization, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(pending.Title, title, StringComparison.Ordinal);
 
     private static void RejectUnownedDuplicateProjects(
         IReadOnlyList<ProjectRef> matches,
