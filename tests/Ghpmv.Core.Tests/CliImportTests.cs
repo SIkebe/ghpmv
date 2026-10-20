@@ -10,6 +10,84 @@ namespace Ghpmv.Core.Tests;
 
 public class CliImportTests
 {
+    [Theory]
+    [InlineData(null)]
+    [InlineData("PVT_other")]
+    [InlineData("PVT_created")]
+    public async Task Pending_project_deletion_requires_explicit_matching_cli_id(string? confirmedId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-cli-pending-delete-").FullName;
+        try
+        {
+            await SnapshotFile.SaveAsync(MinimalSnapshot(), directory, cancellationToken);
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProjectDeletionId = "PVT_created",
+                ImportCompleted = false,
+            }.SaveAsync(directory, cancellationToken);
+            var confirmed = confirmedId == "PVT_created";
+            using var server = new GraphQlStubServer(confirmed
+                ? [
+                    """{"data":{"node":{"id":"PVT_created"}}}""",
+                    """{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_created"}}}}""",
+                    EmptyProjectsResponse,
+                    OwnerResponse,
+                    CreateProjectResponse,
+                    UpdateCreatedProjectResponse,
+                    EmptyFieldsResponse,
+                    NonTemplateProjectResponse,
+                ]
+                : ["""{"data":{"node":{"id":"PVT_created"}}}"""]);
+
+            var result = await RunCliAsync(directory, server,
+                confirmedId is null ? [] : ["--confirm-delete-pending-project", confirmedId]);
+
+            Assert.True(result.ExitCode == (confirmed ? 0 : 1), result.Error);
+            Assert.Equal(confirmed ? 1 : 0, server.RequestBodies.Count(body =>
+                body.Contains("deleteProjectV2(", StringComparison.Ordinal)));
+            var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            if (confirmed)
+            {
+                Assert.Null(log.PendingProjectDeletionId);
+                Assert.Contains("result=created", result.Output, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains("--confirm-delete-pending-project PVT_created", result.Error, StringComparison.Ordinal);
+                Assert.Single(server.RequestBodies);
+                Assert.Equal("PVT_created", log.CreatedProjectId);
+                Assert.Equal("PVT_created", log.PendingProjectDeletionId);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("import")]
+    [InlineData("setup")]
+    public async Task Pending_deletion_confirmation_is_documented_in_command_help(string command)
+    {
+        var result = await RunIsolatedCliAsync(Environment.CurrentDirectory, [command, "--help"]);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("--confirm-delete-pending-project", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Setup_pending_deletion_confirmation_requires_fixture_creation()
+    {
+        var result = await RunIsolatedCliAsync(Environment.CurrentDirectory,
+            ["setup", "--confirm-delete-pending-project", "PVT_created"]);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("--confirm-delete-pending-project requires --fixture", result.Error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task A_second_import_is_rejected_before_overwriting_diagnostics()
     {

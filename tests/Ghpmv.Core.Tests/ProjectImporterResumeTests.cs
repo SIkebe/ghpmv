@@ -53,8 +53,10 @@ public class ProjectImporterResumeTests
         }
     }
 
-    [Fact]
-    public async Task Pending_deletion_invokes_prewrite_once_before_delete_and_later_import_mutations()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Confirmed_pending_deletion_invokes_prewrite_once_before_delete_and_later_import_mutations(bool importInto)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-project-pending-deletion-auth-").FullName;
@@ -72,6 +74,7 @@ public class ProjectImporterResumeTests
             var importer = new ProjectImporter(client)
             {
                 OperationLogDirectory = directory,
+                ConfirmedPendingProjectDeletionId = "PVT_created",
                 BeforeWriteAsync = _ =>
                 {
                     prewriteCount++;
@@ -80,12 +83,84 @@ public class ProjectImporterResumeTests
                 },
             };
 
-            var result = await importer.ImportAsync(Snapshot(), "target", cancellationToken);
+            var result = importInto
+                ? await importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken)
+                : await importer.ImportAsync(Snapshot(), "target", cancellationToken);
 
-            Assert.True(result.Created);
+            Assert.Equal(!importInto, result.Created);
             Assert.Equal(1, prewriteCount);
             Assert.True(handler.BeforeWriteObservedAtDeletion);
             Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("import", null)]
+    [InlineData("import", "PVT_other")]
+    [InlineData("import", "pvt_created")]
+    [InlineData("import-into", null)]
+    [InlineData("import-into", "PVT_other")]
+    [InlineData("reserve", null)]
+    [InlineData("reserve", "PVT_other")]
+    [InlineData("release", null)]
+    [InlineData("release", "PVT_other")]
+    public async Task Persisted_pending_deletion_requires_exact_operator_confirmation(string entryPoint, string? confirmedId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var directory = Directory.CreateTempSubdirectory("ghpmv-untrusted-project-deletion-").FullName;
+        try
+        {
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProjectDeletionId = "PVT_created",
+                ImportCompleted = false,
+            }.SaveAsync(directory, cancellationToken);
+            using var handler = new ProjectResumeHandler(directory);
+            using var client = CreateClient(handler);
+            var prewriteCount = 0;
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                ConfirmedPendingProjectDeletionId = confirmedId,
+                BeforeWriteAsync = _ =>
+                {
+                    prewriteCount++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            {
+                switch (entryPoint)
+                {
+                    case "import":
+                        await importer.ImportAsync(Snapshot(), "target", cancellationToken);
+                        break;
+                    case "import-into":
+                        await importer.ImportIntoAsync(Snapshot(), "target", 7, cancellationToken);
+                        break;
+                    case "reserve":
+                        await importer.ReserveProjectAsync("target", "Project", cancellationToken);
+                        break;
+                    case "release":
+                        await importer.ReleaseReservedProjectAsync(cancellationToken);
+                        break;
+                }
+            });
+
+            Assert.Contains("--confirm-delete-pending-project PVT_created", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, prewriteCount);
+            Assert.Equal(0, handler.MutationCount);
+            Assert.Empty(handler.DeletedProjectIds);
+            var persisted = await ProjectImportLog.LoadAsync(directory, cancellationToken);
+            Assert.Equal("PVT_created", persisted.CreatedProjectId);
+            Assert.Equal("PVT_created", persisted.PendingProjectDeletionId);
+            Assert.False(persisted.ImportCompleted);
         }
         finally
         {
@@ -127,8 +202,10 @@ public class ProjectImporterResumeTests
         }
     }
 
-    [Fact]
-    public async Task Strict_reservation_retry_compensates_owned_project_when_duplicate_appears()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Strict_reservation_retry_requires_confirmation_to_compensate_recorded_project(bool confirmed)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var directory = Directory.CreateTempSubdirectory("ghpmv-strict-project-resume-race-").FullName;
@@ -151,16 +228,30 @@ public class ProjectImporterResumeTests
                 ReturnDuplicateOnResume = true,
             };
             using var client = CreateClient(handler);
-            var importer = new ProjectImporter(client) { OperationLogDirectory = directory };
+            var importer = new ProjectImporter(client)
+            {
+                OperationLogDirectory = directory,
+                ConfirmedPendingProjectDeletionId = confirmed ? "PVT_created" : null,
+            };
 
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(
                 () => importer.ReserveProjectAsync("target", "Project", cancellationToken));
 
-            Assert.Contains("was removed", exception.Message, StringComparison.Ordinal);
-            Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
             var log = await ProjectImportLog.LoadAsync(directory, cancellationToken);
-            Assert.Null(log.CreatedProjectId);
-            Assert.Null(log.PendingProject);
+            if (confirmed)
+            {
+                Assert.Contains("was removed", exception.Message, StringComparison.Ordinal);
+                Assert.Equal(["PVT_created"], handler.DeletedProjectIds);
+                Assert.Null(log.CreatedProjectId);
+                Assert.Null(log.PendingProject);
+            }
+            else
+            {
+                Assert.Contains("--confirm-delete-pending-project PVT_created", exception.Message, StringComparison.Ordinal);
+                Assert.Empty(handler.DeletedProjectIds);
+                Assert.Equal("PVT_created", log.CreatedProjectId);
+                Assert.NotNull(log.PendingProject);
+            }
             Assert.Null(log.PendingProjectDeletionId);
         }
         finally
@@ -962,6 +1053,8 @@ public class ProjectImporterResumeTests
 
         public int ViewCreateMutationCount { get; private set; }
 
+        public int MutationCount { get; private set; }
+
         public string? UpdatedViewId { get; private set; }
 
         private bool _projectUpdateFailed;
@@ -972,6 +1065,11 @@ public class ProjectImporterResumeTests
             CancellationToken cancellationToken)
         {
             var (query, variables) = await ReadAsync(request, cancellationToken);
+            if (query.StartsWith("mutation", StringComparison.Ordinal))
+            {
+                MutationCount++;
+            }
+
             if (query.Contains("projectsV2(first:", StringComparison.Ordinal))
             {
                 if (FailConfirmationAfterCreate && CreateMutationCount > 0)
@@ -1022,6 +1120,11 @@ public class ProjectImporterResumeTests
                 return ReturnReplacementOnResume
                     ? Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_replacement","number":8,"title":"Project","url":"https://github.com/orgs/target/projects/8"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""")
                     : Json("""{"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}""");
+            }
+
+            if (query.Contains("projectV2(number:", StringComparison.Ordinal))
+            {
+                return Json("""{"data":{"organization":{"projectV2":{"id":"PVT_created","number":7,"title":"Project","url":"https://github.com/orgs/target/projects/7","public":false,"viewerCanUpdate":true}}}}""");
             }
 
             if (query.Contains("organization(login:", StringComparison.Ordinal))

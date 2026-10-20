@@ -44,6 +44,9 @@ public sealed class FixtureProjectBuilder
 
     public bool IncludeRoadmapRenderingItem { get; init; }
 
+    /// <summary>Exact Project node ID whose pending deletion the operator has explicitly authorized.</summary>
+    public string? ConfirmedPendingProjectDeletionId { get; init; }
+
     public Func<CancellationToken, Task>? BeforeWriteAsync { get; init; }
 
     public async Task<FixtureProjectSetupResult> CreateAsync(
@@ -85,7 +88,33 @@ public sealed class FixtureProjectBuilder
             OperationLogDirectory,
             apiHost,
             repositoryFullName);
+        var beforeWriteInvoked = false;
+        async Task InvokeBeforeWriteOnceAsync(CancellationToken token)
+        {
+            if (beforeWriteInvoked)
+            {
+                return;
+            }
+
+            await (BeforeWriteAsync?.Invoke(token) ?? Task.CompletedTask).ConfigureAwait(false);
+            beforeWriteInvoked = true;
+        }
+
         var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        if (projectLog.PendingProjectDeletionId is not null)
+        {
+            // Settle the recorded deletion before selecting or planning against Projects so later
+            // stages never reuse the deleted Project or reject the retry over a stale same-title match.
+            await new ProjectImporter(_graphQl)
+            {
+                OnProgress = OnProgress,
+                OperationLogDirectory = operationDirectory,
+                ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
+                BeforeWriteAsync = InvokeBeforeWriteOnceAsync,
+            }.ResolvePendingProjectDeletionAsync(cancellationToken).ConfigureAwait(false);
+            projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
+        }
+
         var itemLog = await ImportLog.LoadAsync(operationDirectory, cancellationToken).ConfigureAwait(false);
         var referenceDate = await ResolveFixtureReferenceDateAsync(
             operationDirectory,
@@ -125,18 +154,6 @@ public sealed class FixtureProjectBuilder
         {
             throw new InvalidOperationException(
                 $"{ImportLog.FileName} targets project '{itemLog.ProjectId}', but that fixture project was not found.");
-        }
-
-        var beforeWriteInvoked = false;
-        async Task InvokeBeforeWriteOnceAsync(CancellationToken token)
-        {
-            if (beforeWriteInvoked)
-            {
-                return;
-            }
-
-            await (BeforeWriteAsync?.Invoke(token) ?? Task.CompletedTask).ConfigureAwait(false);
-            beforeWriteInvoked = true;
         }
 
         if (RequireNewResources && itemLog is not null)
@@ -184,6 +201,7 @@ public sealed class FixtureProjectBuilder
                 {
                     OnProgress = OnProgress,
                     OperationLogDirectory = operationDirectory,
+                    ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
                 };
                 var projectReservedByThisCall = false;
                 reserveProjectAsync = async token =>
@@ -298,6 +316,7 @@ public sealed class FixtureProjectBuilder
             var projectImporter = new ProjectImporter(_graphQl)
             {
                 OnProgress = OnProgress,
+                ConfirmedPendingProjectDeletionId = ConfirmedPendingProjectDeletionId,
                 OnConflict = RequireNewResources || existing is not null
                     ? ConflictAction.Update
                     : ConflictAction.Fail,
@@ -871,7 +890,14 @@ public sealed class FixtureProjectBuilder
                 project => string.Equals(project.Id, claimedProjectId, StringComparison.Ordinal));
             if (claimed is not null)
             {
-                RejectUnownedDuplicateProjects(matches, claimed, title, organization, requireNewResources);
+                // The strict reservation step owns compensation for an interrupted reservation. Rejecting the
+                // duplicate here would make its exact-ID authorized cleanup unreachable; deferring keeps repository
+                // validation and the pre-write callback ahead of that cleanup, and the reservation always fails closed.
+                if (!IsInterruptedStrictReservation(projectLog, itemLog, organization, title, requireNewResources))
+                {
+                    RejectUnownedDuplicateProjects(matches, claimed, title, organization, requireNewResources);
+                }
+
                 return (claimed, true);
             }
 
@@ -899,6 +925,20 @@ public sealed class FixtureProjectBuilder
 
         return (matches.Count > 0 ? matches[0] : null, false);
     }
+
+    private static bool IsInterruptedStrictReservation(
+        ProjectImportLog projectLog,
+        ImportLog? itemLog,
+        string organization,
+        string title,
+        bool requireNewResources)
+        => requireNewResources
+            && itemLog is null
+            && projectLog.CreatedProjectId is not null
+            && projectLog.PendingProjectDeletionId is null
+            && projectLog.PendingProject is { } pending
+            && string.Equals(pending.OwnerLogin, organization, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(pending.Title, title, StringComparison.Ordinal);
 
     private static void RejectUnownedDuplicateProjects(
         IReadOnlyList<ProjectRef> matches,

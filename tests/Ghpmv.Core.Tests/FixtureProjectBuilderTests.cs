@@ -1118,6 +1118,248 @@ public class FixtureProjectBuilderTests
     }
 
     [Fact]
+    public async Task Confirmed_pending_project_deletion_is_resolved_before_fixture_project_selection()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-pending-delete-confirmed-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_old",
+                PendingProjectDeletionId = "PVT_old",
+            }.SaveAsync(operationDirectory, cancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse("""{"data":{"node":{"id":"PVT_old"}}}"""),
+                JsonResponse("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_old"}}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""));
+            using var restHandler = new RecordingHandler(JsonResponse("""{"id":1,"name":"fixture"}"""));
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var beforeWriteCalls = 0;
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = true,
+                ConfirmedPendingProjectDeletionId = "PVT_old",
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", cancellationToken));
+
+            Assert.Equal("Fixture repository 'example/fixture' already exists.", exception.Message);
+            Assert.Equal(1, beforeWriteCalls);
+            Assert.Contains("deleteProjectV2(", graphQlHandler.RequestBodies[1], StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                graphQlHandler.RequestBodies.Skip(2),
+                body => body.Contains("PVT_old", StringComparison.Ordinal));
+            var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken);
+            Assert.Null(projectLog.CreatedProjectId);
+            Assert.Null(projectLog.PendingProjectDeletionId);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Confirmed_pending_project_deletion_precedes_same_title_conflict_checks()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-pending-delete-conflict-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_old",
+                PendingProjectDeletionId = "PVT_old",
+            }.SaveAsync(operationDirectory, cancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse("""{"data":{"node":{"id":"PVT_old"}}}"""),
+                JsonResponse("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_old"}}}}"""),
+                JsonResponse(
+                    """
+                    {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_other","number":2,"title":"Fixture","url":"https://github.com/orgs/example/projects/2"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                    """));
+            using var restHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = true,
+                ConfirmedPendingProjectDeletionId = "PVT_old",
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", cancellationToken));
+
+            Assert.Equal("Fixture project 'Fixture' already exists in organization 'example'.", exception.Message);
+            Assert.Single(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("deleteProjectV2(", StringComparison.Ordinal) && body.Contains("PVT_old", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("mutation", StringComparison.Ordinal) && body.Contains("PVT_other", StringComparison.Ordinal));
+            Assert.Empty(restHandler.RequestMethods);
+            var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken);
+            Assert.Null(projectLog.CreatedProjectId);
+            Assert.Null(projectLog.PendingProjectDeletionId);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Unconfirmed_pending_project_deletion_blocks_fixture_setup_before_writes()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-pending-delete-blocked-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_old",
+                PendingProjectDeletionId = "PVT_old",
+            }.SaveAsync(operationDirectory, cancellationToken);
+            using var graphQlHandler = new RecordingHandler(
+                JsonResponse("""{"data":{"node":{"id":"PVT_old"}}}"""));
+            using var restHandler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var beforeWriteCalls = 0;
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = true,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", cancellationToken));
+
+            Assert.Contains("--confirm-delete-pending-project PVT_old", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(0, beforeWriteCalls);
+            Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+            Assert.Empty(restHandler.RequestMethods);
+            var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken);
+            Assert.Equal("PVT_old", projectLog.CreatedProjectId);
+            Assert.Equal("PVT_old", projectLog.PendingProjectDeletionId);
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Interrupted_fixture_reservation_with_duplicate_reaches_authorized_compensation(bool confirmed)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-interrupted-reservation-").FullName;
+        try
+        {
+            var operationDirectory = GetOperationDirectory(logRoot, "example", "Fixture", "fixture");
+            await new ProjectImportLog
+            {
+                CreatedProjectId = "PVT_created",
+                PendingProject = new PendingProjectOperation
+                {
+                    OperationId = "interrupted-reservation",
+                    OwnerLogin = "example",
+                    Title = "Fixture",
+                    ExistingProjectIds = [],
+                },
+            }.SaveAsync(operationDirectory, cancellationToken);
+            const string duplicateMatches =
+                """
+                {"data":{"organization":{"projectsV2":{"nodes":[{"id":"PVT_other","number":2,"title":"Fixture","url":"https://github.com/orgs/example/projects/2"},{"id":"PVT_created","number":1,"title":"Fixture","url":"https://github.com/orgs/example/projects/1"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+                """;
+            List<object> graphQlResponses =
+            [
+                JsonResponse(duplicateMatches),
+                JsonResponse("""{"data":{"viewer":{"login":"octocat"}}}"""),
+                JsonResponse(duplicateMatches),
+            ];
+            if (confirmed)
+            {
+                graphQlResponses.Add(JsonResponse("""{"data":{"deleteProjectV2":{"projectV2":{"id":"PVT_created"}}}}"""));
+            }
+
+            using var graphQlHandler = new RecordingHandler([.. graphQlResponses]);
+            using var restHandler = new RecordingHandler(NotFoundResponse());
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, graphQlHandler, (_, _) => Task.CompletedTask);
+            using var rest = new GitHubRestClient("token", baseUri: null, restHandler);
+            var beforeWriteCalls = 0;
+            var builder = new FixtureProjectBuilder(graphQl, rest)
+            {
+                OperationLogDirectory = logRoot,
+                RequireNewResources = true,
+                ConfirmedPendingProjectDeletionId = confirmed ? "PVT_created" : null,
+                BeforeWriteAsync = _ =>
+                {
+                    beforeWriteCalls++;
+                    return Task.CompletedTask;
+                },
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                builder.CreateAsync("example", "Fixture", "fixture", cancellationToken));
+
+            Assert.DoesNotContain("Fixture project 'Fixture' has an unrelated", exception.Message, StringComparison.Ordinal);
+            Assert.Equal(1, beforeWriteCalls);
+            Assert.Equal([HttpMethod.Get], restHandler.RequestMethods);
+            Assert.DoesNotContain(
+                graphQlHandler.RequestBodies,
+                body => body.Contains("mutation", StringComparison.Ordinal) && body.Contains("PVT_other", StringComparison.Ordinal));
+            var projectLog = await ProjectImportLog.LoadAsync(operationDirectory, cancellationToken);
+            Assert.Null(projectLog.PendingProjectDeletionId);
+            if (confirmed)
+            {
+                Assert.Contains("The Project created by this operation was removed.", exception.Message, StringComparison.Ordinal);
+                Assert.Equal(4, graphQlHandler.RequestBodies.Count);
+                Assert.Contains("deleteProjectV2(", graphQlHandler.RequestBodies[3], StringComparison.Ordinal);
+                Assert.Contains("PVT_created", graphQlHandler.RequestBodies[3], StringComparison.Ordinal);
+                Assert.Null(projectLog.CreatedProjectId);
+                Assert.Null(projectLog.PendingProject);
+            }
+            else
+            {
+                Assert.Contains("--confirm-delete-pending-project PVT_created", exception.Message, StringComparison.Ordinal);
+                Assert.Equal(3, graphQlHandler.RequestBodies.Count);
+                Assert.DoesNotContain(graphQlHandler.RequestBodies, body => body.Contains("mutation", StringComparison.Ordinal));
+                Assert.Equal("PVT_created", projectLog.CreatedProjectId);
+                Assert.NotNull(projectLog.PendingProject);
+            }
+        }
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Require_new_resources_rejects_existing_repository_without_mutations()
     {
         using var graphQlHandler = new RecordingHandler(
@@ -1289,6 +1531,7 @@ public class FixtureProjectBuilderTests
             var importer = new ProjectImporter(graphQl)
             {
                 OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = "PVT_1",
             };
 
             await importer.ReleaseReservedProjectAsync(TestContext.Current.CancellationToken);
@@ -1412,6 +1655,7 @@ public class FixtureProjectBuilderTests
             var importer = new ProjectImporter(graphQl)
             {
                 OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = "PVT_1",
             };
 
             await Assert.ThrowsAsync<GitHubGraphQLException>(() =>
@@ -1426,6 +1670,41 @@ public class FixtureProjectBuilderTests
             Assert.DoesNotContain(
                 graphQlHandler.RequestBodies,
                 body => body.Contains("node(id:", StringComparison.Ordinal));
+        }
+
+        finally
+        {
+            Directory.Delete(logRoot, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("PVT_other")]
+    public async Task Recorded_project_release_requires_exact_confirmation_before_recording_deletion(string? confirmedId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var logRoot = Directory.CreateTempSubdirectory("ghpmv-fixture-untrusted-release-").FullName;
+        try
+        {
+            await new ProjectImportLog { CreatedProjectId = "PVT_1" }
+                .SaveAsync(logRoot, cancellationToken);
+            using var handler = new RecordingHandler();
+            using var graphQl = new GitHubGraphQLClient("token", baseUrl: null, handler, (_, _) => Task.CompletedTask);
+            var importer = new ProjectImporter(graphQl)
+            {
+                OperationLogDirectory = logRoot,
+                ConfirmedPendingProjectDeletionId = confirmedId,
+            };
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                importer.ReleaseReservedProjectAsync(cancellationToken));
+
+            Assert.Contains("--confirm-delete-pending-project PVT_1", exception.Message, StringComparison.Ordinal);
+            Assert.Empty(handler.RequestBodies);
+            var log = await ProjectImportLog.LoadAsync(logRoot, cancellationToken);
+            Assert.Equal("PVT_1", log.CreatedProjectId);
+            Assert.Null(log.PendingProjectDeletionId);
         }
         finally
         {

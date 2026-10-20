@@ -109,6 +109,8 @@ branch ruleset が要求する既存 check 名は維持します。非該当の 
 
 Live API integration suite はテストを直列実行し、`--stop-on-fail on` で最初の失敗後に残りのテストを開始しません。失敗したテストの `finally` による disposable resource の後片付けと TRX 出力は完了させ、失敗結果の artifact upload と原因の報告も維持します。プロセスの強制終了や workflow 全体のキャンセルではありません。失敗が確定した後も残りのテストの API 操作や polling timeout を待ち続けることを避けます。
 
+Integration job は通常15分前後で完了しますが、item の反映待ち（最大5分）や rate limit の待機で延びることがあるため、job の `timeout-minutes` を30分にしています。`dotnet test` には `--timeout 25m` を指定し、job がキャンセルされる前にテストを打ち切ります。打ち切られた場合は終了コード3で失敗し、途中までの TRX に実行中だったテストが失敗として記録されるため、通常の失敗と同じく artifact upload と原因の報告を行います。ただし、実行中だったテストの後片付けは完了しない場合があります。`--output Detailed` で各テストの完了と所要時間をログへ逐次出力し、TRX は成否にかかわらず artifact として7日間保存します。各 run の Step Summary には、TRX から集計したテスト数、所要時間の合計、所要時間の長い上位10件を出力します。
+
 Item を作成した直後の読取テストは、mutation の返却 ID または `resume-state.db` からロードした target ID がすべて `items` connection に現れることを `ProjectItemReadiness` で確認してから export / verify します。GraphQL の直接 ID lookup では120件が存在するのに一覧の `totalCount`・nodes が72件しかなく、REST 一覧や preview 無効化でも同じ欠落があることを実 API で確認しています。一覧件数だけでは準備完了を判定できません。各 polling は先頭から全ページを読み直し、一回の観測で全 ID が揃うことを要求します。archived item も対象に含め、異なる観測の部分結果を合成しません。5秒間隔・最大5分で打ち切り、未反映件数と経過時間を記録します。この準備待ちはテストの assertion や製品の export / import 動作を変更しません。
 
 `ResumeStateStoreTests` は旧 JSON の一括移行、破損 DB の fail-closed、busy timeout、rollback と hot journal 復旧、キャンセル、操作全体の排他、旧 JSON / `.bak` のロックからの独立性を検証します。レポートは同じ確定済み DB revision から JSON / HTML を別々に出力し、出力失敗が DB commit や元の例外を取り消さないこと、JSON がなくても CLI で DB から HTML を生成できることを確認します。
