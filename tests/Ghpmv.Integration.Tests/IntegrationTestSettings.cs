@@ -25,10 +25,11 @@ internal static class IntegrationTestSettings
     public static int FixtureProjectNumber => E2eTestEnvironment.IntegrationProjectNumber;
 
     public static GitHubGraphQLClient CreateClient(string token)
-        => new(token, GitHubGraphQLClient.NormalizeBaseUrl(E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri));
+        => CreateClient(token, new HttpClientHandler());
 
     public static GitHubGraphQLClient CreateClient(string token, HttpMessageHandler handler)
-        => new(token, GitHubGraphQLClient.NormalizeBaseUrl(E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri), handler, delayAsync: null);
+        => IntegrationApiTrace.CreateClient(
+            token, GitHubGraphQLClient.NormalizeBaseUrl(E2eTestEnvironment.IntegrationApiBaseUrl.AbsoluteUri), handler);
 
     public static GitHubRestClient CreateRestClient(string token)
     {

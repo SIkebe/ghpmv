@@ -257,6 +257,113 @@ public class GitHubGraphQLClientTests
     }
 
     [Fact]
+    public async Task QueryPaginatedAsync_accepts_empty_nodes_and_continues_when_more_pages_exist()
+    {
+        const string page1 = """{"data":{"items":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"CURSOR-1"}}}}""";
+        const string page2 = """{"data":{"items":{"nodes":[{"id":"item-1"}],"pageInfo":{"hasNextPage":true,"endCursor":"CURSOR-2"}}}}""";
+        const string page3 = """{"data":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}""";
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, page1),
+            JsonResponse(HttpStatusCode.OK, page2),
+            JsonResponse(HttpStatusCode.OK, page3));
+        using var client = CreateClient(handler, []);
+
+        var ids = new List<string?>();
+        await foreach (var node in client.QueryPaginatedAsync(
+            "query($after: String) { items(after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+            variables: null,
+            "items",
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            ids.Add(node.GetProperty("id").GetString());
+        }
+
+        Assert.Equal(["item-1"], ids);
+        Assert.Equal(3, handler.RequestBodies.Count);
+        using var last = JsonDocument.Parse(handler.RequestBodies[2]);
+        Assert.Equal("CURSOR-2", last.RootElement.GetProperty("variables").GetProperty("after").GetString());
+    }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    [InlineData("null", false)]
+    [InlineData("null", true)]
+    [InlineData("{}", false)]
+    [InlineData("{}", true)]
+    [InlineData("\"invalid\"", false)]
+    [InlineData("\"invalid\"", true)]
+    [InlineData("1", false)]
+    [InlineData("1", true)]
+    [InlineData("true", false)]
+    [InlineData("true", true)]
+    public async Task QueryPaginatedAsync_rejects_invalid_nodes_without_returning_partial_success(
+        string? nodesJson, bool afterValidPage)
+    {
+        var nodesProperty = nodesJson is null ? "" : $"\"nodes\":{nodesJson},";
+        var invalidPage = $$"""
+            {
+              "data": {
+                "items": {
+                  {{nodesProperty}}
+                  "pageInfo": {"hasNextPage":false,"endCursor":null}
+                }
+              }
+            }
+            """;
+        using var handler = afterValidPage
+            ? new StubHandler(
+                JsonResponse(HttpStatusCode.OK, """{"data":{"items":{"nodes":[{"id":"item-1"}],"pageInfo":{"hasNextPage":true,"endCursor":"CURSOR-1"}}}}"""),
+                JsonResponse(HttpStatusCode.OK, invalidPage))
+            : new StubHandler(JsonResponse(HttpStatusCode.OK, invalidPage));
+        using var client = CreateClient(handler, []);
+        var ids = new List<string?>();
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(async () =>
+        {
+            await foreach (var node in client.QueryPaginatedAsync(
+                "query($after: String) { items(after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+                variables: null,
+                "items",
+                cancellationToken: TestContext.Current.CancellationToken))
+            {
+                ids.Add(node.GetProperty("id").GetString());
+            }
+        });
+
+        Assert.Contains("Connection 'items'", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("'nodes' array", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(afterValidPage ? 1 : 0, ids.Count);
+        Assert.Equal(afterValidPage ? 2 : 1, handler.RequestBodies.Count);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("\"invalid\"")]
+    public async Task QueryPaginatedAsync_rejects_non_object_connections(string connectionJson)
+    {
+        using var handler = new StubHandler(
+            JsonResponse(HttpStatusCode.OK, $$"""{"data":{"items": {{connectionJson}} } }"""));
+        using var client = CreateClient(handler, []);
+
+        var exception = await Assert.ThrowsAsync<GitHubGraphQLException>(async () =>
+        {
+            await foreach (var _ in client.QueryPaginatedAsync(
+                "query($after: String) { items(after: $after) { nodes { id } pageInfo { hasNextPage endCursor } } }",
+                variables: null,
+                "items",
+                cancellationToken: TestContext.Current.CancellationToken))
+            {
+                Assert.Fail("An invalid connection must not yield nodes.");
+            }
+        });
+
+        Assert.Contains("Connection 'items'", exception.Message, StringComparison.Ordinal);
+        Assert.Single(handler.RequestBodies);
+    }
+
+    [Fact]
     public async Task Primary_rate_limit_exhaustion_waits_until_reset()
     {
         var reset = DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeSeconds();

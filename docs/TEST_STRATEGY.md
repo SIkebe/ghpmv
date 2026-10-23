@@ -24,6 +24,8 @@
 
 `IssueFieldLifecycleIntegrationTests` は共有 fixture の既存 field を再利用せず、毎回一意な organization Issue Field を作成します。これにより `createIssueField` の初回作成経路を必ず通し、Project への link、read-back、update、delete まで確認します。
 
+`GitHubGraphQLClientTests` は pagination の各ページに `nodes` 配列が必要であることを検証します。空配列は正常な0件として扱い、後続ページがあれば継続します。一方、`nodes` の欠落・null・配列以外、および connection が object でない場合は `GitHubGraphQLException` とし、途中ページでも不完全な結果を正常終了として返しません。GraphQL schema が null を許容する場合も、この全件列挙メソッドでは取得完了を確認できないため、空配列とは区別します。
+
 ## ローカル実行
 
 まず、認証情報がなくても実行できる deterministic suite を回します。実 API 統合テストと browser E2E は、それぞれ必要な環境を用意したうえで別に実行します。
@@ -112,6 +114,8 @@ Live API integration suite はテストを直列実行し、`--stop-on-fail on` 
 Integration job は通常15分前後で完了しますが、item の反映待ち（最大5分）や rate limit の待機で延びることがあるため、job の `timeout-minutes` を30分にしています。`dotnet test` には `--timeout 25m` を指定し、job がキャンセルされる前にテストを打ち切ります。打ち切られた場合は終了コード3で失敗し、途中までの TRX に実行中だったテストが失敗として記録されるため、通常の失敗と同じく artifact upload と原因の報告を行います。ただし、実行中だったテストの後片付けは完了しない場合があります。`--output Detailed` で各テストの完了と所要時間をログへ逐次出力し、TRX は成否にかかわらず artifact として7日間保存します。各 run の Step Summary には、TRX から集計したテスト数、所要時間の合計、所要時間の長い上位10件を出力します。
 
 Item を作成した直後の読取テストは、mutation の返却 ID または `resume-state.db` からロードした target ID がすべて `items` connection に現れることを `ProjectItemReadiness` で確認してから export / verify します。GraphQL の直接 ID lookup では120件が存在するのに一覧の `totalCount`・nodes が72件しかなく、REST 一覧や preview 無効化でも同じ欠落があることを実 API で確認しています。一覧件数だけでは準備完了を判定できません。各 polling は先頭から全ページを読み直し、一回の観測で全 ID が揃うことを要求します。archived item も対象に含め、異なる観測の部分結果を合成しません。5秒間隔・最大5分で打ち切り、未反映件数と経過時間を記録します。この準備待ちはテストの assertion や製品の export / import 動作を変更しません。
+
+Item の準備待ちでは project ID と各 polling の件数に加え、直近最大5件の HTTP 応答メタデータ（UTC 開始時刻、所要時間、API host、HTTP status、server date、rate-limit remaining/reset、Retry-After）を記録します。待機開始前の直近の作成応答も含み、各出力後にバッファを消去します。タイムアウト時だけ、共有の最大15秒の追加予算で read-only probe を行います。Project の存在・number・closed・viewerCanUpdate、archive 状態を指定した一覧と既定の一覧それぞれの totalCount・先頭最大5件の ID・pageInfo、および未反映 ID 最大5件の直接 lookup（null、型、archive 状態、所属 project ID）を記録します。直接 lookup だけが成功すれば一覧側の反映不整合、異なる project ID や archive 指定による差があれば対象・filter の問題を調べられます。ただし、一回の観測で GitHub 内部の根本原因までは断定できません。probe の失敗やキャンセルでも元の timeout を保持し、成功への読み替えや追加の書き込みは行いません。token、認証 header、リクエスト本文、タイトルや本文、raw response、GitHub request ID は出力せず、既存の Actions ログと TRX artifact から確認できます。
 
 `ResumeStateStoreTests` は旧 JSON の一括移行、破損 DB の fail-closed、busy timeout、rollback と hot journal 復旧、キャンセル、操作全体の排他、旧 JSON / `.bak` のロックからの独立性を検証します。レポートは同じ確定済み DB revision から JSON / HTML を別々に出力し、出力失敗が DB commit や元の例外を取り消さないこと、JSON がなくても CLI で DB から HTML を生成できることを確認します。
 
