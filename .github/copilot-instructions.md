@@ -85,3 +85,4 @@ dotnet artifacts/fdd/ghpmv.dll --version
 - Real-API and browser tests use `Assert.SkipWhen` when credentials/state are unavailable and clean up any created GitHub resources in `finally`. Pass `TestContext.Current.CancellationToken` through async test operations.
 - Package versions belong in `Directory.Packages.props`, not individual project files. The build enables nullable reference types, latest recommended analyzers, invariant globalization, and warnings as errors.
 - Commit messages must explain why the change was necessary, not only describe what changed.
+- Write pull request descriptions in English, even when the conversation is in Japanese.
