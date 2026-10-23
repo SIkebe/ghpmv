@@ -54,14 +54,163 @@ public class ProjectItemReadinessTests
     [Fact]
     public async Task Equal_count_with_wrong_ids_times_out_instead_of_claiming_readiness()
     {
-        using var handler = new Handler(Page(["one", "unexpected"]));
+        using var handler = new Handler(
+            Page(["one", "unexpected"]),
+            """{"data":{"node":null}}""",
+            """{"data":{"nodes":[null]}}""");
         using var client = IntegrationTestSettings.CreateClient("test-token", handler);
 
         var exception = await Assert.ThrowsAsync<TimeoutException>(() => ProjectItemReadiness.WaitAsync(
             client, "project", ["one", "two"], TestContext.Current.CancellationToken, timeout: TimeSpan.Zero));
 
         Assert.Contains("omits 1 of 2 mutation-confirmed items", exception.Message, StringComparison.Ordinal);
-        Assert.Single(handler.Bodies);
+        Assert.Equal(3, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task Timeout_logs_safe_project_connections_and_direct_lookup_with_request_metadata()
+    {
+        using var handler = new Handler(
+            Page([]),
+            """
+            {"data":{"node":{"__typename":"ProjectV2","id":"project","number":42,"closed":false,"viewerCanUpdate":true,
+              "includingArchived":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+              "defaultItems":{"totalCount":1,"nodes":[{"id":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor"}},
+              "title":"PRIVATE-PROJECT-TITLE"}}}
+            """,
+            """
+            {"data":{"nodes":[{"__typename":"ProjectV2Item","id":"one","isArchived":false,"project":{"id":"project"},
+              "content":{"title":"PRIVATE-DRAFT-TITLE"}},null]}}
+            """);
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+
+        await Assert.ThrowsAsync<TimeoutException>(() => ProjectItemReadiness.WaitAsync(
+            client, "project", ["one", "two"], TestContext.Current.CancellationToken,
+            timeout: TimeSpan.Zero, writeDiagnostic: output.Add));
+
+        var log = string.Join("\n", output);
+        Assert.Contains("projectId=project", log, StringComparison.Ordinal);
+        Assert.Contains("missingIdSample=[\"one\",\"two\"]", log, StringComparison.Ordinal);
+        Assert.Contains("\"includingArchived\":{\"totalCount\":0", log, StringComparison.Ordinal);
+        Assert.Contains("\"defaultItems\":{\"totalCount\":1", log, StringComparison.Ordinal);
+        Assert.Contains("\"hasNextPage\":true,\"endCursor\":\"cursor\"", log, StringComparison.Ordinal);
+        Assert.Contains("\"isArchived\":false,\"projectId\":\"project\"},null]", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("requestId", log, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("request-", log, StringComparison.Ordinal);
+        Assert.Contains("\"status\":200", log, StringComparison.Ordinal);
+        Assert.Contains("\"rateLimitRemaining\":\"4999\"", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE", log, StringComparison.Ordinal);
+        using var probe = JsonDocument.Parse(handler.Bodies[2]);
+        Assert.Equal(2, probe.RootElement.GetProperty("variables").GetProperty("ids").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Timeout_bounds_missing_id_samples_and_probe_requests()
+    {
+        var ids = Enumerable.Range(1, 120).Select(index => $"item-{index}").ToArray();
+        using var handler = new Handler(
+            Page([]), """{"data":{"node":null}}""", """{"data":{"nodes":[null,null,null,null,null]}}""");
+        using var client = IntegrationTestSettings.CreateClient("test-token", handler);
+        List<string> output = [];
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => ProjectItemReadiness.WaitAsync(
+            client, "project", ids, TestContext.Current.CancellationToken,
+            timeout: TimeSpan.Zero, writeDiagnostic: output.Add));
+
+        Assert.Contains("omits 120 of 120", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(3, handler.Bodies.Count);
+        using var probe = JsonDocument.Parse(handler.Bodies[2]);
+        Assert.Equal(5, probe.RootElement.GetProperty("variables").GetProperty("ids").GetArrayLength());
+        Assert.Contains(output, line => line.EndsWith("(project-connections): null", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"PRIVATE-ERROR"}]}""")]
+    [InlineData("""{"data":{"node":{}}}""")]
+    public async Task Probe_failures_do_not_mask_timeout_or_prevent_the_other_probe(string response)
+    {
+        using var handler = new Handler(Page([]), response, """{"data":{"nodes":[null]}}""");
+        using var client = IntegrationTestSettings.CreateClient("test-token", handler);
+        List<string> output = [];
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => ProjectItemReadiness.WaitAsync(
+            client, "project", ["one"], TestContext.Current.CancellationToken,
+            timeout: TimeSpan.Zero, writeDiagnostic: output.Add));
+
+        Assert.Contains("omits 1 of 1", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(output, line => line.Contains("preserving the original readiness timeout", StringComparison.Ordinal));
+        Assert.Contains(output, line => line.Contains("(missing-item-nodes): [null]", StringComparison.Ordinal));
+        Assert.DoesNotContain("PRIVATE", string.Join("\n", output), StringComparison.Ordinal);
+        Assert.DoesNotContain("requestId", string.Join("\n", output), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("request-", string.Join("\n", output), StringComparison.Ordinal);
+        Assert.Equal(3, handler.Bodies.Count);
+    }
+
+    [Fact]
+    public async Task Api_trace_retains_only_five_recent_requests_and_never_payloads()
+    {
+        using var handler = new Handler(Enumerable.Repeat("""{"data":{"secret":"PRIVATE-RESPONSE"}}""", 8).ToArray());
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+        for (var index = 0; index < 8; index++)
+        {
+            await client.QueryAsync("query { secret }", new { secret = "PRIVATE-REQUEST" }, TestContext.Current.CancellationToken);
+        }
+
+        IntegrationApiTrace.WriteRecentRequests(client, "test", output.Add);
+        IntegrationApiTrace.WriteRecentRequests(client, "drained", output.Add);
+
+        Assert.Equal(5, output.Count);
+        Assert.Contains("\"sequence\":4", output[0], StringComparison.Ordinal);
+        Assert.Contains("\"sequence\":8", output[^1], StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE", string.Join("\n", output), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Readiness_logs_preceding_creation_request_without_adding_probes_on_success()
+    {
+        using var handler = new Handler("""{"data":{"created":{"id":"one"}}}""", Page(["one"]));
+        using var client = IntegrationTestSettings.CreateClient("test-token", handler);
+        List<string> output = [];
+        await client.QueryAsync("mutation { create }", cancellationToken: TestContext.Current.CancellationToken);
+
+        await ProjectItemReadiness.WaitAsync(
+            client, "project", ["one"], TestContext.Current.CancellationToken, writeDiagnostic: output.Add);
+
+        Assert.Contains(output, line => line.StartsWith("Project item API trace (before-poll):", StringComparison.Ordinal)
+            && line.Contains("\"sequence\":1", StringComparison.Ordinal));
+        Assert.Contains(output, line => line.StartsWith("Project item API trace (poll):", StringComparison.Ordinal)
+            && line.Contains("\"sequence\":2", StringComparison.Ordinal));
+        Assert.Equal(2, handler.Bodies.Count);
+        Assert.DoesNotContain(output, line => line.Contains("probe", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Cancellation_during_diagnostics_preserves_timeout_and_stops_sending_requests()
+    {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        using var handler = new Handler(Page([]), """{"data":{"node":null}}""")
+        {
+            OnRequest = count =>
+            {
+                if (count == 2)
+                {
+                    cancellation.Cancel();
+                    cancellation.Token.ThrowIfCancellationRequested();
+                }
+            },
+        };
+        using var client = IntegrationTestSettings.CreateClient("test-token", handler);
+        List<string> output = [];
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => ProjectItemReadiness.WaitAsync(
+            client, "project", ["one"], cancellation.Token, timeout: TimeSpan.Zero, writeDiagnostic: output.Add));
+
+        Assert.Contains("omits 1 of 1", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(2, handler.Bodies.Count);
+        Assert.Equal(2, output.Count(line => line.Contains("preserving the original readiness timeout", StringComparison.Ordinal)));
+        Assert.Contains(output, line => line.Contains("\"status\":null", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -110,6 +259,76 @@ public class ProjectItemReadinessTests
         Assert.Empty(handler.Bodies);
     }
 
+    [Fact]
+    public async Task Pagination_failure_comparison_logs_only_validated_ids_and_bounded_connection_windows()
+    {
+        var connection = new
+        {
+            totalCount = 1,
+            nodes = new[] { new { id = "two", title = "PRIVATE-TITLE" } },
+            pageInfo = new { hasNextPage = false, hasPreviousPage = false },
+        };
+        using var handler = new Handler(JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                organization = new { projectV2 = new { id = "project", items = connection } },
+                node = new { id = "project", forward = connection, reverse = connection },
+                nodes = new object?[]
+                {
+                    new
+                    {
+                        __typename = "ProjectV2Item", id = "one", isArchived = false,
+                        project = new { id = "project" }, content = new { __typename = "DraftIssue", title = "PRIVATE-TITLE" },
+                    },
+                    new
+                    {
+                        __typename = "ProjectV2Item", id = "two", isArchived = false,
+                        project = new { id = "another-project" }, content = new { __typename = "DraftIssue" },
+                    },
+                    null,
+                },
+            },
+        }));
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+
+        await ProjectPaginationFailureProbe.WriteAsync(
+            client, "organization", 42, "project", ["one", "two", "three"],
+            TestContext.Current.CancellationToken, output.Add);
+
+        var log = string.Join("\n", output);
+        Assert.Contains("\"directReturned\":3,\"confirmedUnarchivedDraftsInProject\":1,\"unconfirmedOrdinals\":[2,3]", log, StringComparison.Ordinal);
+        Assert.Contains("\"nodeProjectMatches\":true,\"organizationProjectMatches\":true", log, StringComparison.Ordinal);
+        Assert.Contains("\"creationOrdinals\":[2],\"hasNextPage\":false,\"hasPreviousPage\":false", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("requestId", log, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(handler.Bodies);
+        using var request = JsonDocument.Parse(handler.Bodies[0]);
+        var query = request.RootElement.GetProperty("query").GetString()!;
+        Assert.StartsWith("query(", query, StringComparison.Ordinal);
+        Assert.Contains("items(last: 100", query, StringComparison.Ordinal);
+        Assert.Equal(3, request.RootElement.GetProperty("variables").GetProperty("ids").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"PRIVATE-ERROR"}]}""")]
+    [InlineData("""{"data":{"node":null}}""")]
+    public async Task Pagination_failure_comparison_errors_do_not_escape_or_log_response_content(string response)
+    {
+        using var handler = new Handler(response);
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+
+        await ProjectPaginationFailureProbe.WriteAsync(
+            client, "organization", 42, "project", ["one"],
+            TestContext.Current.CancellationToken, output.Add);
+
+        Assert.Contains(output, line => line.Contains("preserving the readiness timeout", StringComparison.Ordinal));
+        Assert.DoesNotContain("PRIVATE", string.Join("\n", output), StringComparison.Ordinal);
+        Assert.Single(handler.Bodies);
+    }
+
     private static string Page(string[] ids, string? cursor = null) => JsonSerializer.Serialize(new
     {
         data = new
@@ -128,20 +347,25 @@ public class ProjectItemReadinessTests
     private sealed class Handler(params string[] responses) : HttpMessageHandler
     {
         public List<string> Bodies { get; } = [];
+        public Action<int>? OnRequest { get; init; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Bodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+            OnRequest?.Invoke(Bodies.Count);
             if (Bodies.Count > responses.Length)
             {
                 throw new InvalidOperationException(
                     $"Unexpected request #{Bodies.Count}; only {responses.Length} responses were configured.");
             }
 
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responses[Bodies.Count - 1], Encoding.UTF8, "application/json"),
             };
+            response.Headers.Add("X-GitHub-Request-Id", $"request-{Bodies.Count}");
+            response.Headers.Add("X-RateLimit-Remaining", "4999");
+            return response;
         }
     }
 }
