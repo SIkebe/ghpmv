@@ -259,6 +259,76 @@ public class ProjectItemReadinessTests
         Assert.Empty(handler.Bodies);
     }
 
+    [Fact]
+    public async Task Pagination_failure_comparison_logs_only_validated_ids_and_bounded_connection_windows()
+    {
+        var connection = new
+        {
+            totalCount = 1,
+            nodes = new[] { new { id = "two", title = "PRIVATE-TITLE" } },
+            pageInfo = new { hasNextPage = false, hasPreviousPage = false },
+        };
+        using var handler = new Handler(JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                organization = new { projectV2 = new { id = "project", items = connection } },
+                node = new { id = "project", forward = connection, reverse = connection },
+                nodes = new object?[]
+                {
+                    new
+                    {
+                        __typename = "ProjectV2Item", id = "one", isArchived = false,
+                        project = new { id = "project" }, content = new { __typename = "DraftIssue", title = "PRIVATE-TITLE" },
+                    },
+                    new
+                    {
+                        __typename = "ProjectV2Item", id = "two", isArchived = false,
+                        project = new { id = "another-project" }, content = new { __typename = "DraftIssue" },
+                    },
+                    null,
+                },
+            },
+        }));
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+
+        await ProjectPaginationFailureProbe.WriteAsync(
+            client, "organization", 42, "project", ["one", "two", "three"],
+            TestContext.Current.CancellationToken, output.Add);
+
+        var log = string.Join("\n", output);
+        Assert.Contains("\"directReturned\":3,\"confirmedUnarchivedDraftsInProject\":1,\"unconfirmedOrdinals\":[2,3]", log, StringComparison.Ordinal);
+        Assert.Contains("\"nodeProjectMatches\":true,\"organizationProjectMatches\":true", log, StringComparison.Ordinal);
+        Assert.Contains("\"creationOrdinals\":[2],\"hasNextPage\":false,\"hasPreviousPage\":false", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("PRIVATE", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("requestId", log, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(handler.Bodies);
+        using var request = JsonDocument.Parse(handler.Bodies[0]);
+        var query = request.RootElement.GetProperty("query").GetString()!;
+        Assert.StartsWith("query(", query, StringComparison.Ordinal);
+        Assert.Contains("items(last: 100", query, StringComparison.Ordinal);
+        Assert.Equal(3, request.RootElement.GetProperty("variables").GetProperty("ids").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData("""{"data":null,"errors":[{"type":"FORBIDDEN","message":"PRIVATE-ERROR"}]}""")]
+    [InlineData("""{"data":{"node":null}}""")]
+    public async Task Pagination_failure_comparison_errors_do_not_escape_or_log_response_content(string response)
+    {
+        using var handler = new Handler(response);
+        using var client = IntegrationTestSettings.CreateClient("PRIVATE-TOKEN", handler);
+        List<string> output = [];
+
+        await ProjectPaginationFailureProbe.WriteAsync(
+            client, "organization", 42, "project", ["one"],
+            TestContext.Current.CancellationToken, output.Add);
+
+        Assert.Contains(output, line => line.Contains("preserving the readiness timeout", StringComparison.Ordinal));
+        Assert.DoesNotContain("PRIVATE", string.Join("\n", output), StringComparison.Ordinal);
+        Assert.Single(handler.Bodies);
+    }
+
     private static string Page(string[] ids, string? cursor = null) => JsonSerializer.Serialize(new
     {
         data = new
