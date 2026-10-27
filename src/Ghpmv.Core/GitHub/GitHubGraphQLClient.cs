@@ -314,7 +314,8 @@ public sealed class GitHubGraphQLClient : IDisposable
     /// found at <paramref name="connectionPath"/> (dot-separated path inside "data",
     /// e.g. "organization.projectsV2"). The connection must select
     /// "nodes" and "pageInfo { hasNextPage endCursor }", and the query must declare a
-    /// cursor variable (default name "after").
+    /// cursor variable (default name "after"). Every page must contain a nodes array;
+    /// missing, null, or non-array nodes fail rather than silently returning incomplete results.
     /// </summary>
     public async IAsyncEnumerable<JsonElement> QueryPaginatedAsync(
         string query,
@@ -336,12 +337,17 @@ public sealed class GitHubGraphQLClient : IDisposable
             var data = await QueryAsync(query, variableMap, cancellationToken).ConfigureAwait(false);
 
             var connection = NavigatePath(data, connectionPath);
-            if (connection.TryGetProperty("nodes", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
+            if (connection.ValueKind != JsonValueKind.Object
+                || !connection.TryGetProperty("nodes", out var nodes)
+                || nodes.ValueKind != JsonValueKind.Array)
             {
-                foreach (var node in nodes.EnumerateArray())
-                {
-                    yield return node;
-                }
+                throw new GitHubGraphQLException(
+                    $"Connection '{connectionPath}' must contain a 'nodes' array; the response cannot be treated as a complete result.");
+            }
+
+            foreach (var node in nodes.EnumerateArray())
+            {
+                yield return node;
             }
 
             var pageInfo = connection.GetProperty("pageInfo");

@@ -67,10 +67,12 @@ public class GraphQLClientIntegrationTests
         var ownerId = orgData.GetProperty("organization").GetProperty("id").GetString()!;
 
         var title = $"ghpmv-test-{Guid.NewGuid():N}";
-        var createData = await client.QueryAsync(
-            "mutation($ownerId: ID!, $title: String!) { createProjectV2(input: {ownerId: $ownerId, title: $title}) { projectV2 { id number } } }",
+        var createData = await client.MutationAsync(
+            "createProjectV2",
+            "mutation($ownerId: ID!, $title: String!, $clientMutationId: String!) { createProjectV2(input: {ownerId: $ownerId, title: $title, clientMutationId: $clientMutationId}) { projectV2 { id number } } }",
             new { ownerId, title },
-            cancellationToken);
+            requiredResultPath: "projectV2.id",
+            cancellationToken: cancellationToken);
         var project = createData.GetProperty("createProjectV2").GetProperty("projectV2");
         var projectId = project.GetProperty("id").GetString()!;
         var projectNumber = project.GetProperty("number").GetInt32();
@@ -85,15 +87,27 @@ public class GraphQLClientIntegrationTests
             // Serial on purpose: parallel writes would trip the secondary rate limit.
             foreach (var draftTitle in createdTitles)
             {
-                var created = await client.QueryAsync(
-                    "mutation($projectId: ID!, $title: String!) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title}) { projectItem { id } } }",
+                var created = await client.MutationAsync(
+                    "addProjectV2DraftIssue",
+                    "mutation($projectId: ID!, $title: String!, $clientMutationId: String!) { addProjectV2DraftIssue(input: {projectId: $projectId, title: $title, clientMutationId: $clientMutationId}) { projectItem { id } } }",
                     new { projectId, title = draftTitle },
-                    cancellationToken);
+                    target: projectId,
+                    requiredResultPath: "projectItem.id",
+                    cancellationToken: cancellationToken);
                 createdIds.Add(created.GetProperty("addProjectV2DraftIssue").GetProperty("projectItem").GetProperty("id").GetString()!);
             }
 
             Assert.Equal(120, createdIds.Distinct(StringComparer.Ordinal).Count());
-            await ProjectItemReadiness.WaitAsync(client, projectId, createdIds, cancellationToken);
+            try
+            {
+                await ProjectItemReadiness.WaitAsync(client, projectId, createdIds, cancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                await ProjectPaginationFailureProbe.WriteAsync(
+                    client, Org, projectNumber, projectId, createdIds, cancellationToken);
+                throw;
+            }
 
             // The items connection is eventually consistent right after writes,
             // so poll until all 120 items are visible (up to ~75s).
