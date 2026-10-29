@@ -1,5 +1,5 @@
 module github.com/SIkebe/ghpmv/tools/ghalint
 
-go 1.26.2
+go 1.27.3
 
-require github.com/suzuki-shunsuke/ghalint v1.5.6
+require github.com/suzuki-shunsuke/ghalint v1.5.7
