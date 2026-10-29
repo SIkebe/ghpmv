@@ -151,7 +151,9 @@ jobs:
             $url = "https://docs.github.com/en/graphql/overview/changelog/$($date.Year)#schema-changes-for-$($entry.date)"
             $sourceId = Get-SourceId $url
             if ($changes.Count -gt 0 -and -not $reportedIds.Contains($sourceId) -and -not $reported.Contains($url)) {
-              $graphql.Add([ordered]@{ id = $sourceId; url = $url; date = [string]$entry.date; changes = $changes })
+              # Encode the fragment's first letter so gh-aw does not mistake it for a GitHub reference.
+              # Keep the canonical URL above for stable IDs and compatibility with earlier issues.
+              $graphql.Add([ordered]@{ id = $sourceId; url = $url.Replace('#schema-', '#%73chema-'); date = [string]$entry.date; changes = $changes })
             }
           }
 
@@ -241,6 +243,8 @@ changes affect `ghpmv` and to report them in one triage issue.
   - `changelog`: GitHub Changelog posts that may mention Projects, Issue Fields,
     Issue Types, sub-issues, GraphQL, roadmaps, or iterations.
   - `graphqlSchema`: GraphQL schema changelog dates with Project-related changes.
+    Their URL fragments percent-encode the first letter to preserve deep links
+    through safe-output reference filtering. Copy them without decoding.
   - `docsCommits`: `github/docs` commits that changed the Projects documentation,
     with truncated patches.
 - The checked-out `ghpmv` repository.
