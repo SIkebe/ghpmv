@@ -55,7 +55,7 @@ jobs:
               $extensions = $true
               continue
             }
-            if ($path.StartsWith('.github/workflows/') -or $path.StartsWith('.github/aw/') -or $path.StartsWith('tools/ghalint/') -or $path.StartsWith('tools/gh-aw/')) {
+            if ($path -eq '.gitattributes' -or $path.StartsWith('.github/workflows/') -or $path.StartsWith('.github/aw/') -or $path.StartsWith('tools/ghalint/') -or $path.StartsWith('tools/gh-aw/')) {
               $workflows = $true
               continue
             }
@@ -64,7 +64,7 @@ jobs:
               $path -eq 'examples/README.md' -or
               $path -eq '.github/copilot-instructions.md' -or
               $path -eq 'PLAN.md' -or
-              $path -match '^(\.gitattributes|\.gitignore|LICENSE(?:\..*)?|README(?:\..*)?)$'
+              $path -match '^(\.gitignore|LICENSE(?:\..*)?|README(?:\..*)?)$'
             ) {
               continue
             }

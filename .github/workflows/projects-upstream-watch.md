@@ -87,7 +87,7 @@ jobs:
           $issuesJson = gh api --paginate --slurp "repos/$env:REPOSITORY/issues?state=all&labels=$env:WATCH_LABEL&per_page=100"
           if ($LASTEXITCODE -ne 0) { throw 'Could not list earlier watcher issues.' }
           foreach ($issue in @($issuesJson | ConvertFrom-Json | ForEach-Object { $_ })) {
-            foreach ($match in [regex]::Matches([string]$issue.body, '(?i)\bSource ID:\s*(pw-[a-f0-9]{64})\b')) {
+            foreach ($match in [regex]::Matches([string]$issue.body, '(?i)\b(pw-[a-f0-9]{64})\b')) {
               [void]$reportedIds.Add($match.Groups[1].Value)
             }
             foreach ($match in [regex]::Matches([string]$issue.body, 'https://[^\s<>()\[\]"''`]+')) {
@@ -115,7 +115,7 @@ jobs:
               if ($published -lt $since) { $reachedWindowStart = $true; continue }
               $link = ([string]$item.link).Trim()
               $categories = @($item.category | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.InnerText } })
-              $description = Remove-Html ([string]$item.description) 1500
+              $description = Remove-Html ([string]$item.SelectSingleNode('description').InnerText) 1500
               $haystack = "$($item.title) $($categories -join ' ') $description"
               $sourceId = Get-SourceId $link
               if ($haystack -notmatch $relevantText -or $reportedIds.Contains($sourceId) -or $reported.Contains($link)) { continue }

@@ -52,6 +52,8 @@ gh extension install github/gh-aw --pin v1.0.1
 gh aw compile --purge
 ```
 
+Dependabot excludes generated `*.lock.yml` workflows from its `github-actions` scan and does not scan Markdown. Action pins authored in `.github/workflows/*.md` (including `actions/upload-artifact` and `actions/download-artifact`) are copied verbatim by the compiler; upgrading gh-aw does not refresh them. Review and update those full-SHA pins and their version comments manually in the Markdown source, then run `gh aw compile --purge` and regenerate `actions.lock` using the commands below.
+
 `projects-upstream-watch.md` runs weekly (and on manual dispatch) to triage upstream GitHub Projects changes into at most one `projects-upstream-watch` issue. A trusted pwsh step collects GitHub Changelog posts, GraphQL schema changelog entries, and `github/docs` Projects documentation commits, skips every source URL already cited by an earlier watcher issue, and skips the agent when nothing new remains. Later runs rely on those URLs, so keep the requirement that the issue cites every reviewed source. The Copilot engine needs the `COPILOT_GITHUB_TOKEN` repository secret (a fine-grained PAT with **Copilot Requests: Read**).
 
 Actions dependency lockfiles cover all workflows under `.github/workflows/`, with existing full-SHA references preserved. CI verifies the entire workflow directory with `github/gh-actions-lock` v0.2.0 through the existing workflow lint gate.
