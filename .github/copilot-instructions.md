@@ -49,7 +49,7 @@ GitHub Agentic Workflows are authored as `.github/workflows/*.md` and compiled w
 
 ```powershell
 gh extension install github/gh-aw --pin v1.0.1
-gh aw compile
+gh aw compile --purge
 ```
 
 `projects-upstream-watch.md` runs weekly (and on manual dispatch) to triage upstream GitHub Projects changes into at most one `projects-upstream-watch` issue. A trusted pwsh step collects GitHub Changelog posts, GraphQL schema changelog entries, and `github/docs` Projects documentation commits, skips every source URL already cited by an earlier watcher issue, and skips the agent when nothing new remains. Later runs rely on those URLs, so keep the requirement that the issue cites every reviewed source. The Copilot engine needs the `COPILOT_GITHUB_TOKEN` repository secret (a fine-grained PAT with **Copilot Requests: Read**).

@@ -157,7 +157,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh aw compile
+          gh aw compile --purge
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
