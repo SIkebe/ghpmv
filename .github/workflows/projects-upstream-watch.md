@@ -165,9 +165,10 @@ jobs:
             if ($docsCommits.Count -ge 30) { break }
             $sourceId = Get-SourceId ([string]$commit.html_url)
             if ($reportedIds.Contains($sourceId) -or $reported.Contains([string]$commit.html_url)) { continue }
-            $detail = gh api "repos/github/docs/commits/$($commit.sha)" | ConvertFrom-Json
+            $detailJson = gh api --paginate --slurp "repos/github/docs/commits/$($commit.sha)?per_page=100"
             if ($LASTEXITCODE -ne 0) { throw "Could not read github/docs commit $($commit.sha)." }
-            $files = @($detail.files | Where-Object { $_.filename.StartsWith("$docsPath/") } | Select-Object -First 8 | ForEach-Object {
+            $details = @($detailJson | ConvertFrom-Json)
+            $files = @($details | ForEach-Object { $_.files } | Where-Object { $_.filename.StartsWith("$docsPath/") } | Select-Object -First 8 | ForEach-Object {
               $patch = [string]$_.patch
               if ($patch.Length -gt 3000) { $patch = $patch.Substring(0, 3000) + "`n[truncated]" }
               [ordered]@{ path = $_.filename; status = $_.status; patch = $patch }
