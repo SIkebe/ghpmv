@@ -55,7 +55,7 @@ jobs:
               $extensions = $true
               continue
             }
-            if ($path.StartsWith('.github/workflows/') -or $path.StartsWith('tools/ghalint/')) {
+            if ($path.StartsWith('.github/workflows/') -or $path.StartsWith('.github/aw/') -or $path.StartsWith('tools/ghalint/') -or $path.StartsWith('tools/gh-aw/')) {
               $workflows = $true
               continue
             }
@@ -111,7 +111,61 @@ jobs:
           Join-Path (go env GOPATH) 'bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Run ghalint
         if: ${{ needs.changes.outputs.workflows == 'true' }}
-        run: ghalint run
+        run: |
+          # gh-aw lock files are compiler output whose workflow-level OTLP secrets and
+          # activation/conclusion jobs cannot satisfy non-disableable ghalint policies.
+          # The next steps verify that they match their reviewed Markdown sources instead.
+          $lintRoot = Join-Path $env:RUNNER_TEMP 'ghalint'
+          $lintWorkflows = Join-Path $lintRoot '.github/workflows'
+          New-Item -ItemType Directory -Path $lintWorkflows -Force | Out-Null
+          Get-ChildItem '.github/workflows' -File |
+            Where-Object { $_.Name -match '\.ya?ml$' -and $_.Name -notlike '*.lock.yml' } |
+            Copy-Item -Destination $lintWorkflows
+          Push-Location $lintRoot
+          try {
+            ghalint run
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+          finally {
+            Pop-Location
+          }
+      - name: Install gh-aw
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # gh-aw's own go.mod uses a replace directive, so `go install ...@version` is rejected.
+          # Install the release extension pinned to the version Dependabot tracks in go.mod.
+          $goModPath = 'tools/gh-aw/go.mod'
+          $versionLine = Get-Content $goModPath | Where-Object { $_ -match 'github\.com/github/gh-aw\s+v\d+\.\d+\.\d+' } | Select-Object -First 1
+          if (-not $versionLine) {
+            throw "Unable to resolve gh-aw version from $goModPath."
+          }
+          $version = [regex]::Match($versionLine, 'github\.com/github/gh-aw\s+(v\d+\.\d+\.\d+(?:[-+][^\s]+)?)').Groups[1].Value
+          gh extension install github/gh-aw --pin $version
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $installed = gh aw version
+          if ($installed -notmatch [regex]::Escape($version)) {
+            throw "Expected gh-aw $version but found: $installed"
+          }
+      - name: Verify agentic workflow lock files
+        if: ${{ needs.changes.outputs.workflows == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh aw compile
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $drift = @(git status --porcelain -- .github/workflows .github/aw .gitattributes)
+          if ($drift.Count -gt 0) {
+            $drift | ForEach-Object { Write-Output $_ }
+            throw 'Agentic workflow lock files are stale. Install the version pinned in tools/gh-aw/go.mod, run "gh aw compile", and commit the generated files.'
+          }
       - name: Install Actions lockfile verifier
         if: ${{ needs.changes.outputs.workflows == 'true' }}
         env:
