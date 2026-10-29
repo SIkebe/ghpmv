@@ -18,9 +18,9 @@ updates:
     directory: "/"
     schedule:
       interval: daily
-    # gh-aw lock files pin these actions; they are updated by recompiling with tools/gh-aw.
-    ignore:
-      - dependency-name: "github/gh-aw-actions/*"
+    # gh-aw lock files are compiler output; update their pins by recompiling with tools/gh-aw.
+    exclude-paths:
+      - ".github/workflows/*.lock.yml"
     groups:
       actions:
         patterns:
