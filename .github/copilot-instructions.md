@@ -41,7 +41,7 @@ dotnet test tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj -c Release --fi
 GitHub Actions workflows are linted with the version pinned in `tools/ghalint/go.mod`:
 
 ```powershell
-go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@v1.5.6
+go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@v1.5.7
 ghalint run
 ```
 
