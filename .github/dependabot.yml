@@ -18,6 +18,9 @@ updates:
     directory: "/"
     schedule:
       interval: daily
+    # gh-aw lock files are compiler output; update their pins by recompiling with tools/gh-aw.
+    exclude-paths:
+      - ".github/workflows/*.lock.yml"
     groups:
       actions:
         patterns:
@@ -25,5 +28,10 @@ updates:
 
   - package-ecosystem: gomod
     directory: "/tools/ghalint"
+    schedule:
+      interval: daily
+
+  - package-ecosystem: gomod
+    directory: "/tools/gh-aw"
     schedule:
       interval: daily

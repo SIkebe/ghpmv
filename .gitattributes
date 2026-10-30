@@ -13,3 +13,5 @@
 *.tar.gz binary
 *.nupkg binary
 *.snupkg binary
+
+.github/workflows/*.lock.yml linguist-generated=true

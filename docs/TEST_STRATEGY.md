@@ -100,7 +100,7 @@ selector や UI 前提が変わった場合は、実装修正と合わせて [BR
 PR workflow の `.github/workflows/ci.yml` は最初に PR 全体の変更 path を分類し、該当する検証だけを実行します。
 
 1. `changes` が変更を workflow、extension、.NET 影響範囲に分類する。削除と rename の移動元も判定対象にする。
-2. workflow または ghalint 設定の変更時は、`ghalint` で GitHub Actions workflow の品質を確認する。
+2. workflow、gh-aw 生成物（`.github/aw/` と `.gitattributes`）、gh-aw compiler の `tools/gh-aw/go.mod`、または ghalint 設定の変更時は、`ghalint` で GitHub Actions workflow の品質を確認する。gh-aw が生成する `*.lock.yml` は compiler 管理の job と OTLP 環境変数が無効化できない ghalint policy に該当するため lint 対象から除き、代わりに `tools/gh-aw/go.mod` の正確なバージョンで再コンパイルして、コミット済みの生成物と一致することを検証する。Dependabot は `gomod` として gh-aw CLI の依存バージョンを更新する。更新 PR では `gh aw compile` を実行して生成ファイルも更新する。その後、`actions.lock` を検証する。
 3. extension 変更時は、`Extensions` で `.mjs` module の構文を確認する。
 4. .NET に影響する変更時は、`build-test` で restore、warnings as errors の build、Ubuntu / Windows の deterministic tests を行う。
 5. .NET に影響する変更時は、reusable workflow の `.github/workflows/live-api.yml` で実 GitHub API 統合テストを実行する。

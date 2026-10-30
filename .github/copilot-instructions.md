@@ -38,12 +38,23 @@ $env:GHPMV_BROWSER_STATE = [IO.Path]::Combine($appData, 'ghpmv', 'browser-state.
 dotnet test tests/Ghpmv.Browser.Tests/Ghpmv.Browser.Tests.csproj -c Release --filter "Category=E2E"
 ```
 
-GitHub Actions workflows are linted with the version pinned in `tools/ghalint/go.mod`:
+GitHub Actions workflows are linted with the version pinned in `tools/ghalint/go.mod`. gh-aw's generated `*.lock.yml` files contain compiler-owned jobs and OTLP environment variables that cannot satisfy two non-disableable ghalint policies, so CI lints a copy of `.github/workflows/` without them; locally, ignore findings reported only for `*.lock.yml`:
 
 ```powershell
 go install github.com/suzuki-shunsuke/ghalint/cmd/ghalint@v1.5.7
 ghalint run
 ```
+
+GitHub Agentic Workflows are authored as `.github/workflows/*.md` and compiled with the exact gh-aw version required by `tools/gh-aw/go.mod` into `*.lock.yml`; `.github/aw/actions-lock.json` and the `.gitattributes` entry are compiler output too. Dependabot updates the gh-aw Go module dependency. Never edit the generated files by hand. After changing a workflow's Markdown or accepting a gh-aw dependency update, install the pinned CLI, recompile, then regenerate `actions.lock` below. CI recompiles and fails when the committed output is stale:
+
+```powershell
+gh extension install github/gh-aw --pin v1.0.1
+gh aw compile --purge
+```
+
+Dependabot excludes generated `*.lock.yml` workflows from its `github-actions` scan and does not scan Markdown. Action pins authored in `.github/workflows/*.md` (including `actions/upload-artifact` and `actions/download-artifact`) are copied verbatim by the compiler; upgrading gh-aw does not refresh them. Review and update those full-SHA pins and their version comments manually in the Markdown source, then run `gh aw compile --purge` and regenerate `actions.lock` using the commands below.
+
+`projects-upstream-watch.md` runs weekly (and on manual dispatch) to triage upstream GitHub Projects changes into at most one `projects-upstream-watch` issue. A trusted pwsh step collects GitHub Changelog posts, GraphQL schema changelog entries, and `github/docs` Projects documentation commits, skips every source URL already cited by an earlier watcher issue, and skips the agent when nothing new remains. Later runs rely on those URLs, so keep the requirement that the issue cites every reviewed source. The Copilot engine needs the `COPILOT_GITHUB_TOKEN` repository secret (a fine-grained PAT with **Copilot Requests: Read**).
 
 Actions dependency lockfiles cover all workflows under `.github/workflows/`, with existing full-SHA references preserved. CI verifies the entire workflow directory with `github/gh-actions-lock` v0.2.0 through the existing workflow lint gate.
 
