@@ -52,22 +52,34 @@ ghpmv --version
 
 ## Quick start
 
+Before starting, make sure the target repositories and their issues and pull requests
+have already been migrated and are visible to the target account. `ghpmv` migrates
+Projects V2 data, not repositories or issue and pull request content. Prepare source
+and target tokens with the permissions in [Token permissions](#token-permissions).
+
 ```bash
-# 1. Export the source project to a JSON snapshot
-ghpmv export --org source-org --project 7 --out ./snapshot --token $SOURCE_TOKEN
+# 1. Export the source project and its mapping templates
+ghpmv export --org source-org --project 7 --out ./snapshot --token "$SOURCE_TOKEN"
 
-# 2. Import the snapshot into the target organization
-ghpmv import --org target-org --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv \
-  --team-mapping teams.csv
+# 2. Review the generated CSV templates in ./snapshot and fill in target identities.
+#    repository-mappings.csv and organization-mappings.csv are always created;
+#    team-mappings.csv and user-mappings.csv are included when applicable.
+#    Existing mapping files are not overwritten by export.
 
-# 3. Verify the migrated project against the snapshot
-ghpmv verify --org target-org --project 12 --in ./snapshot --token $TARGET_TOKEN \
-  --repo-mapping repos.csv --user-mapping users.csv --org-mapping orgs.csv \
-  --team-mapping teams.csv
+# 3. Import the snapshot into the target organization
+ghpmv import --org target-org --in ./snapshot --token "$TARGET_TOKEN" \
+  --repo-mapping ./snapshot/repository-mappings.csv
+
+# 4. Verify using the target project number printed by the import command
+ghpmv verify --org target-org --project 12 --in ./snapshot \
+  --token "$TARGET_TOKEN" --repo-mapping ./snapshot/repository-mappings.csv
 ```
 
-Tokens are resolved from `--token`, then the `GITHUB_TOKEN` / `GHPMV_TOKEN` environment variables.
+Replace `12` with the target project number printed by `ghpmv import`.
+Add `--user-mapping`, `--org-mapping`, or `--team-mapping` with the corresponding
+generated CSV when that mapping is needed. Use the same mapping files for `import`
+and `verify`. Tokens can be passed with `--token`; otherwise `ghpmv` checks the
+`GITHUB_TOKEN` and then `GHPMV_TOKEN` environment variables.
 
 `verify` reports an overall result and a result for Project, Field, Item, StatusUpdate, View, Workflow, Collaborator, LinkedRepository, and TeamLink:
 
